@@ -1,0 +1,43 @@
+# ROS 2 / colcon workspace artifacts
+/build/
+/install/
+/log/
+
+# ROS bag recordings
+*.bag
+*.mcap
+rosbag2_*/
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Editor / IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# VS Code workspace files
+.vscode/*
+!.vscode/tasks.json
+
+# VS Code generated databases
+*.vc.db
+*.vc.db-shm
+*.vc.db-wal
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Local Codex workspace marker
+.codex
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# Environment / secrets
+.env
+.env.*
