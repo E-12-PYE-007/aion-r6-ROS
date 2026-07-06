@@ -1,7 +1,7 @@
 # ROS 2 / colcon workspace artifacts
-/build/
-/install/
-/log/
+build/
+install/
+log/
 
 # ROS bag recordings
 *.bag
