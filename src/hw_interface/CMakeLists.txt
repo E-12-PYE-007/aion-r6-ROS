@@ -11,19 +11,19 @@ find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(px4_ros2_cpp REQUIRED)
 
-add_executable(px4_mode_node src/px4_mode_node.cpp)
-target_include_directories(px4_mode_node PUBLIC
+add_executable(px4_waypoint_tracking src/px4_waypoint_tracking.cpp)
+target_include_directories(px4_waypoint_tracking PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(px4_mode_node PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+target_compile_features(px4_waypoint_tracking PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 ament_target_dependencies(
-  px4_mode_node
+  px4_waypoint_tracking
   "rclcpp"
   "px4_msgs"
   "px4_ros2_cpp"
 )
 
-install(TARGETS px4_mode_node
+install(TARGETS px4_waypoint_tracking
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
