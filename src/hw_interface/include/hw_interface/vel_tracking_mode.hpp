@@ -3,9 +3,11 @@
 
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/experimental/rover/speed_rate.hpp>
+#include <aion_msgs/msg/action_chunk.hpp>
 #include <px4_ros2/odometry/local_position.hpp>
 #include <px4_ros2/utils/geometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose2_d.hpp>
 
 static const std::string kName = "Rover Velocity Rate Mode";
 static const float kMaxSpeed = 2.0f; // [m/s] Set equal to RO_SPEED_LIM
@@ -16,6 +18,9 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
   explicit RoverVelRateMode(rclcpp::Node& node) : ModeBase(node, kName)
   {
     _rover_speed_rate_setpoint = std::make_shared<px4_ros2::RoverSpeedRateSetpointType>(*this);
+    _action_chunk_subscription = node.create_subscription<aion_msgs::msg::ActionChunk>(
+      "/vla/action_chunk", 10, std::bind(&RoverVelRateMode::action_callback, this, std::placeholders::_1)
+    );
   }
 
   void onActivate() override {}
@@ -35,6 +40,10 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
 
   private: 
   std::shared_ptr<px4_ros2::RoverSpeedRateSetpointType> _rover_speed_rate_setpoint;
+  rclcpp::Subscription<aion_msgs::msg::ActionChunk>::SharedPtr _action_chunk_subscription;
+
+   std::array<geometry_msgs::msg::Pose2D, 8> _current_action_chunk;
+  int _current_action_chunk_index=0;
 
   struct VelTargets
   {
@@ -51,4 +60,19 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     vel_targets.yaw_rate = 0.2*kMaxYawRate * M_PI / 180.0f; // Convert to rad/s
 
   }
+
+  void action_callback(const aion_msgs::msg::ActionChunk::SharedPtr msg)
+  {
+    RCLCPP_INFO(node().get_logger(), "Received ActionChunk seq=%u, %zu poses",
+                msg->seq_num, msg->relative_poses.size());
+
+    for (const auto & pose : msg->relative_poses) {
+      RCLCPP_INFO(node().get_logger(), "  pose: x=%.3f y=%.3f theta=%.3f",
+                  pose.x, pose.y, pose.theta);
+    }
+
+    _current_action_chunk = msg->relative_poses;
+    _current_action_chunk_index = 0;
+  }
+
 };

@@ -10,6 +10,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(px4_ros2_cpp REQUIRED)
+find_package(aion_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 add_executable(px4_waypoint_tracking src/px4_waypoint_tracking.cpp)
 target_include_directories(px4_waypoint_tracking PUBLIC
@@ -21,6 +23,8 @@ ament_target_dependencies(
   "rclcpp"
   "px4_msgs"
   "px4_ros2_cpp"
+  "aion_msgs"
+  "geometry_msgs"
 )
 
 install(TARGETS px4_waypoint_tracking
