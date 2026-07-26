@@ -36,7 +36,7 @@ class ActionChunkController
 /// Direct port of the reference controller found in NHirose/AsyncVLA. This is a memoryless
 /// feedforward P controller. It always targets the fixed midpoint waypoint of
 /// whichever chunk it's given and computes one command from it directly.
-class FixedWaypointFeedforwardController : public ActionChunkController
+class AsyncFeedForwardController : public ActionChunkController
 {
   public:
     VelocityCommand computeCommand(

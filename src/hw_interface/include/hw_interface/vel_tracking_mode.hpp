@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/experimental/rover/speed_rate.hpp>
 #include <aion_msgs/msg/action_chunk.hpp>
@@ -8,6 +10,8 @@
 #include <px4_ros2/utils/geometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose2_d.hpp>
+
+#include "hw_interface/action_chunk_controller.hpp"
 
 static const std::string kName = "Rover Velocity Rate Mode";
 static const float kMaxSpeed = 2.0f; // [m/s] Set equal to RO_SPEED_LIM
@@ -21,6 +25,7 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     _action_chunk_subscription = node.create_subscription<aion_msgs::msg::ActionChunk>(
       "/vla/action_chunk", 10, std::bind(&RoverVelRateMode::action_callback, this, std::placeholders::_1)
     );
+    _controller = std::make_unique<hw_interface::FixedWaypointFeedforwardController>();
   }
 
   void onActivate() override {}
@@ -44,6 +49,7 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
 
    std::array<geometry_msgs::msg::Pose2D, 8> _current_action_chunk;
   int _current_action_chunk_index=0;
+  std::unique_ptr<hw_interface::ActionChunkController> _controller;
 
   struct VelTargets
   {
@@ -53,12 +59,11 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
 
   void trackActionChunk(VelTargets& vel_targets)
   {
-    // Placeholder for actual tracking logic
-    // This function should compute the desired speed and yaw rate based on the current action chunk
-    // For now, we will just set to produce a default curved path with a constant speed and yaw rate
-    vel_targets.speed_body_x = 0.5*kMaxSpeed;
-    vel_targets.yaw_rate = 0.2*kMaxYawRate * M_PI / 180.0f; // Convert to rad/s
-
+    const geometry_msgs::msg::Pose2D current_pose{}; // unused by FixedWaypointFeedforwardController
+    const hw_interface::VelocityCommand command =
+      _controller->computeCommand(_current_action_chunk, current_pose);
+    vel_targets.speed_body_x = command.speed_body_x;
+    vel_targets.yaw_rate = command.yaw_rate;
   }
 
   void action_callback(const aion_msgs::msg::ActionChunk::SharedPtr msg)
@@ -72,7 +77,6 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     }
 
     _current_action_chunk = msg->relative_poses;
-    _current_action_chunk_index = 0;
   }
 
 };
