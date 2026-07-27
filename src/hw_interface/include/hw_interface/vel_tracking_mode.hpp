@@ -25,7 +25,7 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     _action_chunk_subscription = node.create_subscription<aion_msgs::msg::ActionChunk>(
       "/vla/action_chunk", 10, std::bind(&RoverVelRateMode::action_callback, this, std::placeholders::_1)
     );
-    _controller = std::make_unique<hw_interface::FixedWaypointFeedforwardController>();
+    _controller = std::make_unique<hw_interface::AsyncFeedForwardController>();
   }
 
   void onActivate() override {}
