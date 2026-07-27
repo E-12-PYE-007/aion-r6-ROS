@@ -30,6 +30,11 @@ ament_target_dependencies(
 install(TARGETS px4_waypoint_tracking
   DESTINATION lib/${PROJECT_NAME})
 
+install (PROGRAMS src/data_collection.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
