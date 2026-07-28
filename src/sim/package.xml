@@ -1,22 +1,17 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>hw_interface</name>
+  <name>sim</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="dan.strahan08@gmail.com">dstrahan</maintainer>
   <license>TODO: License declaration</license>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
-
-  <depend>rclcpp</depend>
-  <depend>px4_msgs</depend>
-  <depend>px4_ros2_cpp</depend>
-  <depend>aion_msgs</depend>
-  <depend>geometry_msgs</depend>
-
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
 
   <export>
-    <build_type>ament_cmake</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>

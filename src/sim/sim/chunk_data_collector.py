@@ -2,6 +2,7 @@
 """ Data collection node for Aion R6. Collects position and heading data alongside
     imgs from camera, logging action chunks for use in VLA training."""
 
+from datetime import datetime
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 import px4_msgs.msg
@@ -9,16 +10,20 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 import cv2
+from cv_bridge import CvBridge
 import json
 import math
-import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 
 # Define constants
 
 DT = 1/3 # Spacing between waypoints to be collected
-LOG_DIR = Path("data_collection_output")  # placeholder output directory
+
+
+class ImageEncodeError(Exception):
+    pass
 
 @dataclass
 class PendingChunk:
@@ -29,17 +34,28 @@ class PendingChunk:
     targets: list = field(default_factory=list)
 
 
-class DataCollectionNode(Node):
+class ChunkDataCollectionNode(Node):
     def __init__(self):
-        super().__init__('aion_data_collector')
+        super().__init__('chunk_data_collector')
+
+        self.bridge = CvBridge()
 
         self.current_chunk = None
         self.next_chunk = None
         self.current_pose = None
 
-        self.log_dir = LOG_DIR
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.manifest_path = self.log_dir / "chunks.jsonl"
+        self.declare_parameter('base_dir', Parameter.Type.STRING)
+        base_dir = self.get_parameter('base_dir').get_parameter_value().string_value
+        if not base_dir:
+            raise RuntimeError(
+                "base_dir parameter is required, e.g. --ros-args -p base_dir:=/path/to/trajectories"
+            )
+
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.traj_dir = Path(base_dir) / f"{stamp}_{self.get_name()}"
+        self.img_dir = self.traj_dir / "img"
+        self.img_dir.mkdir(parents=True, exist_ok=True)
+        self.poses_path = self.traj_dir / "poses.jsonl"
 
         self.cam_subscriber = self.create_subscription(
             Image,
@@ -56,48 +72,37 @@ class DataCollectionNode(Node):
         )
 
     def encode_img(self, msg):
-        bgr = self.ros_image_to_bgr(msg)
+        bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         ok, encoded = cv2.imencode(
             '.jpg',
             bgr,
             [int(cv2.IMWRITE_JPEG_QUALITY), 80],
         )
         return ok, encoded
-    @staticmethod
-    def ros_image_to_bgr(msg):
-        """Convert common ROS image encodings into OpenCV BGR for JPEG encoding."""
-        channels = 4 if msg.encoding in ('rgba8', 'bgra8') else 3
-        image = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, channels))
-        if msg.encoding == 'rgb8':
-            return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        if msg.encoding == 'rgba8':
-            return cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
-        if msg.encoding == 'bgra8':
-            return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-        return image[..., :3]
 
     def cam_callback(self, msg):
         if self.current_pose is None:
             return # Cannot start logging chunks without a starting pose
 
-        # TODO: Check synchronicity between ros2 clock and px4 clock - maybe better to use current_pose time as anchor time or an internal timer
-        anchor_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 # image capture time in seconds
+        try:
+            # TODO: Check synchronicity between ros2 clock and px4 clock - maybe better to use current_pose time as anchor time or an internal timer
+            anchor_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 # image capture time in seconds
 
-        if self.current_chunk is None: # No current_chunk being worked on - save img and start building. Takes branch on startup only.
-            # Encode image as jpg
-            ok, encoded = self.encode_img(msg)
-            if not ok:
-                self.get_logger().warn('Failed to JPEG-encode camera frame')
-                return
+            if self.current_chunk is None: # No current_chunk being worked on - save img and start building. Takes branch on startup only.
+                # Encode image as jpg
+                ok, encoded = self.encode_img(msg)
+                if not ok:
+                    raise ImageEncodeError('Failed to JPEG-encode camera frame')
 
-            self.current_chunk = PendingChunk(encoded, anchor_time, self.current_pose)
+                self.current_chunk = PendingChunk(encoded, anchor_time, self.current_pose)
 
-        elif self.next_chunk is None and (anchor_time-self.current_chunk.anchor_time) > DT*4:
-            ok, encoded = self.encode_img(msg)
-            if not ok:
-                self.get_logger().warn('Failed to JPEG-encode camera frame')
-                return
-            self.next_chunk = PendingChunk(encoded, anchor_time, self.current_pose)
+            elif self.next_chunk is None and (anchor_time-self.current_chunk.anchor_time) > DT*4:
+                ok, encoded = self.encode_img(msg)
+                if not ok:
+                    raise ImageEncodeError('Failed to JPEG-encode camera frame')
+                self.next_chunk = PendingChunk(encoded, anchor_time, self.current_pose)
+        except ImageEncodeError:
+            self.get_logger().warn('Failed to log image/pose pair, will retry next frame')
 
         return
 
@@ -127,7 +132,7 @@ class DataCollectionNode(Node):
             return
 
         chunk_id = f"{int(chunk.anchor_time * 1000)}"
-        image_path = self.log_dir / f"{chunk_id}.jpg"
+        image_path = self.img_dir / f"{chunk_id}.jpg"
         image_path.write_bytes(chunk.image.tobytes())
 
         record = {
@@ -136,7 +141,7 @@ class DataCollectionNode(Node):
             "anchor_pose": chunk.anchor_pose,
             "targets": chunk.targets,
         }
-        with open(self.manifest_path, "a") as f:
+        with open(self.poses_path, "a") as f:
             f.write(json.dumps(record) + "\n")
 
     def chunk_is_valid(self, chunk):
@@ -151,7 +156,7 @@ class DataCollectionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = DataCollectionNode()
+    node = ChunkDataCollectionNode()
     try:
         rclpy.spin(node)
     finally:
