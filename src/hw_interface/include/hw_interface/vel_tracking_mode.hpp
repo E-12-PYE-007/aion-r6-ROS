@@ -14,14 +14,13 @@
 #include "hw_interface/action_chunk_controller.hpp"
 
 static const std::string kName = "Rover Velocity Rate Mode";
-static const float kMaxSpeed = 2.0f; // [m/s] Set equal to RO_SPEED_LIM
-static const float kMaxYawRate = 180.0f; // [deg/s] Set equal to RO_YAW_RATE_LIM
 
 class RoverVelRateMode : public px4_ros2::ModeBase {
   public:
   explicit RoverVelRateMode(rclcpp::Node& node) : ModeBase(node, kName)
   {
     _rover_speed_rate_setpoint = std::make_shared<px4_ros2::RoverSpeedRateSetpointType>(*this);
+    _vehicle_local_position = std::make_shared<px4_ros2::OdometryLocalPosition>(*this);
     _action_chunk_subscription = node.create_subscription<aion_msgs::msg::ActionChunk>(
       "/vla/action_chunk", 10, std::bind(&RoverVelRateMode::action_callback, this, std::placeholders::_1)
     );
@@ -43,12 +42,12 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     _rover_speed_rate_setpoint->update(vel_targets.speed_body_x, vel_targets.yaw_rate);
   }
 
-  private: 
+  private:
   std::shared_ptr<px4_ros2::RoverSpeedRateSetpointType> _rover_speed_rate_setpoint;
+  std::shared_ptr<px4_ros2::OdometryLocalPosition> _vehicle_local_position;
   rclcpp::Subscription<aion_msgs::msg::ActionChunk>::SharedPtr _action_chunk_subscription;
 
-   std::array<geometry_msgs::msg::Pose2D, 8> _current_action_chunk;
-  int _current_action_chunk_index=0;
+   aion_msgs::msg::ActionChunk _current_action_chunk;
   std::unique_ptr<hw_interface::ActionChunkController> _controller;
 
   struct VelTargets
@@ -59,7 +58,12 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
 
   void trackActionChunk(VelTargets& vel_targets)
   {
-    const geometry_msgs::msg::Pose2D current_pose{}; // unused by FixedWaypointFeedforwardController
+    const Eigen::Vector3f position_ned = _vehicle_local_position->positionNed();
+    geometry_msgs::msg::Pose2D current_pose;
+    current_pose.x = position_ned.x();
+    current_pose.y = position_ned.y();
+    current_pose.theta = _vehicle_local_position->heading();
+
     const hw_interface::VelocityCommand command =
       _controller->computeCommand(_current_action_chunk, current_pose);
     vel_targets.speed_body_x = command.speed_body_x;
@@ -76,7 +80,7 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
                   pose.x, pose.y, pose.theta);
     }
 
-    _current_action_chunk = msg->relative_poses;
+    _current_action_chunk = *msg;
   }
 
 };
