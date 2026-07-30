@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Simulation loop for the AsyncFeedForwardController Python binding.
+"""Simulation loop comparing AsyncFeedForwardController vs PurePursuitController.
 
-Traces the resulting path against the action chunk's own waypoints for a
-left-curving chunk. No ROS, no colcon, just the compiled module.
+Traces each controller's resulting path against the action chunk's own
+waypoints, for two test cases (a simple curve and an S-curve), and saves
+side-by-side comparison plots. No ROS, no colcon, just the compiled module.
 """
 
 import math
 import os
 import sys
 
+import matplotlib
+matplotlib.use("Agg")  # headless - this environment has no display
 import matplotlib.pyplot as plt
 
 # The compiled module lands in the CMake build directory next to this script.
@@ -73,10 +76,7 @@ def wrapToPi(angle):
 
 def toWorldFrame(chunk, anchor_pose):
     """Rotate + translate a robot-relative chunk into world frame, using the
-    pose the robot was actually at when this chunk was generated/anchored.
-    Same transform as OdometryPurePursuitController::setActionChunk (C++) -
-    needed the moment a chunk isn't anchored at the origin, e.g. once chunks
-    get regenerated mid-loop at wherever the robot has actually moved to."""
+    pose the robot was actually at when this chunk was generated/anchored."""
     anchor_x, anchor_y, anchor_theta = anchor_pose
     cos_yaw = math.cos(anchor_theta)
     sin_yaw = math.sin(anchor_theta)
@@ -91,7 +91,8 @@ def toWorldFrame(chunk, anchor_pose):
 
 
 def build_left_arc_chunk(step_distance=STEP_DISTANCE, turn_per_step=TURN_PER_STEP):
-    """Mirrors the left_arc pattern in debug/simulate_action_chunk.py's build_pose()."""
+    """Mirrors the left_arc pattern in debug/simulate_action_chunk.py's build_pose().
+    Constant-curvature arc, turning left throughout - the "simple curve" case."""
     chunk = []
     for index in range(1, 9):
         distance = step_distance * index
@@ -102,41 +103,203 @@ def build_left_arc_chunk(step_distance=STEP_DISTANCE, turn_per_step=TURN_PER_STE
     return chunk
 
 
-def main():
-    controller = acc.AsyncFeedForwardController()  # swap this line for a different controller later
-    chunk = build_left_arc_chunk()
-    anchor_pose = [0.0, 0.0, 0.0]  # pose the robot was at when this chunk was generated
-    pose = list(anchor_pose)
+def build_s_curve_chunk(step_distance=STEP_DISTANCE, turn_per_step=TURN_PER_STEP):
+    """Turns left for the first half of the chunk, then right for the second
+    half - an S-shape, unlike build_left_arc_chunk's constant-curvature arc.
+    Built by forward-integrating heading + position step by step, since the
+    closed-form arc formula only holds for constant curvature."""
+    chunk = []
+    x, y, theta = 0.0, 0.0, 0.0
+    for index in range(1, 9):
+        direction = 1.0 if index <= 4 else -1.0
+        theta += direction * turn_per_step
+        x += step_distance * math.cos(theta)
+        y += step_distance * math.sin(theta)
+        chunk.append([x, y, theta])
+    return chunk
 
+
+def build_right_arc_chunk(step_distance=STEP_DISTANCE, turn_per_step=TURN_PER_STEP):
+    """Same construction as build_left_arc_chunk, curving the other way."""
+    return build_left_arc_chunk(step_distance=step_distance, turn_per_step=-turn_per_step)
+
+
+def run_simulation(command_fn, chunk, anchor_pose):
+    """Drive naivePositionEstimator forward using whatever command_fn (bound
+    to one controller instance) returns each tick."""
+    pose = list(anchor_pose)
     trajectory = [list(pose)]
 
     num_ticks = round(DURATION_SEC / DT)
     for _ in range(num_ticks):
-        speed_body_x, yaw_rate = controller.compute_command(chunk, pose)
+        speed_body_x, yaw_rate = command_fn(chunk, pose)
         pose = naivePositionEstimator(pose, speed_body_x, yaw_rate, DT)
         trajectory.append(list(pose))
-
-    world_chunk = toWorldFrame(chunk, anchor_pose)
-    plot(world_chunk, trajectory)
+    return trajectory
 
 
-def plot(world_chunk, trajectory):
+def run_simulation_multi_chunk(command_fn, chunks, ticks_per_chunk):
+    """Like run_simulation, but swaps to the next chunk partway through -
+    simulating a new VLA inference replacing the in-flight chunk, each with
+    its own seq_num (the chunk index) so PurePursuitController re-anchors.
+    Each chunk is anchored to wherever the robot has actually reached by the
+    time it becomes active, not a shared/fixed schedule - this differs between
+    controllers since their trajectories diverge.
+
+    Returns (trajectory, world_chunks, swap_indices): world_chunks are each
+    chunk's own waypoints transformed into world frame using its real anchor;
+    swap_indices are indices into trajectory where each chunk became active.
+    """
+    pose = [0.0, 0.0, 0.0]
+    trajectory = [list(pose)]
+    world_chunks = []
+    swap_indices = []
+
+    for chunk_index, chunk in enumerate(chunks):
+        world_chunks.append(toWorldFrame(chunk, pose))
+        swap_indices.append(len(trajectory) - 1)
+
+        for _ in range(ticks_per_chunk):
+            speed_body_x, yaw_rate = command_fn(chunk, chunk_index, pose)
+            pose = naivePositionEstimator(pose, speed_body_x, yaw_rate, DT)
+            trajectory.append(list(pose))
+
+    return trajectory, world_chunks, swap_indices
+
+
+def plot_comparison_multi_chunk(title, results, out_path):
+    """results: list of (name, trajectory, world_chunks, swap_indices) tuples,
+    one per controller. Shows every chunk actually sent during the run, each
+    in its own color, plus the trajectory and a marker where each swap hit."""
+    chunk_colors = ["tab:orange", "tab:green", "tab:red", "tab:purple"]
+
+    fig, axes = plt.subplots(1, len(results), figsize=(6 * len(results), 6))
+    if len(results) == 1:
+        axes = [axes]
+
+    for ax, (name, traj, world_chunks, swap_indices) in zip(axes, results):
+        traj_x = [p[0] for p in traj]
+        traj_y = [p[1] for p in traj]
+        ax.plot(traj_x, traj_y, "-", color="tab:blue", label="simulated trajectory")
+
+        for i, world_chunk in enumerate(world_chunks):
+            wx = [wp[0] for wp in world_chunk]
+            wy = [wp[1] for wp in world_chunk]
+            color = chunk_colors[i % len(chunk_colors)]
+            ax.plot(wx, wy, "o--", color=color, label=f"chunk {i + 1} waypoints")
+
+        swap_x = [traj[i][0] for i in swap_indices]
+        swap_y = [traj[i][1] for i in swap_indices]
+        ax.scatter(swap_x, swap_y, color="black", marker="x", s=80, zorder=6,
+                   label="chunk swap point")
+
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_title(name)
+        ax.axis("equal")
+        ax.grid(True)
+        ax.legend()
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def run_case_chunk_replacement(title, chunks, ticks_per_chunk, out_path):
+    async_controller = acc.AsyncFeedForwardController()
+    pp_controller = acc.PurePursuitController()
+
+    async_fn = lambda c, seq, p: async_controller.compute_command(c, p)  # noqa: E731
+    pp_fn = lambda c, seq, p: pp_controller.compute_command(c, seq, p)  # noqa: E731
+
+    async_traj, async_world_chunks, async_swaps = run_simulation_multi_chunk(
+        async_fn, chunks, ticks_per_chunk
+    )
+    pp_traj, pp_world_chunks, pp_swaps = run_simulation_multi_chunk(
+        pp_fn, chunks, ticks_per_chunk
+    )
+
+    plot_comparison_multi_chunk(
+        title,
+        [
+            ("AsyncFeedForwardController", async_traj, async_world_chunks, async_swaps),
+            ("PurePursuitController", pp_traj, pp_world_chunks, pp_swaps),
+        ],
+        out_path,
+    )
+
+
+def plot_comparison(title, world_chunk, async_traj, pp_traj, out_path):
+    """Side-by-side subplots: AsyncFeedForwardController vs PurePursuitController,
+    both traced against the same action chunk waypoints."""
     chunk_x = [wp[0] for wp in world_chunk]
     chunk_y = [wp[1] for wp in world_chunk]
-    traj_x = [p[0] for p in trajectory]
-    traj_y = [p[1] for p in trajectory]
 
-    plt.figure()
-    plt.plot(chunk_x, chunk_y, "o--", color="tab:orange", label="action chunk waypoints")
-    plt.plot(traj_x, traj_y, "-", color="tab:blue", label="simulated trajectory")
-    plt.scatter([0], [0], color="black", zorder=5, label="start")
-    plt.xlabel("x [m]")
-    plt.ylabel("y [m]")
-    plt.title("AsyncFeedForwardController: traced path vs. action chunk")
-    plt.axis("equal")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    fig, (ax_async, ax_pp) = plt.subplots(1, 2, figsize=(12, 6))
+
+    for ax, traj, name in (
+        (ax_async, async_traj, "AsyncFeedForwardController"),
+        (ax_pp, pp_traj, "PurePursuitController"),
+    ):
+        traj_x = [p[0] for p in traj]
+        traj_y = [p[1] for p in traj]
+        ax.plot(chunk_x, chunk_y, "o--", color="tab:orange", label="action chunk waypoints")
+        ax.plot(traj_x, traj_y, "-", color="tab:blue", label="simulated trajectory")
+        ax.scatter([0], [0], color="black", zorder=5, label="start")
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_title(name)
+        ax.axis("equal")
+        ax.grid(True)
+        ax.legend()
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def run_case(title, chunk, out_path):
+    anchor_pose = [0.0, 0.0, 0.0]
+    world_chunk = toWorldFrame(chunk, anchor_pose)
+
+    async_controller = acc.AsyncFeedForwardController()
+    pp_controller = acc.PurePursuitController()
+
+    async_traj = run_simulation(
+        lambda c, p: async_controller.compute_command(c, p), chunk, anchor_pose
+    )
+    # Fixed seq_num throughout - it's the same chunk for the whole simulated
+    # run, so PurePursuitController should only (re)generate waypoints once,
+    # on the very first tick.
+    pp_traj = run_simulation(
+        lambda c, p: pp_controller.compute_command(c, 1, p), chunk, anchor_pose
+    )
+
+    plot_comparison(title, world_chunk, async_traj, pp_traj, out_path)
+
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    run_case(
+        "Case 1: Simple Curve",
+        build_left_arc_chunk(),
+        os.path.join(here, "comparison_simple_curve.png"),
+    )
+    run_case(
+        "Case 2: S-Curve",
+        build_s_curve_chunk(),
+        os.path.join(here, "comparison_s_curve.png"),
+    )
+    run_case_chunk_replacement(
+        "Case 3: Action Chunk Replacement (arc left, then chunk swapped to arc right)",
+        [build_left_arc_chunk(), build_right_arc_chunk()],
+        ticks_per_chunk=round((DURATION_SEC / 2) / DT),
+        out_path=os.path.join(here, "comparison_chunk_replacement.png"),
+    )
 
 
 if __name__ == "__main__":
