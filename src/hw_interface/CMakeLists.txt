@@ -12,6 +12,8 @@ find_package(px4_msgs REQUIRED)
 find_package(px4_ros2_cpp REQUIRED)
 find_package(aion_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 
 add_executable(px4_waypoint_tracking src/px4_waypoint_tracking.cpp)
 target_include_directories(px4_waypoint_tracking PUBLIC
@@ -28,6 +30,23 @@ ament_target_dependencies(
 )
 
 install(TARGETS px4_waypoint_tracking
+  DESTINATION lib/${PROJECT_NAME})
+
+add_executable(sim_waypoint_tracking src/sim_waypoint_tracking.cpp)
+target_include_directories(sim_waypoint_tracking PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(sim_waypoint_tracking PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(
+  sim_waypoint_tracking
+  "rclcpp"
+  "nav_msgs"
+  "aion_msgs"
+  "geometry_msgs"
+  "tf2"
+)
+
+install(TARGETS sim_waypoint_tracking
   DESTINATION lib/${PROJECT_NAME})
 
 

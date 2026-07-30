@@ -2,6 +2,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/experimental/rover/speed_rate.hpp>
@@ -47,27 +48,26 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
   std::shared_ptr<px4_ros2::OdometryLocalPosition> _vehicle_local_position;
   rclcpp::Subscription<aion_msgs::msg::ActionChunk>::SharedPtr _action_chunk_subscription;
 
-   aion_msgs::msg::ActionChunk _current_action_chunk;
+  std::optional<aion_msgs::msg::ActionChunk> _current_action_chunk;
   std::unique_ptr<hw_interface::ActionChunkController> _controller;
 
-  struct VelTargets
-  {
-    float speed_body_x{0.0f}; // [m/s] Forward velocity in body frame
-    float yaw_rate{0.0f};     // [rad/s] Yaw rate in NED frame
-  } vel_targets;
+  hw_interface::VelocityCommand vel_targets;
 
-  void trackActionChunk(VelTargets& vel_targets)
+  void trackActionChunk(hw_interface::VelocityCommand& v)
   {
+    if (!_current_action_chunk.has_value()) {
+      RCLCPP_WARN(node().get_logger(), "No action chunk received yet, commanding zero velocity");
+      v = hw_interface::VelocityCommand{};
+      return;
+    }
+
     const Eigen::Vector3f position_ned = _vehicle_local_position->positionNed();
     geometry_msgs::msg::Pose2D current_pose;
     current_pose.x = position_ned.x();
     current_pose.y = position_ned.y();
     current_pose.theta = _vehicle_local_position->heading();
 
-    const hw_interface::VelocityCommand command =
-      _controller->computeCommand(_current_action_chunk, current_pose);
-    vel_targets.speed_body_x = command.speed_body_x;
-    vel_targets.yaw_rate = command.yaw_rate;
+    v = _controller->computeCommand(*_current_action_chunk, current_pose);
   }
 
   void action_callback(const aion_msgs::msg::ActionChunk::SharedPtr msg)
