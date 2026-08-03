@@ -40,6 +40,7 @@ setup(
             'shed_expert_trajectory = sim.shed_expert_trajectory:main',
             'generate_scene_task_specs = sim.generate_scene_task_specs:main',
             'validate_scene_task_specs = sim.validate_scene_task_specs:main',
+            'plot_task_plan = sim.plot_task_plan:main',
             'expand_pose_variants = sim.expand_pose_variants:main',
 
         ],
