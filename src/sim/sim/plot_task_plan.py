@@ -21,8 +21,12 @@ from sim.validate_scene_task_specs import (
 )
 
 
-def obstacle_corners(obstacle: OrientedBoxObstacle) -> np.ndarray:
-    hx, hy = obstacle.half_extents + obstacle.inflation_m
+def obstacle_corners(
+    obstacle: OrientedBoxObstacle,
+    inflation_m: float,
+) -> np.ndarray:
+    hx, hy = obstacle.half_extents + inflation_m
+
     local = np.asarray(
         [
             [-hx, -hy],
@@ -33,9 +37,18 @@ def obstacle_corners(obstacle: OrientedBoxObstacle) -> np.ndarray:
         ],
         dtype=np.float64,
     )
+
     c = np.cos(obstacle.yaw)
     s = np.sin(obstacle.yaw)
-    rotation = np.asarray([[c, -s], [s, c]], dtype=np.float64)
+
+    rotation = np.asarray(
+        [
+            [c, -s],
+            [s, c],
+        ],
+        dtype=np.float64,
+    )
+
     return local @ rotation.T + obstacle.center
 
 
@@ -154,7 +167,10 @@ def main() -> None:
         ax.plot([start[0], end[0]], [start[1], end[1]], color="black", linewidth=3, label="fence")
 
     for obstacle in collision_map.obstacles:
-        corners = obstacle_corners(obstacle)
+        corners = obstacle_corners(
+            obstacle,
+            collision_map.inflation_m,
+        )
         ax.fill(corners[:, 0], corners[:, 1], color="tab:red", alpha=0.2)
         ax.plot(corners[:, 0], corners[:, 1], color="tab:red", linewidth=0.8)
         ax.text(obstacle.center[0], obstacle.center[1], obstacle.name, fontsize=7, ha="center")
