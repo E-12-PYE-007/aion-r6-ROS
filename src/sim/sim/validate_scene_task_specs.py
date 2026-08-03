@@ -100,6 +100,10 @@ def turn_direction(first: dict[str, Any], second: dict[str, Any]) -> str:
     return "straight"
 
 
+def opposite_side(side: str) -> str:
+    return "right" if side == "left" else "left"
+
+
 def nearest_point_on_segment(
     point: tuple[float, float],
     start: tuple[float, float],
@@ -147,6 +151,21 @@ def robot_relative_side_to_segment(start_pose: dict[str, Any], segment: dict[str
     if y_robot >= 0.0:
         return "left"
     return "right"
+
+
+def path_side_for_task(
+    task: dict[str, Any],
+    flip_isaac_y: bool,
+    *,
+    path_key: str = "path_side",
+    follow_key: str = "follow_side",
+) -> str:
+    side = task.get(path_key)
+    if side not in {"left", "right"}:
+        side = opposite_side(task.get(follow_key, "left"))
+    if flip_isaac_y:
+        side = opposite_side(side)
+    return side
 
 
 def midpoint(a: tuple[float, float], b: tuple[float, float]) -> list[float]:
@@ -555,21 +574,21 @@ def reference_path_for_task(
         return offset_polyline(
             concat_segments([fence], flip_isaac_y),
             offset_m,
-            task.get("path_side", task.get("follow_side", "left")),
+            path_side_for_task(task, flip_isaac_y),
         )
     if task_type == "follow_and_turn" and "target_fences" in task:
         fences = [fence_by_name(scene, name) for name in task["target_fences"]]
         return offset_polyline(
             concat_segments(fences, flip_isaac_y),
             offset_m,
-            task.get("path_side", task.get("follow_side", "left")),
+            path_side_for_task(task, flip_isaac_y),
         )
     if task_type == "follow_fence_sequence":
         fences = [fence_by_name(scene, name) for name in task["target_fences"]]
         return offset_polyline(
             concat_segments(fences, flip_isaac_y),
             offset_m,
-            task.get("path_side", task.get("follow_side", "left")),
+            path_side_for_task(task, flip_isaac_y),
         )
     if task_type == "follow_corridor":
         left, right = [fence_by_name(scene, name) for name in task["corridor_fences"]]
@@ -580,11 +599,21 @@ def reference_path_for_task(
         gap = task["target_gap"]
         before = fence_by_name(scene, gap["before_fence"])
         after = fence_by_name(scene, gap["after_fence"])
-        side = task.get("path_side") or task.get("entry_path_side") or task.get("follow_side") or task.get("entry_side", "left")
+        side = path_side_for_task(
+            task,
+            flip_isaac_y,
+            path_key="entry_path_side" if "entry_path_side" in task else "path_side",
+            follow_key="entry_side" if "entry_side" in task else "follow_side",
+        )
         before_path = offset_polyline(concat_segments([before], flip_isaac_y), offset_m, side)
         if task_type == "stop_at_gap":
             return [before_path[0], before_path[-1]]
-        after_side = task.get("exit_path_side", task.get("exit_side", side))
+        after_side = path_side_for_task(
+            task,
+            flip_isaac_y,
+            path_key="exit_path_side",
+            follow_key="exit_side",
+        )
         after_path = offset_polyline(concat_segments([after], flip_isaac_y), offset_m, after_side)
         return [before_path[0], before_path[-1], point2(gap["approximate_center"], flip_isaac_y), after_path[0], after_path[-1]]
     if task_type == "stop_at_landmark" and "target_fence" in task:
@@ -592,7 +621,7 @@ def reference_path_for_task(
         return offset_polyline(
             concat_segments([fence], flip_isaac_y),
             offset_m,
-            task.get("path_side", task.get("follow_side", "left")),
+            path_side_for_task(task, flip_isaac_y),
         )
     if task_type == "follow_road":
         return concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y)

@@ -16,6 +16,25 @@ from sim.expert_trajectory_utils import (
 )
 
 
+def opposite_side(side: str) -> str:
+    return "right" if side == "left" else "left"
+
+
+def path_side_for_task(
+    task: dict,
+    flip_isaac_y: bool,
+    *,
+    path_key: str = "path_side",
+    follow_key: str = "follow_side",
+) -> str:
+    side = task.get(path_key)
+    if side not in {"left", "right"}:
+        side = opposite_side(task.get(follow_key, "left"))
+    if flip_isaac_y:
+        side = opposite_side(side)
+    return side
+
+
 class FencelineExpertTrajectoryNode(ExpertPolicyNode):
     def __init__(self) -> None:
         self.preferred_offset_m = 0.8
@@ -34,7 +53,7 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
             return offset_polyline(
                 base_path,
                 self.preferred_offset_m,
-                self.task.get("path_side", self.task.get("follow_side", "left")),
+                path_side_for_task(self.task, self.flip_isaac_y),
             )
 
         if task_type == "follow_and_turn":
@@ -43,7 +62,7 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
             return offset_polyline(
                 base_path,
                 self.preferred_offset_m,
-                self.task.get("path_side", self.task.get("follow_side", "left")),
+                path_side_for_task(self.task, self.flip_isaac_y),
             )
 
         if task_type == "follow_fence_sequence":
@@ -52,7 +71,7 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
             return offset_polyline(
                 base_path,
                 self.preferred_offset_m,
-                self.task.get("path_side", self.task.get("follow_side", "left")),
+                path_side_for_task(self.task, self.flip_isaac_y),
             )
 
         if task_type == "follow_corridor":
@@ -73,7 +92,7 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
             return offset_polyline(
                 base_path,
                 self.preferred_offset_m,
-                self.task.get("path_side", self.task.get("follow_side", "left")),
+                path_side_for_task(self.task, self.flip_isaac_y),
             )
 
         if task_type == "hold_position":
@@ -86,9 +105,19 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
         target_gap = self.task["target_gap"]
         before = fence_by_name(self.scene, target_gap["before_fence"])
         after = fence_by_name(self.scene, target_gap["after_fence"])
-        side = self.task.get("path_side") or self.task.get("entry_path_side") or self.task.get("follow_side") or self.task.get("entry_side", "left")
+        side = path_side_for_task(
+            self.task,
+            self.flip_isaac_y,
+            path_key="entry_path_side" if "entry_path_side" in self.task else "path_side",
+            follow_key="entry_side" if "entry_side" in self.task else "follow_side",
+        )
         before_path = offset_polyline(concat_segments([before], self.flip_isaac_y), self.preferred_offset_m, side)
-        after_side = self.task.get("exit_path_side", self.task.get("exit_side", side))
+        after_side = path_side_for_task(
+            self.task,
+            self.flip_isaac_y,
+            path_key="exit_path_side",
+            follow_key="exit_side",
+        )
         after_path = offset_polyline(concat_segments([after], self.flip_isaac_y), self.preferred_offset_m, after_side)
         gap_center = point2(target_gap["approximate_center"], self.flip_isaac_y)
 
