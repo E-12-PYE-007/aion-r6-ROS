@@ -168,6 +168,20 @@ def path_side_for_task(
     return side
 
 
+def inset_endpoint(path: list[np.ndarray], from_end: bool, inset_m: float) -> np.ndarray:
+    if len(path) < 2:
+        return path[0]
+    if from_end:
+        end = path[-1]
+        prev = path[-2]
+        direction = end - prev
+        return end - direction / max(np.linalg.norm(direction), 1e-9) * inset_m
+    start = path[0]
+    nxt = path[1]
+    direction = nxt - start
+    return start + direction / max(np.linalg.norm(direction), 1e-9) * inset_m
+
+
 def midpoint(a: tuple[float, float], b: tuple[float, float]) -> list[float]:
     return [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, 0.0]
 
@@ -606,8 +620,9 @@ def reference_path_for_task(
             follow_key="entry_side" if "entry_side" in task else "follow_side",
         )
         before_path = offset_polyline(concat_segments([before], flip_isaac_y), offset_m, side)
+        gap_approach = inset_endpoint(before_path, from_end=True, inset_m=0.7)
         if task_type == "stop_at_gap":
-            return [before_path[0], before_path[-1]]
+            return [before_path[0], gap_approach]
         after_side = path_side_for_task(
             task,
             flip_isaac_y,
@@ -615,7 +630,8 @@ def reference_path_for_task(
             follow_key="exit_side",
         )
         after_path = offset_polyline(concat_segments([after], flip_isaac_y), offset_m, after_side)
-        return [before_path[0], before_path[-1], point2(gap["approximate_center"], flip_isaac_y), after_path[0], after_path[-1]]
+        gap_exit = inset_endpoint(after_path, from_end=False, inset_m=0.7)
+        return [before_path[0], gap_approach, point2(gap["approximate_center"], flip_isaac_y), gap_exit, after_path[-1]]
     if task_type == "stop_at_landmark" and "target_fence" in task:
         fence = fence_by_name(scene, task["target_fence"])
         return offset_polyline(

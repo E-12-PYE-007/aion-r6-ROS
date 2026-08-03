@@ -35,6 +35,20 @@ def path_side_for_task(
     return side
 
 
+def inset_endpoint(path: list[np.ndarray], from_end: bool, inset_m: float) -> np.ndarray:
+    if len(path) < 2:
+        return path[0]
+    if from_end:
+        end = path[-1]
+        prev = path[-2]
+        direction = end - prev
+        return end - direction / max(np.linalg.norm(direction), 1e-9) * inset_m
+    start = path[0]
+    nxt = path[1]
+    direction = nxt - start
+    return start + direction / max(np.linalg.norm(direction), 1e-9) * inset_m
+
+
 class FencelineExpertTrajectoryNode(ExpertPolicyNode):
     def __init__(self) -> None:
         self.preferred_offset_m = 0.8
@@ -120,12 +134,14 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
         )
         after_path = offset_polyline(concat_segments([after], self.flip_isaac_y), self.preferred_offset_m, after_side)
         gap_center = point2(target_gap["approximate_center"], self.flip_isaac_y)
+        gap_approach = inset_endpoint(before_path, from_end=True, inset_m=0.7)
+        gap_exit = inset_endpoint(after_path, from_end=False, inset_m=0.7)
 
         if task_type == "stop_at_gap":
-            return [before_path[0], before_path[-1]]
+            return [before_path[0], gap_approach]
         if task_type == "switch_sides":
-            return [before_path[0], before_path[-1], gap_center, after_path[0], after_path[-1]]
-        return [before_path[0], before_path[-1], gap_center, after_path[0], after_path[-1]]
+            return [before_path[0], gap_approach, gap_center, gap_exit, after_path[-1]]
+        return [before_path[0], gap_approach, gap_center, gap_exit, after_path[-1]]
 
     def start_pose_point(self) -> np.ndarray:
         starts = self.scene.get("rover_poses")

@@ -284,6 +284,14 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
             recovery_case="wrong_heading",
         ),
     ])
+    if task_type in {"pass_through_gap", "switch_sides"}:
+        for variant in variants:
+            variant["planner_settings"].update({
+                "planner_subgoal_spacing_m": 4.0,
+                "planner_subgoal_longitudinal_search_m": 2.5,
+                "min_turn_radius_m": min(float(variant["planner_settings"].get("min_turn_radius_m", 0.75)), 0.5),
+                "allow_reverse": True,
+            })
     return variants
 
 
