@@ -86,6 +86,29 @@ class CollisionMap:
             half_extents = np.asarray([float(bbox[0]) * 0.5, float(bbox[1]) * 0.5], dtype=np.float64)
             obstacles.append(OrientedBoxObstacle(center, yaw, half_extents, name, obstacle_type))
 
+        for index, fence in enumerate(scene.get("fences") or []):
+            if not isinstance(fence, dict) or "start" not in fence or "end" not in fence:
+                continue
+            start = point2(fence["start"], flip_isaac_y)
+            end = point2(fence["end"], flip_isaac_y)
+            delta = end - start
+            length = float(np.linalg.norm(delta))
+            if length < 1e-6:
+                continue
+            center = 0.5 * (start + end)
+            yaw = math.atan2(float(delta[1]), float(delta[0]))
+            thickness_m = float(fence.get("collision_thickness_m", 0.08))
+            half_extents = np.asarray([0.5 * length, 0.5 * thickness_m], dtype=np.float64)
+            obstacles.append(
+                OrientedBoxObstacle(
+                    center,
+                    yaw,
+                    half_extents,
+                    str(fence.get("name", f"fence_{index:02d}")),
+                    "fence",
+                )
+            )
+
         all_points = list(reference_points) + [obstacle.center for obstacle in obstacles]
         if not all_points:
             all_points = [np.asarray([0.0, 0.0], dtype=np.float64)]

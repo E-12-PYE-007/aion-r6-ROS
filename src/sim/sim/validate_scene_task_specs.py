@@ -703,6 +703,55 @@ def build_planner(collision_map: CollisionMap, settings: dict[str, Any]) -> Hybr
     )
 
 
+def signed_side_of_segment(point: np.ndarray, segment_start: np.ndarray, segment_end: np.ndarray) -> float:
+    direction = segment_end - segment_start
+    relative = point - segment_start
+    return float(direction[0]) * float(relative[1]) - float(direction[1]) * float(relative[0])
+
+
+def candidate_preserves_side(
+    original: np.ndarray,
+    candidate: np.ndarray,
+    side_constraint_segments: list[tuple[np.ndarray, np.ndarray]],
+) -> bool:
+    if not side_constraint_segments:
+        return True
+    segment_start, segment_end = min(
+        side_constraint_segments,
+        key=lambda segment: point_to_segment_distance(original, segment[0], segment[1]),
+    )
+    original_side = signed_side_of_segment(original, segment_start, segment_end)
+    candidate_side = signed_side_of_segment(candidate, segment_start, segment_end)
+    if abs(original_side) < 1e-6:
+        return True
+    return original_side * candidate_side > 0.0
+
+
+def side_constraint_segments_for_task(
+    scene: dict[str, Any],
+    task: dict[str, Any],
+    flip_isaac_y: bool,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    task_type = task.get("task_type")
+    fence_names: list[str] = []
+    if task_type in {"follow_fence", "stop_at_landmark"} and task.get("target_fence"):
+        fence_names.append(str(task["target_fence"]))
+    elif task_type in {"follow_and_turn", "follow_fence_sequence"}:
+        fence_names.extend(str(name) for name in task.get("target_fences", []))
+    elif task_type in {"pass_through_gap", "stop_at_gap", "switch_sides"}:
+        gap = task.get("target_gap") or {}
+        if gap.get("before_fence"):
+            fence_names.append(str(gap["before_fence"]))
+        if gap.get("after_fence"):
+            fence_names.append(str(gap["after_fence"]))
+
+    segments = []
+    for name in fence_names:
+        fence = fence_by_name(scene, name)
+        segments.append((point2(fence["start"], flip_isaac_y), point2(fence["end"], flip_isaac_y)))
+    return segments
+
+
 def plan_through_subgoals(
     planner: HybridAStarPlanner,
     start_position: np.ndarray,
@@ -710,6 +759,7 @@ def plan_through_subgoals(
     subgoals: list[tuple[np.ndarray, float]],
     collision_map: CollisionMap,
     settings: dict[str, Any],
+    side_constraint_segments: list[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> tuple[bool, str | None]:
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
     if collision_map.is_collision(start_position):
@@ -720,11 +770,13 @@ def plan_through_subgoals(
     max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
     max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
+    side_constraint_segments = side_constraint_segments or []
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
         collision_candidates = 0
         free_candidates = 0
         attempted_candidates = 0
+        wrong_side_candidates = 0
         for candidate in shifted_subgoal_candidates(
             goal_position,
             goal_yaw,
@@ -734,6 +786,9 @@ def plan_through_subgoals(
         ):
             if collision_map.is_collision(candidate):
                 collision_candidates += 1
+                continue
+            if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
+                wrong_side_candidates += 1
                 continue
             free_candidates += 1
             if attempted_candidates >= max_candidates:
@@ -752,7 +807,7 @@ def plan_through_subgoals(
                 f"Hybrid A* failed to reach subgoal {index} near {goal_position.tolist()} "
                 f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
                 f"({attempted_candidates}/{free_candidates} free candidates attempted, "
-                f"{collision_candidates} colliding candidates)"
+                f"{collision_candidates} colliding candidates, {wrong_side_candidates} wrong-side candidates)"
             )
 
         if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
@@ -851,6 +906,7 @@ def planner_accepts_variant(
             subgoals,
             collision_map,
             settings,
+            side_constraint_segments_for_task(scene, task, flip_isaac_y),
         )
     except Exception as exc:
         return False, str(exc)

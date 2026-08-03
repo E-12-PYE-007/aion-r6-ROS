@@ -16,6 +16,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from sim.expert_trajectory_utils import (
     build_timed_action_chunk,
+    fence_by_name,
     find_variant,
     find_task,
     get_start_pose,
@@ -23,6 +24,7 @@ from sim.expert_trajectory_utils import (
     load_yaml,
     odom_to_pose,
     path_length,
+    point2,
     sample_path_pose,
 )
 from sim.collision_map import CollisionMap
@@ -74,6 +76,66 @@ def clear_reference_subgoals(
             nudged_count += 1
         cleared.append((clear_position, yaw))
     return cleared, nudged_count
+
+
+def point_to_segment_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    length_sq = float(np.dot(segment, segment))
+    if length_sq <= 1e-9:
+        return float(np.linalg.norm(point - start))
+    t = float(np.dot(point - start, segment) / length_sq)
+    t = min(1.0, max(0.0, t))
+    nearest = start + t * segment
+    return float(np.linalg.norm(point - nearest))
+
+
+def signed_side_of_segment(point: np.ndarray, segment_start: np.ndarray, segment_end: np.ndarray) -> float:
+    direction = segment_end - segment_start
+    relative = point - segment_start
+    return float(direction[0]) * float(relative[1]) - float(direction[1]) * float(relative[0])
+
+
+def candidate_preserves_side(
+    original: np.ndarray,
+    candidate: np.ndarray,
+    side_constraint_segments: list[tuple[np.ndarray, np.ndarray]],
+) -> bool:
+    if not side_constraint_segments:
+        return True
+    segment_start, segment_end = min(
+        side_constraint_segments,
+        key=lambda segment: point_to_segment_distance(original, segment[0], segment[1]),
+    )
+    original_side = signed_side_of_segment(original, segment_start, segment_end)
+    candidate_side = signed_side_of_segment(candidate, segment_start, segment_end)
+    if abs(original_side) < 1e-6:
+        return True
+    return original_side * candidate_side > 0.0
+
+
+def side_constraint_segments_for_task(
+    scene: dict,
+    task: dict,
+    flip_isaac_y: bool,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    task_type = task.get("task_type")
+    fence_names: list[str] = []
+    if task_type in {"follow_fence", "stop_at_landmark"} and task.get("target_fence"):
+        fence_names.append(str(task["target_fence"]))
+    elif task_type in {"follow_and_turn", "follow_fence_sequence"}:
+        fence_names.extend(str(name) for name in task.get("target_fences", []))
+    elif task_type in {"pass_through_gap", "stop_at_gap", "switch_sides"}:
+        gap = task.get("target_gap") or {}
+        if gap.get("before_fence"):
+            fence_names.append(str(gap["before_fence"]))
+        if gap.get("after_fence"):
+            fence_names.append(str(gap["after_fence"]))
+
+    segments = []
+    for name in fence_names:
+        fence = fence_by_name(scene, name)
+        segments.append((point2(fence["start"], flip_isaac_y), point2(fence["end"], flip_isaac_y)))
+    return segments
 
 
 class ExpertPolicyNode(Node):
@@ -275,6 +337,7 @@ class ExpertPolicyNode(Node):
         search_step_m = float(self.planner_setting("planner_subgoal_search_step_m", "planner_subgoal_search_step_m"))
         max_candidates = int(self.planner_setting("planner_subgoal_max_candidates", "planner_subgoal_max_candidates"))
         nudged_count = 0
+        side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_isaac_y)
 
         for index, (goal_position, goal_yaw) in enumerate(subgoals):
             selected_position = None
@@ -282,6 +345,7 @@ class ExpertPolicyNode(Node):
             attempted_candidates = 0
             free_candidates = 0
             collision_candidates = 0
+            wrong_side_candidates = 0
             for candidate in shifted_subgoal_candidates(
                 goal_position,
                 goal_yaw,
@@ -291,6 +355,9 @@ class ExpertPolicyNode(Node):
             ):
                 if collision_map.is_collision(candidate):
                     collision_candidates += 1
+                    continue
+                if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
+                    wrong_side_candidates += 1
                     continue
                 free_candidates += 1
                 if attempted_candidates >= max_candidates:
@@ -309,7 +376,7 @@ class ExpertPolicyNode(Node):
                     f"Hybrid A* could not reach subgoal {index} near {goal_position.tolist()} "
                     f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
                     f"({attempted_candidates}/{free_candidates} free candidates attempted, "
-                    f"{collision_candidates} colliding candidates)"
+                    f"{collision_candidates} colliding candidates, {wrong_side_candidates} wrong-side candidates)"
                 )
                 return None
             if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:

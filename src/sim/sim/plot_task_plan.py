@@ -14,10 +14,12 @@ from sim.expert_trajectory_utils import find_task, find_variant, load_yaml, path
 from sim.hybrid_astar import Pose
 from sim.validate_scene_task_specs import (
     build_planner,
+    candidate_preserves_side,
     reference_path_for_task,
     reference_subgoals,
     shifted_subgoal_candidates,
     shifted_start_pose,
+    side_constraint_segments_for_task,
 )
 
 
@@ -58,6 +60,7 @@ def plan_path(
     start_position: np.ndarray,
     start_yaw: float,
     subgoals: list[tuple[np.ndarray, float]],
+    side_constraint_segments: list[tuple[np.ndarray, np.ndarray]],
 ) -> tuple[list[np.ndarray] | None, list[tuple[np.ndarray, float]], int]:
     planner = build_planner(collision_map, settings)
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
@@ -80,6 +83,8 @@ def plan_path(
             step_m=search_step_m,
         ):
             if collision_map.is_collision(candidate):
+                continue
+            if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
                 continue
             if attempted_candidates >= max_candidates:
                 continue
@@ -149,30 +154,64 @@ def main() -> None:
         start_position,
         start_yaw,
         subgoals,
+        side_constraint_segments_for_task(scene, task, flip_isaac_y),
     )
     planned_ok = planned_path is not None
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""
+    print(f"collision_inflation_m={collision_map.inflation_m:.2f}")
+    for obstacle in collision_map.obstacles:
+        physical_size = 2.0 * obstacle.half_extents
+        inflated_size = 2.0 * (obstacle.half_extents + collision_map.inflation_m)
+        print(
+            f"{obstacle.name}: type={obstacle.obstacle_type} "
+            f"physical=[{physical_size[0]:.2f}, {physical_size[1]:.2f}] "
+            f"inflated=[{inflated_size[0]:.2f}, {inflated_size[1]:.2f}]"
+        )
 
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_title(f"{args.task_id} / {args.variant_id}\nplanner_valid={planned_ok} {note or ''}")
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, linewidth=0.4, alpha=0.4)
 
+    fence_label_used = False
     for fence in scene.get("fences") or []:
         start = np.asarray([float(fence["start"][0]), float(fence["start"][1])])
         end = np.asarray([float(fence["end"][0]), float(fence["end"][1])])
         if flip_isaac_y:
             start[1] *= -1.0
             end[1] *= -1.0
-        ax.plot([start[0], end[0]], [start[1], end[1]], color="black", linewidth=3, label="fence")
+        label = "fence centerline" if not fence_label_used else None
+        fence_label_used = True
+        ax.plot([start[0], end[0]], [start[1], end[1]], color="black", linewidth=3, label=label)
 
+    inflated_label_used = False
+    physical_label_used = False
     for obstacle in collision_map.obstacles:
-        corners = obstacle_corners(
+        inflated_corners = obstacle_corners(
             obstacle,
             collision_map.inflation_m,
         )
-        ax.fill(corners[:, 0], corners[:, 1], color="tab:red", alpha=0.2)
-        ax.plot(corners[:, 0], corners[:, 1], color="tab:red", linewidth=0.8)
+        physical_corners = obstacle_corners(obstacle, 0.0)
+        if obstacle.obstacle_type == "fence":
+            inflated_color = "0.35"
+            physical_color = "black"
+        else:
+            inflated_color = "tab:red"
+            physical_color = "tab:red"
+        inflated_label = "inflated collision footprint" if not inflated_label_used else None
+        physical_label = "physical footprint" if not physical_label_used else None
+        inflated_label_used = True
+        physical_label_used = True
+        ax.fill(inflated_corners[:, 0], inflated_corners[:, 1], color=inflated_color, alpha=0.12, label=inflated_label)
+        ax.plot(inflated_corners[:, 0], inflated_corners[:, 1], color=inflated_color, linewidth=0.8)
+        ax.plot(
+            physical_corners[:, 0],
+            physical_corners[:, 1],
+            color=physical_color,
+            linewidth=1.2,
+            linestyle="-",
+            label=physical_label,
+        )
         ax.text(obstacle.center[0], obstacle.center[1], obstacle.name, fontsize=7, ha="center")
 
     plot_polyline(ax, reference_path, "--", color="tab:blue", linewidth=2, label="reference")
@@ -211,6 +250,15 @@ def main() -> None:
         transform=ax.transAxes,
         fontsize=8,
         va="bottom",
+    )
+    ax.text(
+        0.99,
+        0.01,
+        f"collision inflation={collision_map.inflation_m:.2f}m",
+        transform=ax.transAxes,
+        fontsize=8,
+        va="bottom",
+        ha="right",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
