@@ -100,6 +100,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("planner_subgoal_spacing_m", 3.0)
         self.declare_parameter("planner_subgoal_lateral_search_m", 2.0)
         self.declare_parameter("planner_subgoal_longitudinal_search_m", 2.0)
+        self.declare_parameter("planner_subgoal_search_step_m", 0.5)
+        self.declare_parameter("planner_subgoal_max_candidates", 48)
         self.declare_parameter("planner_subgoal_vertex_margin_m", 0.5)
         self.declare_parameter("planner_subgoal_endpoint_margin_m", 0.5)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
@@ -261,14 +263,30 @@ class ExpertPolicyNode(Node):
         max_longitudinal_m = float(
             self.planner_setting("planner_subgoal_longitudinal_search_m", "planner_subgoal_longitudinal_search_m")
         )
+        search_step_m = float(self.planner_setting("planner_subgoal_search_step_m", "planner_subgoal_search_step_m"))
+        max_candidates = int(self.planner_setting("planner_subgoal_max_candidates", "planner_subgoal_max_candidates"))
         nudged_count = 0
 
         for index, (goal_position, goal_yaw) in enumerate(subgoals):
             selected_position = None
             selected_segment = None
-            for candidate in shifted_subgoal_candidates(goal_position, goal_yaw, max_lateral_m, max_longitudinal_m):
+            attempted_candidates = 0
+            free_candidates = 0
+            collision_candidates = 0
+            for candidate in shifted_subgoal_candidates(
+                goal_position,
+                goal_yaw,
+                max_lateral_m,
+                max_longitudinal_m,
+                step_m=search_step_m,
+            ):
                 if collision_map.is_collision(candidate):
+                    collision_candidates += 1
                     continue
+                free_candidates += 1
+                if attempted_candidates >= max_candidates:
+                    continue
+                attempted_candidates += 1
                 segment = planner.plan(
                     start_pose,
                     Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
@@ -280,7 +298,9 @@ class ExpertPolicyNode(Node):
             if selected_position is None or selected_segment is None:
                 self.get_logger().warn(
                     f"Hybrid A* could not reach subgoal {index} near {goal_position.tolist()} "
-                    f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
+                    f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
+                    f"({attempted_candidates}/{free_candidates} free candidates attempted, "
+                    f"{collision_candidates} colliding candidates)"
                 )
                 return None
             if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:

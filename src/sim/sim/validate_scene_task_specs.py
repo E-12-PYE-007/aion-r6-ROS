@@ -718,15 +718,27 @@ def plan_through_subgoals(
     nudged_count = 0
     max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
     max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
+    search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
+    max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
         collision_candidates = 0
         free_candidates = 0
-        for candidate in shifted_subgoal_candidates(goal_position, goal_yaw, max_lateral_m, max_longitudinal_m):
+        attempted_candidates = 0
+        for candidate in shifted_subgoal_candidates(
+            goal_position,
+            goal_yaw,
+            max_lateral_m,
+            max_longitudinal_m,
+            step_m=search_step_m,
+        ):
             if collision_map.is_collision(candidate):
                 collision_candidates += 1
                 continue
             free_candidates += 1
+            if attempted_candidates >= max_candidates:
+                continue
+            attempted_candidates += 1
             segment = planner.plan(
                 start_pose,
                 Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
@@ -739,7 +751,8 @@ def plan_through_subgoals(
             return False, (
                 f"Hybrid A* failed to reach subgoal {index} near {goal_position.tolist()} "
                 f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
-                f"({free_candidates} free candidates, {collision_candidates} colliding candidates)"
+                f"({attempted_candidates}/{free_candidates} free candidates attempted, "
+                f"{collision_candidates} colliding candidates)"
             )
 
         if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
@@ -773,34 +786,6 @@ def shifted_subgoal_candidates(
 
     local_offsets.sort(key=lambda item: (abs(item[0]) + 1.5 * abs(item[1]), abs(item[0]), abs(item[1])))
     return [position + normal * lateral + direction * longitudinal for lateral, longitudinal in local_offsets]
-
-
-def clear_reference_subgoals(
-    collision_map: CollisionMap,
-    subgoals: list[tuple[np.ndarray, float]],
-    settings: dict[str, Any],
-) -> tuple[list[tuple[np.ndarray, float]], str | None]:
-    cleared = []
-    nudged_count = 0
-    max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
-    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
-    for index, (position, yaw) in enumerate(subgoals):
-        clear_position = None
-        for candidate in shifted_subgoal_candidates(position, yaw, max_lateral_m, max_longitudinal_m):
-            if not collision_map.is_collision(candidate):
-                clear_position = candidate
-                break
-        if clear_position is None:
-            return [], (
-                f"reference subgoal {index} is blocked and no clear point was found within "
-                f"{max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
-            )
-        if float(np.linalg.norm(clear_position - position)) > 1e-6:
-            nudged_count += 1
-        cleared.append((clear_position, yaw))
-    if nudged_count:
-        return cleared, f"nudged {nudged_count} blocked reference subgoals"
-    return cleared, None
 
 
 def point_to_segment_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
