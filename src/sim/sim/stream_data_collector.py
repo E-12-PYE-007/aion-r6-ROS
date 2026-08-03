@@ -15,6 +15,8 @@ import json
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from nav_msgs import msgs.Odometry
+import math
 
 # Define constants
 
@@ -33,6 +35,7 @@ class StreamDataCollectionNode(Node):
 
         self.previous_img_time = 0
         self.current_pose = None
+        self.current_vel = None
 
         self.declare_parameter('base_dir', Parameter.Type.STRING)
         base_dir = self.get_parameter('base_dir').get_parameter_value().string_value
@@ -55,8 +58,8 @@ class StreamDataCollectionNode(Node):
         )
 
         self.odom_subscriber = self.create_subscription(
-            px4_msgs.msg.VehicleLocalPosition,
-            "/fmu/out/vehicle_local_position",
+            nav_msgs.msg.Odometry,
+            "/sim_odom",
             self.odom_callback,
             qos_profile_sensor_data
         )
@@ -78,7 +81,29 @@ class StreamDataCollectionNode(Node):
         return
 
     def odom_callback(self, msg):
-        self.current_pose = (msg.timestamp, msg.x, msg.y, msg.heading)
+        t = Time.from_msg(msg.header.stamp)
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+
+        self.current_pose = (
+            Time.from_msg(msg.header.stamp),
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            yaw_from_quat(msg.pose.pose.orientation),
+        )
+
+        tw = msg.twist.twist
+
+        self.current_vel = (
+            tw.linear.x,
+            tw.angular.z
+        )
+
+    def yaw_from_quat(q):
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    return math.atan2(siny_cosp, cosy_cosp)
 
     def encode_img(self, msg):
         bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
