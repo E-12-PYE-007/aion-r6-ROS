@@ -130,6 +130,7 @@ class StreamDataCollectionNode(Node):
             "image": image_path.name,
             "img_time": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
             "pose": self.current_pose
+            "vel": self.current_vel
         }
         with open(self.poses_path, "a") as f:
             f.write(json.dumps(record) + "\n")
