@@ -14,9 +14,9 @@ from sim.expert_trajectory_utils import find_task, find_variant, load_yaml, path
 from sim.hybrid_astar import Pose
 from sim.validate_scene_task_specs import (
     build_planner,
-    plan_through_subgoals,
     reference_path_for_task,
     reference_subgoals,
+    shifted_subgoal_candidates,
     shifted_start_pose,
 )
 
@@ -45,23 +45,51 @@ def plan_path(
     start_position: np.ndarray,
     start_yaw: float,
     subgoals: list[tuple[np.ndarray, float]],
-) -> list[np.ndarray] | None:
+) -> tuple[list[np.ndarray] | None, list[tuple[np.ndarray, float]], int]:
     planner = build_planner(collision_map, settings)
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
     planned_path: list[np.ndarray] = []
+    selected_subgoals: list[tuple[np.ndarray, float]] = []
+    nudged_count = 0
+    max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
+    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
+    search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
+    max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
     for goal_position, goal_yaw in subgoals:
-        segment = planner.plan(
-            start_pose,
-            Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw)),
-        )
-        if segment is None:
-            return None
+        selected_position = None
+        selected_segment = None
+        attempted_candidates = 0
+        for candidate in shifted_subgoal_candidates(
+            goal_position,
+            goal_yaw,
+            max_lateral_m,
+            max_longitudinal_m,
+            step_m=search_step_m,
+        ):
+            if collision_map.is_collision(candidate):
+                continue
+            if attempted_candidates >= max_candidates:
+                continue
+            attempted_candidates += 1
+            segment = planner.plan(
+                start_pose,
+                Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
+            )
+            if segment is not None:
+                selected_position = candidate
+                selected_segment = segment
+                break
+        if selected_position is None or selected_segment is None:
+            return None, selected_subgoals, nudged_count
+        if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
+            nudged_count += 1
+        selected_subgoals.append((selected_position, goal_yaw))
         if planned_path:
-            planned_path.extend(segment[1:])
+            planned_path.extend(selected_segment[1:])
         else:
-            planned_path.extend(segment)
-        start_pose = Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw))
-    return planned_path
+            planned_path.extend(selected_segment)
+        start_pose = Pose(float(selected_position[0]), float(selected_position[1]), float(goal_yaw))
+    return planned_path, selected_subgoals, nudged_count
 
 
 def plot_polyline(ax, points: list[np.ndarray], *args, **kwargs) -> None:
@@ -102,15 +130,15 @@ def main() -> None:
         robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
         obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
     )
-    planned_ok, note = plan_through_subgoals(
-        build_planner(collision_map, settings),
+    planned_path, selected_subgoals, nudged_count = plan_path(
+        collision_map,
+        settings,
         start_position,
         start_yaw,
         subgoals,
-        collision_map,
-        settings,
     )
-    planned_path = plan_path(collision_map, settings, start_position, start_yaw, subgoals)
+    planned_ok = planned_path is not None
+    note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""
 
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_title(f"{args.task_id} / {args.variant_id}\nplanner_valid={planned_ok} {note or ''}")
@@ -137,6 +165,16 @@ def main() -> None:
     subgoal_points = np.asarray([position for position, _ in subgoals])
     if len(subgoal_points):
         ax.scatter(subgoal_points[:, 0], subgoal_points[:, 1], marker="x", color="tab:purple", s=60, label="subgoals")
+    selected_points = np.asarray([position for position, _ in selected_subgoals])
+    if len(selected_points):
+        ax.scatter(
+            selected_points[:, 0],
+            selected_points[:, 1],
+            marker="+",
+            color="tab:green",
+            s=80,
+            label="reachable subgoals",
+        )
     ax.scatter([start_position[0]], [start_position[1]], marker="o", color="tab:orange", s=80, label="start")
     ax.arrow(
         float(start_position[0]),
