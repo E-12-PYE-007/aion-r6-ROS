@@ -260,14 +260,14 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
             "recovery_left_offset",
             "recovery",
             0.8,
-            start_pose_delta={"x_m": 0.0, "y_m": 0.25, "yaw_rad": 0.35},
+            start_pose_delta={"x_m": 0.0, "y_m": 0.15, "yaw_rad": 0.35},
             recovery_case="lost_target_left",
         ),
         variant_settings(
             "recovery_right_offset",
             "recovery",
             0.8,
-            start_pose_delta={"x_m": 0.0, "y_m": -0.25, "yaw_rad": -0.35},
+            start_pose_delta={"x_m": 0.0, "y_m": -0.15, "yaw_rad": -0.35},
             recovery_case="lost_target_right",
         ),
         variant_settings(

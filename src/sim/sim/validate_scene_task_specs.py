@@ -684,6 +684,39 @@ def plan_through_subgoals(
     return True
 
 
+def shifted_subgoal_candidates(position: np.ndarray, yaw: float, max_shift_m: float = 1.5) -> list[np.ndarray]:
+    normal = np.asarray([-math.sin(yaw), math.cos(yaw)], dtype=np.float64)
+    candidates = [position]
+    shift = 0.25
+    while shift <= max_shift_m + 1e-9:
+        candidates.append(position + normal * shift)
+        candidates.append(position - normal * shift)
+        shift += 0.25
+    return candidates
+
+
+def clear_reference_subgoals(
+    collision_map: CollisionMap,
+    subgoals: list[tuple[np.ndarray, float]],
+) -> tuple[list[tuple[np.ndarray, float]], str | None]:
+    cleared = []
+    nudged_count = 0
+    for index, (position, yaw) in enumerate(subgoals):
+        clear_position = None
+        for candidate in shifted_subgoal_candidates(position, yaw):
+            if not collision_map.is_collision(candidate):
+                clear_position = candidate
+                break
+        if clear_position is None:
+            return [], f"reference subgoal {index} is blocked and no nearby clear point was found"
+        if float(np.linalg.norm(clear_position - position)) > 1e-6:
+            nudged_count += 1
+        cleared.append((clear_position, yaw))
+    if nudged_count:
+        return cleared, f"nudged {nudged_count} blocked reference subgoals"
+    return cleared, None
+
+
 def point_to_segment_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
     segment = end - start
     length_sq = float(np.dot(segment, segment))
@@ -739,13 +772,16 @@ def planner_accepts_variant(
             robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
             obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
         )
+        subgoals, subgoal_note = clear_reference_subgoals(collision_map, subgoals)
+        if not subgoals:
+            return False, subgoal_note
         planner = build_planner(collision_map, settings)
         planned = plan_through_subgoals(planner, start_position, start_yaw, subgoals)
     except Exception as exc:
         return False, str(exc)
     if not planned:
         return False, "Hybrid A* failed to plan through reference subgoals"
-    return True, None
+    return True, subgoal_note
 
 
 def filter_planner_valid_variants(
@@ -762,6 +798,8 @@ def filter_planner_valid_variants(
         if accepted:
             checked_variant = dict(variant)
             checked_variant["planner_validation"] = {"checked": True, "valid": True}
+            if reason:
+                checked_variant["planner_validation"]["note"] = reason
             valid_variants.append(checked_variant)
         else:
             errors.append(f"variant {variant.get('variant_id', '<missing>')}: {reason}")

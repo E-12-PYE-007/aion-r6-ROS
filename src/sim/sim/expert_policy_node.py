@@ -28,6 +28,37 @@ from sim.hybrid_astar import HybridAStarPlanner, Pose
 from sim.trajectory_profile import TimedTrajectory, build_timed_trajectory, resample_path, shortcut_smooth
 
 
+def shifted_subgoal_candidates(position: np.ndarray, yaw: float, max_shift_m: float = 1.5) -> list[np.ndarray]:
+    normal = np.asarray([-np.sin(yaw), np.cos(yaw)], dtype=np.float64)
+    candidates = [position]
+    shift = 0.25
+    while shift <= max_shift_m + 1e-9:
+        candidates.append(position + normal * shift)
+        candidates.append(position - normal * shift)
+        shift += 0.25
+    return candidates
+
+
+def clear_reference_subgoals(
+    collision_map: CollisionMap,
+    subgoals: list[tuple[np.ndarray, float]],
+) -> tuple[list[tuple[np.ndarray, float]], int]:
+    cleared = []
+    nudged_count = 0
+    for position, yaw in subgoals:
+        clear_position = None
+        for candidate in shifted_subgoal_candidates(position, yaw):
+            if not collision_map.is_collision(candidate):
+                clear_position = candidate
+                break
+        if clear_position is None:
+            return [], nudged_count
+        if float(np.linalg.norm(clear_position - position)) > 1e-6:
+            nudged_count += 1
+        cleared.append((clear_position, yaw))
+    return cleared, nudged_count
+
+
 class ExpertPolicyNode(Node):
     def __init__(self, node_name: str) -> None:
         super().__init__(node_name)
@@ -214,6 +245,13 @@ class ExpertPolicyNode(Node):
                 planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
             ),
         )
+        subgoals, nudged_count = clear_reference_subgoals(collision_map, subgoals)
+        if not subgoals:
+            self.get_logger().warn("Hybrid A* subgoal planning failed; all nearby reference subgoal candidates are blocked")
+            self.trajectory = self.profile_path(self.path)
+            return
+        if nudged_count:
+            self.get_logger().info(f"Hybrid A* nudged {nudged_count} blocked reference subgoals before planning")
         planner = self.build_planner(collision_map)
         planned = self.plan_through_subgoals(planner, subgoals)
         if planned is None:
