@@ -12,6 +12,7 @@
 #include <aion_msgs/msg/action_chunk.hpp>
 #include <optional>
 # include <tf2/utils.h>
+# include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 # define CONTROL_RATE 30 // Control rate in Hz
 
@@ -25,7 +26,7 @@ class SimWaypointTracker : public rclcpp::Node
     {
         // Create a subscription to the pose topic that isaac publishes
         _odom_subscription = this->create_subscription<nav_msgs::msg::Odometry>(
-            "sim_odom", 10, std::bind(&SimWaypointTracker::odom_callback, this, _1));
+            "/sim_odom", 10, std::bind(&SimWaypointTracker::odom_callback, this, _1));
 
         _action_chunk_subscription = this->create_subscription<aion_msgs::msg::ActionChunk>(
             "/vla/action_chunk", 10, std::bind(&SimWaypointTracker::action_chunk_callback, this, std::placeholders::_1));

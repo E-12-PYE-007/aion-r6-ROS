@@ -7,7 +7,6 @@
 from datetime import datetime
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
-import px4_msgs.msg
 from pathlib import Path
 import cv2
 from cv_bridge import CvBridge
@@ -15,7 +14,7 @@ import json
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from nav_msgs import msgs.Odometry
+from nav_msgs.msg import Odometry
 import math
 
 # Define constants
@@ -58,7 +57,7 @@ class StreamDataCollectionNode(Node):
         )
 
         self.odom_subscriber = self.create_subscription(
-            nav_msgs.msg.Odometry,
+            Odometry,
             "/sim_odom",
             self.odom_callback,
             qos_profile_sensor_data
@@ -81,16 +80,16 @@ class StreamDataCollectionNode(Node):
         return
 
     def odom_callback(self, msg):
-        t = Time.from_msg(msg.header.stamp)
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
-        q = msg.pose.pose.orientation
+        theta = self.yaw_from_quat(msg.pose.pose.orientation)
 
         self.current_pose = (
-            Time.from_msg(msg.header.stamp),
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y,
-            yaw_from_quat(msg.pose.pose.orientation),
+            t, 
+            x,
+            y,
+            theta
         )
 
         tw = msg.twist.twist
@@ -100,10 +99,11 @@ class StreamDataCollectionNode(Node):
             tw.angular.z
         )
 
+    @staticmethod
     def yaw_from_quat(q):
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return math.atan2(siny_cosp, cosy_cosp)
 
     def encode_img(self, msg):
         bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -122,15 +122,15 @@ class StreamDataCollectionNode(Node):
         if not ok:
             raise ImageEncodeError('Failed to JPEG-encode camera frame')
 
-        img_id = f"{int(img_time)}"
+        img_id = f"{int(img_time*1000)}"
         image_path = self.img_dir / f"{img_id}.jpg"
         image_path.write_bytes(img.tobytes())
 
         record = {
             "image": image_path.name,
             "img_time": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
-            "pose": self.current_pose
-            "vel": self.current_vel
+            "pose": self.current_pose,
+            "velocity": self.current_vel
         }
         with open(self.poses_path, "a") as f:
             f.write(json.dumps(record) + "\n")

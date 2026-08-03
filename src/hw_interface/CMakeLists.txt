@@ -14,6 +14,7 @@ find_package(aion_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 add_executable(px4_waypoint_tracking src/px4_waypoint_tracking.cpp)
 target_include_directories(px4_waypoint_tracking PUBLIC
@@ -44,6 +45,7 @@ ament_target_dependencies(
   "aion_msgs"
   "geometry_msgs"
   "tf2"
+  "tf2_geometry_msgs"
 )
 
 install(TARGETS sim_waypoint_tracking
