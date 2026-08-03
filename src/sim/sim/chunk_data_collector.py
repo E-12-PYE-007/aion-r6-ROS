@@ -59,7 +59,7 @@ class ChunkDataCollectionNode(Node):
 
         self.cam_subscriber = self.create_subscription(
             Image,
-            "/vla/cam1", # placeholder topic name
+            "/vla/cam",
             self.cam_callback,
             qos_profile_sensor_data,
         )

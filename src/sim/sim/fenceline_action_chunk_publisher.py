@@ -143,7 +143,7 @@ class FencelineActionChunkPublisher(Node):
         self.declare_parameter("preferred_offset_m", 0.8)
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("publish_rate_hz", 3.0)
-        self.declare_parameter("odom_topic", "sim_odom")
+        self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("flip_isaac_y", True)
 

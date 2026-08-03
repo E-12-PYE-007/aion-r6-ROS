@@ -19,9 +19,9 @@ class NoAliasDumper(yaml.SafeDumper):
 DEFAULT_COLLECTION = {
     "base_dir": "C:/Users/miahv/Documents/Capstone_Project/sim_datasets/generated",
     "duration_s": 20,
-    "camera_topic": "/vla/cam1",
-    "odom_topic": "sim_odom",
-    "cmd_vel_topic": "cmd_vel",
+    "camera_topic": "/vla/cam",
+    "odom_topic": "/sim_odom",
+    "cmd_vel_topic": "/cmd_vel",
     "action_chunk_topic": "/vla/action_chunk",
     "sample_frequency_hz": 3.0,
 }

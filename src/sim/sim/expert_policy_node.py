@@ -81,7 +81,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("task_spec", Parameter.Type.STRING)
         self.declare_parameter("task_id", Parameter.Type.STRING)
         self.declare_parameter("variant_id", "nominal")
-        self.declare_parameter("odom_topic", "sim_odom")
+        self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("waypoint_spacing_m", 0.18)
