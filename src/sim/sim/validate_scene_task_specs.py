@@ -645,7 +645,7 @@ def reference_path_for_task(
 
 def reference_subgoals(reference_path: list[np.ndarray], settings: dict[str, Any]) -> list[tuple[np.ndarray, float]]:
     total_length = path_length(reference_path)
-    spacing = float(settings.get("planner_subgoal_spacing_m", 2.0))
+    spacing = float(settings.get("planner_subgoal_spacing_m", 3.0))
     endpoint_margin = min(float(settings.get("planner_subgoal_endpoint_margin_m", 0.5)), max(total_length * 0.25, 0.0))
     vertex_margin = float(settings.get("planner_subgoal_vertex_margin_m", 0.5))
     max_progress = max(total_length - endpoint_margin, 0.0)
@@ -681,6 +681,7 @@ def build_planner(collision_map: CollisionMap, settings: dict[str, Any]) -> Hybr
         step_size_m=float(settings.get("step_size_m", 0.35)),
         min_turn_radius_m=float(settings.get("min_turn_radius_m", 0.75)),
         goal_tolerance_m=float(settings.get("goal_tolerance_m", 0.35)),
+        yaw_tolerance_rad=math.radians(float(settings.get("subgoal_yaw_tolerance_deg", 180.0))),
         max_iterations=int(settings.get("hybrid_astar_max_iterations", 20000)),
         allow_reverse=bool(settings.get("allow_reverse", False)),
     )
@@ -700,12 +701,16 @@ def plan_through_subgoals(
 
     nudged_count = 0
     max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
-    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 0.75))
+    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
+        collision_candidates = 0
+        free_candidates = 0
         for candidate in shifted_subgoal_candidates(goal_position, goal_yaw, max_lateral_m, max_longitudinal_m):
             if collision_map.is_collision(candidate):
+                collision_candidates += 1
                 continue
+            free_candidates += 1
             segment = planner.plan(
                 start_pose,
                 Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
@@ -717,7 +722,8 @@ def plan_through_subgoals(
         if selected_position is None:
             return False, (
                 f"Hybrid A* failed to reach subgoal {index} near {goal_position.tolist()} "
-                f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
+                f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
+                f"({free_candidates} free candidates, {collision_candidates} colliding candidates)"
             )
 
         if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
@@ -761,7 +767,7 @@ def clear_reference_subgoals(
     cleared = []
     nudged_count = 0
     max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
-    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 0.75))
+    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     for index, (position, yaw) in enumerate(subgoals):
         clear_position = None
         for candidate in shifted_subgoal_candidates(position, yaw, max_lateral_m, max_longitudinal_m):

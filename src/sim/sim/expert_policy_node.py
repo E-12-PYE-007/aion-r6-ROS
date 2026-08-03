@@ -93,12 +93,13 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("obstacle_padding_m", 0.25)
         self.declare_parameter("grid_resolution_m", 0.25)
         self.declare_parameter("yaw_resolution_deg", 15.0)
+        self.declare_parameter("subgoal_yaw_tolerance_deg", 180.0)
         self.declare_parameter("step_size_m", 0.35)
         self.declare_parameter("min_turn_radius_m", 0.75)
         self.declare_parameter("goal_tolerance_m", 0.35)
-        self.declare_parameter("planner_subgoal_spacing_m", 2.0)
+        self.declare_parameter("planner_subgoal_spacing_m", 3.0)
         self.declare_parameter("planner_subgoal_lateral_search_m", 2.0)
-        self.declare_parameter("planner_subgoal_longitudinal_search_m", 0.75)
+        self.declare_parameter("planner_subgoal_longitudinal_search_m", 2.0)
         self.declare_parameter("planner_subgoal_vertex_margin_m", 0.5)
         self.declare_parameter("planner_subgoal_endpoint_margin_m", 0.5)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
@@ -236,6 +237,9 @@ class ExpertPolicyNode(Node):
             step_size_m=float(self.planner_setting("step_size_m", "step_size_m")),
             min_turn_radius_m=float(self.planner_setting("min_turn_radius_m", "min_turn_radius_m")),
             goal_tolerance_m=float(self.planner_setting("goal_tolerance_m", "goal_tolerance_m")),
+            yaw_tolerance_rad=np.deg2rad(
+                float(self.planner_setting("subgoal_yaw_tolerance_deg", "subgoal_yaw_tolerance_deg"))
+            ),
             max_iterations=int(self.planner_setting("hybrid_astar_max_iterations", "hybrid_astar_max_iterations")),
             allow_reverse=bool(self.planner_setting("allow_reverse", "allow_reverse")),
         )
