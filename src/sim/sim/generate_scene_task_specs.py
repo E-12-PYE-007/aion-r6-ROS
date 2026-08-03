@@ -194,6 +194,8 @@ DEFAULT_PLANNER_SETTINGS = {
     "min_turn_radius_m": 0.75,
     "goal_tolerance_m": 0.35,
     "planner_subgoal_spacing_m": 2.0,
+    "planner_subgoal_lateral_search_m": 2.0,
+    "planner_subgoal_longitudinal_search_m": 0.75,
     "hybrid_astar_max_iterations": 20000,
     "allow_reverse": False,
 }

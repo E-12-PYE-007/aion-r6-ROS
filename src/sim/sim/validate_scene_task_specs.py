@@ -684,31 +684,50 @@ def plan_through_subgoals(
     return True
 
 
-def shifted_subgoal_candidates(position: np.ndarray, yaw: float, max_shift_m: float = 1.5) -> list[np.ndarray]:
+def shifted_subgoal_candidates(
+    position: np.ndarray,
+    yaw: float,
+    max_lateral_m: float,
+    max_longitudinal_m: float,
+    step_m: float = 0.25,
+) -> list[np.ndarray]:
+    direction = np.asarray([math.cos(yaw), math.sin(yaw)], dtype=np.float64)
     normal = np.asarray([-math.sin(yaw), math.cos(yaw)], dtype=np.float64)
-    candidates = [position]
-    shift = 0.25
-    while shift <= max_shift_m + 1e-9:
-        candidates.append(position + normal * shift)
-        candidates.append(position - normal * shift)
-        shift += 0.25
-    return candidates
+    lateral_steps = int(math.floor(max_lateral_m / step_m))
+    longitudinal_steps = int(math.floor(max_longitudinal_m / step_m))
+    local_offsets = [(0.0, 0.0)]
+    for lat_index in range(-lateral_steps, lateral_steps + 1):
+        for lon_index in range(-longitudinal_steps, longitudinal_steps + 1):
+            lateral = lat_index * step_m
+            longitudinal = lon_index * step_m
+            if abs(lateral) < 1e-9 and abs(longitudinal) < 1e-9:
+                continue
+            local_offsets.append((lateral, longitudinal))
+
+    local_offsets.sort(key=lambda item: (abs(item[0]) + 1.5 * abs(item[1]), abs(item[0]), abs(item[1])))
+    return [position + normal * lateral + direction * longitudinal for lateral, longitudinal in local_offsets]
 
 
 def clear_reference_subgoals(
     collision_map: CollisionMap,
     subgoals: list[tuple[np.ndarray, float]],
+    settings: dict[str, Any],
 ) -> tuple[list[tuple[np.ndarray, float]], str | None]:
     cleared = []
     nudged_count = 0
+    max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
+    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 0.75))
     for index, (position, yaw) in enumerate(subgoals):
         clear_position = None
-        for candidate in shifted_subgoal_candidates(position, yaw):
+        for candidate in shifted_subgoal_candidates(position, yaw, max_lateral_m, max_longitudinal_m):
             if not collision_map.is_collision(candidate):
                 clear_position = candidate
                 break
         if clear_position is None:
-            return [], f"reference subgoal {index} is blocked and no nearby clear point was found"
+            return [], (
+                f"reference subgoal {index} is blocked and no clear point was found within "
+                f"{max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
+            )
         if float(np.linalg.norm(clear_position - position)) > 1e-6:
             nudged_count += 1
         cleared.append((clear_position, yaw))
@@ -772,7 +791,7 @@ def planner_accepts_variant(
             robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
             obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
         )
-        subgoals, subgoal_note = clear_reference_subgoals(collision_map, subgoals)
+        subgoals, subgoal_note = clear_reference_subgoals(collision_map, subgoals, settings)
         if not subgoals:
             return False, subgoal_note
         planner = build_planner(collision_map, settings)

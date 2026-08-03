@@ -28,26 +28,41 @@ from sim.hybrid_astar import HybridAStarPlanner, Pose
 from sim.trajectory_profile import TimedTrajectory, build_timed_trajectory, resample_path, shortcut_smooth
 
 
-def shifted_subgoal_candidates(position: np.ndarray, yaw: float, max_shift_m: float = 1.5) -> list[np.ndarray]:
+def shifted_subgoal_candidates(
+    position: np.ndarray,
+    yaw: float,
+    max_lateral_m: float,
+    max_longitudinal_m: float,
+    step_m: float = 0.25,
+) -> list[np.ndarray]:
+    direction = np.asarray([np.cos(yaw), np.sin(yaw)], dtype=np.float64)
     normal = np.asarray([-np.sin(yaw), np.cos(yaw)], dtype=np.float64)
-    candidates = [position]
-    shift = 0.25
-    while shift <= max_shift_m + 1e-9:
-        candidates.append(position + normal * shift)
-        candidates.append(position - normal * shift)
-        shift += 0.25
-    return candidates
+    lateral_steps = int(np.floor(max_lateral_m / step_m))
+    longitudinal_steps = int(np.floor(max_longitudinal_m / step_m))
+    local_offsets = [(0.0, 0.0)]
+    for lat_index in range(-lateral_steps, lateral_steps + 1):
+        for lon_index in range(-longitudinal_steps, longitudinal_steps + 1):
+            lateral = lat_index * step_m
+            longitudinal = lon_index * step_m
+            if abs(lateral) < 1e-9 and abs(longitudinal) < 1e-9:
+                continue
+            local_offsets.append((lateral, longitudinal))
+
+    local_offsets.sort(key=lambda item: (abs(item[0]) + 1.5 * abs(item[1]), abs(item[0]), abs(item[1])))
+    return [position + normal * lateral + direction * longitudinal for lateral, longitudinal in local_offsets]
 
 
 def clear_reference_subgoals(
     collision_map: CollisionMap,
     subgoals: list[tuple[np.ndarray, float]],
+    max_lateral_m: float,
+    max_longitudinal_m: float,
 ) -> tuple[list[tuple[np.ndarray, float]], int]:
     cleared = []
     nudged_count = 0
     for position, yaw in subgoals:
         clear_position = None
-        for candidate in shifted_subgoal_candidates(position, yaw):
+        for candidate in shifted_subgoal_candidates(position, yaw, max_lateral_m, max_longitudinal_m):
             if not collision_map.is_collision(candidate):
                 clear_position = candidate
                 break
@@ -82,6 +97,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("min_turn_radius_m", 0.75)
         self.declare_parameter("goal_tolerance_m", 0.35)
         self.declare_parameter("planner_subgoal_spacing_m", 2.0)
+        self.declare_parameter("planner_subgoal_lateral_search_m", 2.0)
+        self.declare_parameter("planner_subgoal_longitudinal_search_m", 0.75)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
         self.declare_parameter("allow_reverse", False)
         self.declare_parameter("max_speed_mps", 0.35)
@@ -245,7 +262,12 @@ class ExpertPolicyNode(Node):
                 planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
             ),
         )
-        subgoals, nudged_count = clear_reference_subgoals(collision_map, subgoals)
+        subgoals, nudged_count = clear_reference_subgoals(
+            collision_map,
+            subgoals,
+            float(self.planner_setting("planner_subgoal_lateral_search_m", "planner_subgoal_lateral_search_m")),
+            float(self.planner_setting("planner_subgoal_longitudinal_search_m", "planner_subgoal_longitudinal_search_m")),
+        )
         if not subgoals:
             self.get_logger().warn("Hybrid A* subgoal planning failed; all nearby reference subgoal candidates are blocked")
             self.trajectory = self.profile_path(self.path)
