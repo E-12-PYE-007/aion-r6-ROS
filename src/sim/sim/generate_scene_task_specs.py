@@ -196,6 +196,8 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_spacing_m": 2.0,
     "planner_subgoal_lateral_search_m": 2.0,
     "planner_subgoal_longitudinal_search_m": 0.75,
+    "planner_subgoal_vertex_margin_m": 0.5,
+    "planner_subgoal_endpoint_margin_m": 0.5,
     "hybrid_astar_max_iterations": 20000,
     "allow_reverse": False,
 }
