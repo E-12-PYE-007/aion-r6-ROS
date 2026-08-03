@@ -51,6 +51,30 @@ def transform_point(point: list[float], flip_isaac_y: bool) -> np.ndarray:
     return np.asarray([float(point[0]), float(point[1])], dtype=np.float64)
 
 
+def rotate(point: np.ndarray, yaw: float) -> np.ndarray:
+    c = math.cos(yaw)
+    s = math.sin(yaw)
+    return np.asarray([c * point[0] - s * point[1], s * point[0] + c * point[1]], dtype=np.float64)
+
+
+def yaw_value(raw_yaw, flip_isaac_y: bool) -> float:
+    yaw = float(raw_yaw or 0.0)
+    if abs(yaw) > math.tau:
+        yaw = math.radians(yaw)
+    if flip_isaac_y:
+        yaw = -yaw
+    return wrap_to_pi(yaw)
+
+
+def local_odom_to_world(
+    local_position: np.ndarray,
+    local_yaw: float,
+    world_start_position: np.ndarray,
+    world_start_yaw: float,
+) -> tuple[np.ndarray, float]:
+    return world_start_position + rotate(local_position, world_start_yaw), wrap_to_pi(world_start_yaw + local_yaw)
+
+
 def load_fence_polyline(layout_yaml: Path, fence_id: str, flip_isaac_y: bool) -> list[np.ndarray]:
     with layout_yaml.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -161,6 +185,11 @@ class FencelineActionChunkPublisher(Node):
         self.preferred_offset_m = float(self.get_parameter("preferred_offset_m").value)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
 
+        with layout_yaml.open("r", encoding="utf-8") as f:
+            self.layout_config = yaml.safe_load(f)
+        rover_pose = self.layout_config.get("rover_pose", {})
+        self.world_start_position = transform_point(rover_pose.get("position", [0.0, 0.0, 0.0]), self.flip_isaac_y)
+        self.world_start_yaw = yaw_value(rover_pose.get("yaw", 0.0), self.flip_isaac_y)
         self.polyline = load_fence_polyline(layout_yaml, self.fence_id, self.flip_isaac_y)
         if self.travel_direction == "reverse":
             self.polyline = list(reversed(self.polyline))
@@ -183,7 +212,13 @@ class FencelineActionChunkPublisher(Node):
         )
 
     def odom_callback(self, msg: Odometry) -> None:
-        self.current_position, self.current_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        local_position, local_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        self.current_position, self.current_yaw = local_odom_to_world(
+            local_position,
+            local_yaw,
+            self.world_start_position,
+            self.world_start_yaw,
+        )
 
     def publish_chunk(self) -> None:
         if self.current_position is None or self.current_yaw is None:

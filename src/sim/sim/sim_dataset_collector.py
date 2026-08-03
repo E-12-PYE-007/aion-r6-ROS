@@ -20,6 +20,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+import yaml
 
 
 DEFAULT_DT = 1 / 3
@@ -43,6 +44,56 @@ def yaw_from_quaternion(quat):
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def wrap_to_pi(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def transform_point(point, flip_isaac_y):
+    x = float(point[0])
+    y = float(point[1])
+    if flip_isaac_y:
+        y = -y
+    return x, y
+
+
+def yaw_value(raw_yaw, flip_isaac_y):
+    yaw = float(raw_yaw or 0.0)
+    if abs(yaw) > math.tau:
+        yaw = math.radians(yaw)
+    if flip_isaac_y:
+        yaw = -yaw
+    return wrap_to_pi(yaw)
+
+
+def local_odom_to_world(local_pose, world_start_pose):
+    _, local_x, local_y, local_yaw = local_pose
+    start_x, start_y, start_yaw = world_start_pose
+    cos_yaw = math.cos(start_yaw)
+    sin_yaw = math.sin(start_yaw)
+    world_x = start_x + cos_yaw * local_x - sin_yaw * local_y
+    world_y = start_y + sin_yaw * local_x + cos_yaw * local_y
+    return world_x, world_y, wrap_to_pi(start_yaw + local_yaw)
+
+
+def load_world_start_pose(task_spec_path, task_id, flip_isaac_y):
+    if not task_spec_path:
+        return 0.0, 0.0, 0.0
+    with Path(task_spec_path).open("r", encoding="utf-8") as f:
+        task_spec = yaml.safe_load(f)
+    scene_path = Path(task_spec["scene"]["source_yaml"])
+    with scene_path.open("r", encoding="utf-8") as f:
+        scene = yaml.safe_load(f)
+    task = next((candidate for candidate in task_spec.get("tasks", []) if candidate.get("task_id") == task_id), {})
+    starts = scene.get("rover_poses")
+    start_name = task.get("start_pose")
+    if isinstance(starts, dict) and isinstance(start_name, str) and start_name in starts:
+        rover_pose = starts[start_name]
+    else:
+        rover_pose = scene.get("rover_pose", {})
+    start_x, start_y = transform_point(rover_pose.get("position", [0.0, 0.0, 0.0]), flip_isaac_y)
+    return start_x, start_y, yaw_value(rover_pose.get("yaw", 0.0), flip_isaac_y)
+
+
 def parse_optional_json(value, field_name):
     if not value:
         return None
@@ -60,6 +111,7 @@ class SimDatasetCollectorNode(Node):
 
         self.previous_img_time = 0
         self.current_pose = None
+        self.current_local_pose = None
         self.current_velocity = None
         self.current_cmd_vel = None
         self.current_action_chunk = None
@@ -67,6 +119,7 @@ class SimDatasetCollectorNode(Node):
         self.declare_parameter('base_dir', Parameter.Type.STRING)
         self.declare_parameter('dataset_name', 'sim_fenceline')
         self.declare_parameter('trajectory_name', '')
+        self.declare_parameter('task_spec', '')
         self.declare_parameter('task_id', '')
         self.declare_parameter('variant_id', 'nominal')
         self.declare_parameter('variant_type', 'nominal')
@@ -91,6 +144,7 @@ class SimDatasetCollectorNode(Node):
 
         self.dataset_name = self.get_parameter('dataset_name').get_parameter_value().string_value
         requested_name = self.get_parameter('trajectory_name').get_parameter_value().string_value
+        self.task_spec_path = self.get_parameter('task_spec').get_parameter_value().string_value
         self.task_id = self.get_parameter('task_id').get_parameter_value().string_value
         self.variant_id = self.get_parameter('variant_id').get_parameter_value().string_value
         self.variant_type = self.get_parameter('variant_type').get_parameter_value().string_value
@@ -101,6 +155,7 @@ class SimDatasetCollectorNode(Node):
         self.speed_profile_json = self.get_parameter('speed_profile_json').get_parameter_value().string_value
         self.jpeg_quality = self.get_parameter('jpeg_quality').get_parameter_value().integer_value
         self.flip_isaac_y = self.get_parameter('flip_isaac_y').get_parameter_value().bool_value
+        self.world_start_pose = load_world_start_pose(self.task_spec_path, self.task_id, self.flip_isaac_y)
         self.planner_settings = parse_optional_json(self.planner_settings_json, "planner_settings_json")
         self.speed_profile = parse_optional_json(self.speed_profile_json, "speed_profile_json")
 
@@ -180,7 +235,10 @@ class SimDatasetCollectorNode(Node):
             vy = -vy
             yaw_rate = -yaw_rate
 
-        self.current_pose = (msg_time, x, y, heading)
+        local_pose = (msg_time, x, y, heading)
+        world_x, world_y, world_heading = local_odom_to_world(local_pose, self.world_start_pose)
+        self.current_pose = (msg_time, world_x, world_y, world_heading)
+        self.current_local_pose = local_pose
         self.current_velocity = (msg_time, vx, vy, yaw_rate)
 
     def cmd_vel_callback(self, msg):
@@ -228,12 +286,14 @@ class SimDatasetCollectorNode(Node):
             "image": image_path.name,
             "img_time": img_time,
             "pose": self.current_pose,
+            "local_pose": self.current_local_pose,
             "velocity": self.current_velocity,
             "cmd_vel": self.current_cmd_vel,
             "action_chunk": self.current_action_chunk,
             "language_instruction": self.language_instruction,
             "dataset_name": self.dataset_name,
             "task_id": self.task_id,
+            "task_spec": self.task_spec_path,
             "variant_id": self.variant_id,
             "variant_type": self.variant_type,
             "recovery_case": self.recovery_case,
@@ -263,6 +323,7 @@ class SimDatasetCollectorNode(Node):
             "odom_topic": self.get_parameter('odom_topic').get_parameter_value().string_value,
             "cmd_vel_topic": self.get_parameter('cmd_vel_topic').get_parameter_value().string_value,
             "action_chunk_topic": self.get_parameter('action_chunk_topic').get_parameter_value().string_value,
+            "world_start_pose": self.world_start_pose,
             "sample_frequency_hz": self.get_parameter('sample_frequency_hz').get_parameter_value().double_value,
             "jpeg_quality": self.jpeg_quality,
             "flip_isaac_y": self.flip_isaac_y,

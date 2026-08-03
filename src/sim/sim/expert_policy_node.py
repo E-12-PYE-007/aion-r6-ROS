@@ -18,6 +18,8 @@ from sim.expert_trajectory_utils import (
     build_timed_action_chunk,
     find_variant,
     find_task,
+    get_start_pose,
+    local_odom_to_world,
     load_yaml,
     odom_to_pose,
     path_length,
@@ -129,6 +131,7 @@ class ExpertPolicyNode(Node):
         self.variant = find_variant(self.task, self.variant_id)
 
         self.flip_isaac_y = bool(self.get_parameter("flip_isaac_y").value)
+        self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_isaac_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
         self.future_time_offsets_s = [
             float(value)
@@ -168,7 +171,13 @@ class ExpertPolicyNode(Node):
         raise NotImplementedError
 
     def odom_callback(self, msg: Odometry) -> None:
-        self.current_position, self.current_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        local_position, local_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        self.current_position, self.current_yaw = local_odom_to_world(
+            local_position,
+            local_yaw,
+            self.world_start_position,
+            self.world_start_yaw,
+        )
 
     def active_path(self) -> list[np.ndarray]:
         if self.use_hybrid_astar and self.planned_path is not None:

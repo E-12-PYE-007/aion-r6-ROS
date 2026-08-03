@@ -61,6 +61,38 @@ def odom_to_pose(msg, flip_isaac_y: bool) -> tuple[np.ndarray, float]:
     return np.asarray([x, y], dtype=np.float64), yaw
 
 
+def yaw_value(raw_yaw: Any, flip_isaac_y: bool) -> float:
+    yaw = float(raw_yaw or 0.0)
+    if abs(yaw) > math.tau:
+        yaw = math.radians(yaw)
+    if flip_isaac_y:
+        yaw = -yaw
+    return wrap_to_pi(yaw)
+
+
+def get_start_pose(scene: dict[str, Any], task: dict[str, Any], flip_isaac_y: bool) -> tuple[np.ndarray, float]:
+    starts = scene.get("rover_poses")
+    start_name = task.get("start_pose")
+    if isinstance(starts, dict) and isinstance(start_name, str) and start_name in starts:
+        start = starts[start_name]
+    elif isinstance(scene.get("rover_pose"), dict):
+        start = scene["rover_pose"]
+    else:
+        raise ValueError("Scene does not define a usable rover start pose.")
+    return point2(start["position"], flip_isaac_y), yaw_value(start.get("yaw", 0.0), flip_isaac_y)
+
+
+def local_odom_to_world(
+    local_position: np.ndarray,
+    local_yaw: float,
+    world_start_position: np.ndarray,
+    world_start_yaw: float,
+) -> tuple[np.ndarray, float]:
+    world_position = world_start_position + rotate(local_position, world_start_yaw)
+    world_yaw = wrap_to_pi(world_start_yaw + local_yaw)
+    return world_position, world_yaw
+
+
 def point2(point: list[float] | tuple[float, ...], flip_isaac_y: bool = False) -> np.ndarray:
     x = float(point[0])
     y = float(point[1])
