@@ -85,18 +85,26 @@ def midpoint(a: tuple[float, float], b: tuple[float, float]) -> list[float]:
     return [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, 0.0]
 
 
-def distance_to_segment(point: tuple[float, float], segment: dict[str, Any]) -> float:
-    sx, sy = xy(segment["start"])
-    ex, ey = xy(segment["end"])
+def nearest_point_on_segment(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[tuple[float, float], float]:
     px, py = point
+    sx, sy = start
+    ex, ey = end
     vx = ex - sx
     vy = ey - sy
     length_sq = vx * vx + vy * vy
     if length_sq <= 1e-9:
-        return distance(point, (sx, sy))
+        return start, 0.0
     t = ((px - sx) * vx + (py - sy) * vy) / length_sq
     t = min(1.0, max(0.0, t))
-    nearest = (sx + t * vx, sy + t * vy)
+    return (sx + t * vx, sy + t * vy), t
+
+
+def distance_to_segment(point: tuple[float, float], segment: dict[str, Any]) -> float:
+    nearest, _ = nearest_point_on_segment(point, xy(segment["start"]), xy(segment["end"]))
     return distance(point, nearest)
 
 
@@ -106,6 +114,20 @@ def side_of_segment(point: tuple[float, float], segment: dict[str, Any]) -> str:
     px, py = point
     cross = (ex - sx) * (py - sy) - (ey - sy) * (px - sx)
     return "left" if cross >= 0.0 else "right"
+
+
+def yaw_of_pose(pose: dict[str, Any]) -> float:
+    return float(pose.get("yaw", 0.0))
+
+
+def robot_relative_side_to_segment(start_pose: dict[str, Any], segment: dict[str, Any]) -> str:
+    start_point = xy(start_pose["position"])
+    nearest, _ = nearest_point_on_segment(start_point, xy(segment["start"]), xy(segment["end"]))
+    dx = nearest[0] - start_point[0]
+    dy = nearest[1] - start_point[1]
+    yaw = yaw_of_pose(start_pose)
+    y_robot = -math.sin(yaw) * dx + math.cos(yaw) * dy
+    return "left" if y_robot >= 0.0 else "right"
 
 
 def heading_of(segment: dict[str, Any]) -> float:
@@ -337,10 +359,37 @@ def parallel_corridor_pair(segments: list[dict[str, Any]]) -> tuple[dict[str, An
     if len(segments) != 2:
         return None
     first, second = segments
-    heading_delta = abs(wrap_to_pi(heading_of(first) - heading_of(second)))
+    first_heading = heading_of(first)
+    second_heading = heading_of(second)
+    heading_delta = abs(wrap_to_pi(first_heading - second_heading))
     if min(heading_delta, abs(math.pi - heading_delta)) > 0.12:
         return None
-    if distance(xy(first["start"]), xy(second["start"])) < 0.8:
+    direction = (math.cos(first_heading), math.sin(first_heading))
+    normal = (-direction[1], direction[0])
+
+    first_start = xy(first["start"])
+    first_end = xy(first["end"])
+    second_start = xy(second["start"])
+    second_end = xy(second["end"])
+
+    first_s = 0.0
+    first_e = distance(first_start, first_end)
+    second_projections = [
+        (point[0] - first_start[0]) * direction[0] + (point[1] - first_start[1]) * direction[1]
+        for point in (second_start, second_end)
+    ]
+    second_s = min(second_projections)
+    second_e = max(second_projections)
+    overlap = min(first_e, second_e) - max(first_s, second_s)
+    if overlap < 1.0:
+        return None
+
+    lateral_offsets = [
+        (point[0] - first_start[0]) * normal[0] + (point[1] - first_start[1]) * normal[1]
+        for point in (second_start, second_end)
+    ]
+    lateral_separation = abs(sum(lateral_offsets) * 0.5)
+    if lateral_separation < 1.2 or lateral_separation > 4.0:
         return None
     return first, second
 
@@ -366,10 +415,12 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
     task_kind = "perimeter" if scene_is_closed else "multi_turn"
     target_names = [segment["name"] for segment in chain]
     for start_name in starts:
-        start_point = xy(starts[start_name]["position"])
+        start_pose = starts[start_name]
+        start_point = xy(start_pose["position"])
         if distance_to_segment(start_point, chain[0]) > 2.0:
             continue
-        side = side_of_segment(start_point, chain[0])
+        path_side = side_of_segment(start_point, chain[0])
+        follow_side = robot_relative_side_to_segment(start_pose, chain[0])
         primary = "Follow the fence around the enclosure." if scene_is_closed else "Follow the fence around the bends."
         tasks.append(make_task(
             f"follow_{task_kind}_{chain[0]['name']}_to_{chain[-1]['name']}_from_{start_name}",
@@ -384,7 +435,8 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
             ),
             start_pose=start_name,
             target_fences=target_names,
-            follow_side=side,
+            follow_side=follow_side,
+            path_side=path_side,
             travel_direction="forward",
             sequence_type=task_kind,
             success_condition={
@@ -434,11 +486,13 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     add_corridor_tasks(tasks, fences, starts)
 
     for start_name in starts:
-        start_point = xy(starts[start_name]["position"])
+        start_pose = starts[start_name]
+        start_point = xy(start_pose["position"])
         for fence in fences:
             if distance_to_segment(start_point, fence) > 2.0:
                 continue
-            inferred_side = side_of_segment(start_point, fence)
+            path_side = side_of_segment(start_point, fence)
+            inferred_side = robot_relative_side_to_segment(start_pose, fence)
             fence_name = fence["name"]
             tasks.append(make_task(
                 f"follow_{fence_name}_{inferred_side}_from_{start_name}",
@@ -454,6 +508,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 start_pose=start_name,
                 target_fence=fence_name,
                 follow_side=inferred_side,
+                path_side=path_side,
                 travel_direction="forward",
                 success_condition={
                     "type": "reach_path_end",
@@ -477,6 +532,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 target_fence=fence_name,
                 landmark={"type": "fence_end", "point": fence["end"]},
                 follow_side=inferred_side,
+                path_side=path_side,
                 travel_direction="forward",
                 success_condition={
                     "type": "stop_near_point",
@@ -512,10 +568,12 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
         if direction == "straight":
             continue
         for start_name in starts:
-            start_point = xy(starts[start_name]["position"])
+            start_pose = starts[start_name]
+            start_point = xy(start_pose["position"])
             if distance_to_segment(start_point, first) > 2.0:
                 continue
-            side = side_of_segment(start_point, first)
+            path_side = side_of_segment(start_point, first)
+            follow_side = robot_relative_side_to_segment(start_pose, first)
             tasks.append(make_task(
                 f"follow_{first['name']}_around_{direction}_turn_to_{second['name']}_from_{start_name}",
                 "follow_and_turn",
@@ -529,7 +587,8 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 start_pose=start_name,
                 target_fences=[first["name"], second["name"]],
-                follow_side=side,
+                follow_side=follow_side,
+                path_side=path_side,
                 travel_direction="forward",
                 turn_direction=direction,
                 success_condition={
@@ -542,10 +601,12 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
 
     for before, after, center in collinear_gaps(fences):
         for start_name in starts:
-            start_point = xy(starts[start_name]["position"])
+            start_pose = starts[start_name]
+            start_point = xy(start_pose["position"])
             if distance_to_segment(start_point, before) > 2.0:
                 continue
-            side = side_of_segment(start_point, before)
+            path_side = side_of_segment(start_point, before)
+            side = robot_relative_side_to_segment(start_pose, before)
             region = start_region_label(start_name)
             pass_primary = "Drive through the gate." if "gate" in start_name.lower() else "Drive through the opening in the fence."
             pass_variants = [
@@ -571,6 +632,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                     "approximate_center": center,
                 },
                 follow_side=side,
+                path_side=path_side,
                 gate_intent="enter" if region == "outside" else "exit" if region == "inside" else "pass_through",
                 travel_direction="forward",
                 success_condition={
@@ -598,6 +660,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                     "approximate_center": center,
                 },
                 follow_side=side,
+                path_side=path_side,
                 travel_direction="forward",
                 success_condition={
                     "type": "stop_near_point",
@@ -626,6 +689,8 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 },
                 entry_side=side,
                 exit_side=opposite_side(side),
+                entry_path_side=path_side,
+                exit_path_side=opposite_side(path_side),
                 travel_direction="forward",
                 success_condition={
                     "type": "pass_point_and_continue",

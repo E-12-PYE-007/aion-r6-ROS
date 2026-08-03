@@ -133,6 +133,22 @@ def side_of_segment(point: tuple[float, float], segment: dict[str, Any]) -> str:
     return "right"
 
 
+def yaw_of_pose(pose: dict[str, Any]) -> float:
+    return float(pose.get("yaw", 0.0))
+
+
+def robot_relative_side_to_segment(start_pose: dict[str, Any], segment: dict[str, Any]) -> str:
+    start_point = xy(start_pose["position"])
+    nearest, _ = nearest_point_on_segment(start_point, xy(segment["start"]), xy(segment["end"]))
+    dx = nearest[0] - start_point[0]
+    dy = nearest[1] - start_point[1]
+    yaw = yaw_of_pose(start_pose)
+    y_robot = -math.sin(yaw) * dx + math.cos(yaw) * dy
+    if y_robot >= 0.0:
+        return "left"
+    return "right"
+
+
 def midpoint(a: tuple[float, float], b: tuple[float, float]) -> list[float]:
     return [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, 0.0]
 
@@ -228,7 +244,8 @@ def validate_follow_fence(
     if fence is None:
         return [f"target_fence {task.get('target_fence')!r} not found"]
 
-    start = xy(starts[task["start_pose"]]["position"])
+    start_pose = starts[task["start_pose"]]
+    start = xy(start_pose["position"])
     start_distance = distance_to_segment(start, fence)
     if start_distance > max_start_distance_m:
         errors.append(
@@ -237,9 +254,16 @@ def validate_follow_fence(
         )
 
     follow_side = task.get("follow_side")
-    actual_side = side_of_segment(start, fence)
-    if follow_side in {"left", "right"} and follow_side != actual_side:
-        errors.append(f"follow_side is {follow_side!r}, but start pose is on the {actual_side} side")
+    actual_follow_side = robot_relative_side_to_segment(start_pose, fence)
+    if follow_side in {"left", "right"} and follow_side != actual_follow_side:
+        errors.append(
+            f"follow_side is {follow_side!r}, but fence is on the robot's {actual_follow_side} side"
+        )
+
+    path_side = task.get("path_side")
+    actual_path_side = side_of_segment(start, fence)
+    if path_side in {"left", "right"} and path_side != actual_path_side:
+        errors.append(f"path_side is {path_side!r}, but start pose is on the segment's {actual_path_side} side")
     return errors
 
 
@@ -326,6 +350,25 @@ def validate_follow_corridor(
     heading_delta = abs(wrap_to_pi(heading_of(first) - heading_of(second)))
     if min(heading_delta, abs(math.pi - heading_delta)) > 0.12:
         return ["corridor_fences are not parallel"]
+    first_heading = heading_of(first)
+    direction = (math.cos(first_heading), math.sin(first_heading))
+    normal = (-direction[1], direction[0])
+    first_start = xy(first["start"])
+    first_length = distance(first_start, xy(first["end"]))
+    second_projections = [
+        (point[0] - first_start[0]) * direction[0] + (point[1] - first_start[1]) * direction[1]
+        for point in (xy(second["start"]), xy(second["end"]))
+    ]
+    overlap = min(first_length, max(second_projections)) - max(0.0, min(second_projections))
+    if overlap < 1.0:
+        return ["corridor_fences do not overlap along their length"]
+    lateral_offsets = [
+        (point[0] - first_start[0]) * normal[0] + (point[1] - first_start[1]) * normal[1]
+        for point in (xy(second["start"]), xy(second["end"]))
+    ]
+    lateral_separation = abs(sum(lateral_offsets) * 0.5)
+    if lateral_separation < 1.2 or lateral_separation > 4.0:
+        return [f"corridor_fences lateral separation {lateral_separation:.2f}m is outside supported range"]
     start = xy(starts[task["start_pose"]]["position"])
     first_distance = distance_to_segment(start, first)
     second_distance = distance_to_segment(start, second)
@@ -359,10 +402,21 @@ def validate_gap_task(
     if isinstance(requested_center, list) and distance(xy(requested_center), xy(center)) > 0.25:
         errors.append(f"target_gap approximate_center does not match detected center {center}")
 
-    start = xy(starts[task["start_pose"]]["position"])
+    start_pose = starts[task["start_pose"]]
+    start = xy(start_pose["position"])
     start_distance = distance_to_segment(start, before)
     if start_distance > max_start_distance_m:
         errors.append(f"start_pose is {start_distance:.2f}m from gap approach fence, max allowed is {max_start_distance_m:.2f}m")
+    follow_side = task.get("follow_side") or task.get("entry_side")
+    actual_follow_side = robot_relative_side_to_segment(start_pose, before)
+    if follow_side in {"left", "right"} and follow_side != actual_follow_side:
+        errors.append(
+            f"follow/entry side is {follow_side!r}, but gap approach fence is on the robot's {actual_follow_side} side"
+        )
+    path_side = task.get("path_side") or task.get("entry_path_side")
+    actual_path_side = side_of_segment(start, before)
+    if path_side in {"left", "right"} and path_side != actual_path_side:
+        errors.append(f"path side is {path_side!r}, but start pose is on the segment's {actual_path_side} side")
     return errors
 
 
@@ -498,13 +552,25 @@ def reference_path_for_task(
     offset_m = float(variant.get("preferred_offset_m", 0.8))
     if task_type == "follow_fence":
         fence = fence_by_name(scene, task["target_fence"])
-        return offset_polyline(concat_segments([fence], flip_isaac_y), offset_m, task.get("follow_side", "left"))
+        return offset_polyline(
+            concat_segments([fence], flip_isaac_y),
+            offset_m,
+            task.get("path_side", task.get("follow_side", "left")),
+        )
     if task_type == "follow_and_turn" and "target_fences" in task:
         fences = [fence_by_name(scene, name) for name in task["target_fences"]]
-        return offset_polyline(concat_segments(fences, flip_isaac_y), offset_m, task.get("follow_side", "left"))
+        return offset_polyline(
+            concat_segments(fences, flip_isaac_y),
+            offset_m,
+            task.get("path_side", task.get("follow_side", "left")),
+        )
     if task_type == "follow_fence_sequence":
         fences = [fence_by_name(scene, name) for name in task["target_fences"]]
-        return offset_polyline(concat_segments(fences, flip_isaac_y), offset_m, task.get("follow_side", "left"))
+        return offset_polyline(
+            concat_segments(fences, flip_isaac_y),
+            offset_m,
+            task.get("path_side", task.get("follow_side", "left")),
+        )
     if task_type == "follow_corridor":
         left, right = [fence_by_name(scene, name) for name in task["corridor_fences"]]
         left_path = concat_segments([left], flip_isaac_y)
@@ -514,16 +580,20 @@ def reference_path_for_task(
         gap = task["target_gap"]
         before = fence_by_name(scene, gap["before_fence"])
         after = fence_by_name(scene, gap["after_fence"])
-        side = task.get("follow_side") or task.get("entry_side", "left")
+        side = task.get("path_side") or task.get("entry_path_side") or task.get("follow_side") or task.get("entry_side", "left")
         before_path = offset_polyline(concat_segments([before], flip_isaac_y), offset_m, side)
         if task_type == "stop_at_gap":
             return [before_path[0], before_path[-1]]
-        after_side = task.get("exit_side", side)
+        after_side = task.get("exit_path_side", task.get("exit_side", side))
         after_path = offset_polyline(concat_segments([after], flip_isaac_y), offset_m, after_side)
         return [before_path[0], before_path[-1], point2(gap["approximate_center"], flip_isaac_y), after_path[0], after_path[-1]]
     if task_type == "stop_at_landmark" and "target_fence" in task:
         fence = fence_by_name(scene, task["target_fence"])
-        return offset_polyline(concat_segments([fence], flip_isaac_y), offset_m, task.get("follow_side", "left"))
+        return offset_polyline(
+            concat_segments([fence], flip_isaac_y),
+            offset_m,
+            task.get("path_side", task.get("follow_side", "left")),
+        )
     if task_type == "follow_road":
         return concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y)
     if task_type == "follow_and_turn" and "target_roads" in task:
@@ -585,6 +655,35 @@ def plan_through_subgoals(
     return True
 
 
+def point_to_segment_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    length_sq = float(np.dot(segment, segment))
+    if length_sq <= 1e-9:
+        return float(np.linalg.norm(point - start))
+    t = float(np.dot(point - start, segment) / length_sq)
+    t = min(1.0, max(0.0, t))
+    nearest = start + t * segment
+    return float(np.linalg.norm(point - nearest))
+
+
+def fence_clearance_error(
+    scene: dict[str, Any],
+    point: np.ndarray,
+    required_clearance_m: float,
+    flip_isaac_y: bool,
+) -> str | None:
+    for fence in scene.get("fences") or []:
+        start = point2(fence["start"], flip_isaac_y)
+        end = point2(fence["end"], flip_isaac_y)
+        clearance = point_to_segment_distance(point, start, end)
+        if clearance < required_clearance_m:
+            return (
+                f"start pose is {clearance:.2f}m from fence {fence.get('name', '<unnamed>')}, "
+                f"needs at least {required_clearance_m:.2f}m inflated clearance"
+            )
+    return None
+
+
 def planner_accepts_variant(
     scene: dict[str, Any],
     scene_yaml: Path,
@@ -598,6 +697,10 @@ def planner_accepts_variant(
         reference_path = reference_path_for_task(scene, scene_yaml, task, variant, flip_isaac_y)
         start_position, start_yaw = shifted_start_pose(scene, task, variant, flip_isaac_y)
         settings = variant.get("planner_settings") or {}
+        required_clearance = float(settings.get("robot_radius_m", 0.35)) + float(settings.get("obstacle_padding_m", 0.25))
+        clearance_error = fence_clearance_error(scene, start_position, required_clearance, flip_isaac_y)
+        if clearance_error is not None:
+            return False, clearance_error
         subgoals = reference_subgoals(reference_path, settings)
         collision_map = CollisionMap.from_scene(
             scene,
