@@ -671,17 +671,42 @@ def plan_through_subgoals(
     start_position: np.ndarray,
     start_yaw: float,
     subgoals: list[tuple[np.ndarray, float]],
-) -> bool:
+    collision_map: CollisionMap,
+    settings: dict[str, Any],
+) -> tuple[bool, str | None]:
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
-    for goal_position, goal_yaw in subgoals:
-        segment = planner.plan(
-            start_pose,
-            Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw)),
-        )
-        if segment is None:
-            return False
-        start_pose = Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw))
-    return True
+    if collision_map.is_collision(start_position):
+        return False, f"start pose {start_position.tolist()} is in collision"
+
+    nudged_count = 0
+    max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
+    max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 0.75))
+    for index, (goal_position, goal_yaw) in enumerate(subgoals):
+        selected_position = None
+        for candidate in shifted_subgoal_candidates(goal_position, goal_yaw, max_lateral_m, max_longitudinal_m):
+            if collision_map.is_collision(candidate):
+                continue
+            segment = planner.plan(
+                start_pose,
+                Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
+            )
+            if segment is not None:
+                selected_position = candidate
+                break
+
+        if selected_position is None:
+            return False, (
+                f"Hybrid A* failed to reach subgoal {index} near {goal_position.tolist()} "
+                f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
+            )
+
+        if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
+            nudged_count += 1
+        start_pose = Pose(float(selected_position[0]), float(selected_position[1]), float(goal_yaw))
+
+    if nudged_count:
+        return True, f"nudged {nudged_count} reference subgoals to nearby reachable points"
+    return True, None
 
 
 def shifted_subgoal_candidates(
@@ -791,15 +816,19 @@ def planner_accepts_variant(
             robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
             obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
         )
-        subgoals, subgoal_note = clear_reference_subgoals(collision_map, subgoals, settings)
-        if not subgoals:
-            return False, subgoal_note
         planner = build_planner(collision_map, settings)
-        planned = plan_through_subgoals(planner, start_position, start_yaw, subgoals)
+        planned, subgoal_note = plan_through_subgoals(
+            planner,
+            start_position,
+            start_yaw,
+            subgoals,
+            collision_map,
+            settings,
+        )
     except Exception as exc:
         return False, str(exc)
     if not planned:
-        return False, "Hybrid A* failed to plan through reference subgoals"
+        return False, subgoal_note or "Hybrid A* failed to plan through reference subgoals"
     return True, subgoal_note
 
 

@@ -220,26 +220,52 @@ class ExpertPolicyNode(Node):
         self,
         planner: HybridAStarPlanner,
         subgoals: list[tuple[np.ndarray, float]],
+        collision_map: CollisionMap,
     ) -> list[np.ndarray] | None:
         if self.current_position is None or self.current_yaw is None:
             return None
+        if collision_map.is_collision(self.current_position):
+            self.get_logger().warn(f"Hybrid A* start pose {self.current_position.tolist()} is in collision")
+            return None
         planned_path: list[np.ndarray] = []
         start_pose = Pose(float(self.current_position[0]), float(self.current_position[1]), float(self.current_yaw))
+        max_lateral_m = float(self.planner_setting("planner_subgoal_lateral_search_m", "planner_subgoal_lateral_search_m"))
+        max_longitudinal_m = float(
+            self.planner_setting("planner_subgoal_longitudinal_search_m", "planner_subgoal_longitudinal_search_m")
+        )
+        nudged_count = 0
 
-        for goal_position, goal_yaw in subgoals:
-            segment = planner.plan(
-                start_pose,
-                Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw)),
-            )
-            if segment is None:
+        for index, (goal_position, goal_yaw) in enumerate(subgoals):
+            selected_position = None
+            selected_segment = None
+            for candidate in shifted_subgoal_candidates(goal_position, goal_yaw, max_lateral_m, max_longitudinal_m):
+                if collision_map.is_collision(candidate):
+                    continue
+                segment = planner.plan(
+                    start_pose,
+                    Pose(float(candidate[0]), float(candidate[1]), float(goal_yaw)),
+                )
+                if segment is not None:
+                    selected_position = candidate
+                    selected_segment = segment
+                    break
+            if selected_position is None or selected_segment is None:
+                self.get_logger().warn(
+                    f"Hybrid A* could not reach subgoal {index} near {goal_position.tolist()} "
+                    f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search"
+                )
                 return None
+            if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
+                nudged_count += 1
             if planned_path:
-                planned_path.extend(segment[1:])
+                planned_path.extend(selected_segment[1:])
             else:
-                planned_path.extend(segment)
-            if np.linalg.norm(planned_path[-1] - goal_position) > 1e-6:
-                planned_path.append(goal_position)
-            start_pose = Pose(float(goal_position[0]), float(goal_position[1]), float(goal_yaw))
+                planned_path.extend(selected_segment)
+            if np.linalg.norm(planned_path[-1] - selected_position) > 1e-6:
+                planned_path.append(selected_position)
+            start_pose = Pose(float(selected_position[0]), float(selected_position[1]), float(goal_yaw))
+        if nudged_count:
+            self.get_logger().info(f"Hybrid A* used {nudged_count} nearby reachable subgoals")
         return planned_path
 
     def maybe_plan_path(self) -> None:
@@ -262,20 +288,8 @@ class ExpertPolicyNode(Node):
                 planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
             ),
         )
-        subgoals, nudged_count = clear_reference_subgoals(
-            collision_map,
-            subgoals,
-            float(self.planner_setting("planner_subgoal_lateral_search_m", "planner_subgoal_lateral_search_m")),
-            float(self.planner_setting("planner_subgoal_longitudinal_search_m", "planner_subgoal_longitudinal_search_m")),
-        )
-        if not subgoals:
-            self.get_logger().warn("Hybrid A* subgoal planning failed; all nearby reference subgoal candidates are blocked")
-            self.trajectory = self.profile_path(self.path)
-            return
-        if nudged_count:
-            self.get_logger().info(f"Hybrid A* nudged {nudged_count} blocked reference subgoals before planning")
         planner = self.build_planner(collision_map)
-        planned = self.plan_through_subgoals(planner, subgoals)
+        planned = self.plan_through_subgoals(planner, subgoals, collision_map)
         if planned is None:
             self.get_logger().warn("Hybrid A* subgoal planning failed; falling back to geometric reference path")
             self.trajectory = self.profile_path(self.path)
