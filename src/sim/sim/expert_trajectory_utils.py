@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Shared geometry and ROS helpers for expert trajectory publishers."""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import yaml
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} did not contain a YAML mapping.")
+    return data
+
+
+def find_task(task_spec: dict[str, Any], task_id: str) -> dict[str, Any]:
+    for task in task_spec.get("tasks", []):
+        if task.get("task_id") == task_id:
+            return task
+    available = [task.get("task_id", "<missing>") for task in task_spec.get("tasks", [])]
+    raise ValueError(f"task_id {task_id!r} not found. Available: {available}")
+
+
+def find_variant(task: dict[str, Any], variant_id: str) -> dict[str, Any]:
+    variants = task.get("trajectory_variants") or []
+    for variant in variants:
+        if variant.get("variant_id") == variant_id:
+            return variant
+    if variant_id == "nominal":
+        return {"variant_id": "nominal", "variant_type": "nominal"}
+    available = [variant.get("variant_id", "<missing>") for variant in variants]
+    raise ValueError(f"variant_id {variant_id!r} not found. Available: {available}")
+
+
+def wrap_to_pi(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def yaw_from_quaternion(quat) -> float:
+    x = float(quat.x)
+    y = float(quat.y)
+    z = float(quat.z)
+    w = float(quat.w)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def odom_to_pose(msg, flip_isaac_y: bool) -> tuple[np.ndarray, float]:
+    x = float(msg.pose.pose.position.x)
+    y = float(msg.pose.pose.position.y)
+    yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+    if flip_isaac_y:
+        return np.asarray([x, -y], dtype=np.float64), -yaw
+    return np.asarray([x, y], dtype=np.float64), yaw
+
+
+def point2(point: list[float] | tuple[float, ...], flip_isaac_y: bool = False) -> np.ndarray:
+    x = float(point[0])
+    y = float(point[1])
+    if flip_isaac_y:
+        y = -y
+    return np.asarray([x, y], dtype=np.float64)
+
+
+def rotate(point: np.ndarray, yaw: float) -> np.ndarray:
+    c = math.cos(yaw)
+    s = math.sin(yaw)
+    return np.asarray([c * point[0] - s * point[1], s * point[0] + c * point[1]], dtype=np.float64)
+
+
+def segment_lengths(polyline: list[np.ndarray]) -> np.ndarray:
+    if len(polyline) < 2:
+        return np.asarray([], dtype=np.float64)
+    return np.asarray(
+        [np.linalg.norm(polyline[i + 1] - polyline[i]) for i in range(len(polyline) - 1)],
+        dtype=np.float64,
+    )
+
+
+def path_length(polyline: list[np.ndarray]) -> float:
+    return float(np.sum(segment_lengths(polyline)))
+
+
+def project_progress(polyline: list[np.ndarray], point: np.ndarray) -> float:
+    lengths = segment_lengths(polyline)
+    best_progress = 0.0
+    best_distance = float("inf")
+    cumulative = 0.0
+    for i, length in enumerate(lengths):
+        if length <= 1e-9:
+            continue
+        start = polyline[i]
+        end = polyline[i + 1]
+        direction = (end - start) / length
+        t = float(np.dot(point - start, direction))
+        t = min(max(t, 0.0), float(length))
+        closest = start + t * direction
+        distance = float(np.linalg.norm(point - closest))
+        if distance < best_distance:
+            best_distance = distance
+            best_progress = cumulative + t
+        cumulative += float(length)
+    return best_progress
+
+
+def sample_path_pose(polyline: list[np.ndarray], progress: float) -> tuple[np.ndarray, float]:
+    lengths = segment_lengths(polyline)
+    total = float(np.sum(lengths))
+    progress = min(max(progress, 0.0), total)
+    cumulative = 0.0
+    for i, length in enumerate(lengths):
+        if i == len(lengths) - 1 or progress <= cumulative + float(length):
+            local = progress - cumulative
+            start = polyline[i]
+            end = polyline[i + 1]
+            direction = (end - start) / max(float(length), 1e-9)
+            position = start + local * direction
+            yaw = math.atan2(float(direction[1]), float(direction[0]))
+            return position, yaw
+        cumulative += float(length)
+    direction = polyline[-1] - polyline[-2]
+    yaw = math.atan2(float(direction[1]), float(direction[0]))
+    return polyline[-1], yaw
+
+
+def offset_polyline(polyline: list[np.ndarray], offset_m: float, side: str) -> list[np.ndarray]:
+    if len(polyline) < 2:
+        return polyline
+    offset_points = []
+    for i, point in enumerate(polyline):
+        if i == 0:
+            direction = polyline[1] - polyline[0]
+        elif i == len(polyline) - 1:
+            direction = polyline[-1] - polyline[-2]
+        else:
+            prev_dir = polyline[i] - polyline[i - 1]
+            next_dir = polyline[i + 1] - polyline[i]
+            direction = prev_dir / max(np.linalg.norm(prev_dir), 1e-9) + next_dir / max(np.linalg.norm(next_dir), 1e-9)
+            if np.linalg.norm(direction) < 1e-9:
+                direction = next_dir
+        direction = direction / max(np.linalg.norm(direction), 1e-9)
+        left_normal = np.asarray([-direction[1], direction[0]], dtype=np.float64)
+        normal = left_normal if side == "left" else -left_normal
+        offset_points.append(point + offset_m * normal)
+    return offset_points
+
+
+def world_to_robot(anchor_position: np.ndarray, anchor_yaw: float, point: np.ndarray, yaw: float) -> tuple[float, float, float]:
+    delta = point - anchor_position
+    cos_yaw = math.cos(anchor_yaw)
+    sin_yaw = math.sin(anchor_yaw)
+    x_robot = cos_yaw * float(delta[0]) + sin_yaw * float(delta[1])
+    y_robot = -sin_yaw * float(delta[0]) + cos_yaw * float(delta[1])
+    return x_robot, y_robot, wrap_to_pi(yaw - anchor_yaw)
+
+
+def build_action_chunk(
+    node,
+    current_position: np.ndarray,
+    current_yaw: float,
+    path: list[np.ndarray],
+    seq_num: int,
+    waypoint_spacing_m: float,
+    frame_id: str = "base_link",
+) -> object:
+    from aion_msgs.msg import ActionChunk
+    from geometry_msgs.msg import Pose2D
+
+    progress = project_progress(path, current_position)
+    total = path_length(path)
+    msg = ActionChunk()
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.header.frame_id = frame_id
+    msg.seq_num = seq_num
+
+    for index in range(1, len(msg.relative_poses) + 1):
+        target_progress = min(progress + index * waypoint_spacing_m, total)
+        target_position, target_yaw = sample_path_pose(path, target_progress)
+        x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        pose = Pose2D()
+        pose.x = float(x)
+        pose.y = float(y)
+        pose.theta = float(theta)
+        msg.relative_poses[index - 1] = pose
+    return msg
+
+
+def build_timed_action_chunk(
+    node,
+    trajectory,
+    current_position: np.ndarray,
+    current_yaw: float,
+    current_progress_time_s: float,
+    future_time_offsets_s: list[float],
+    seq_num: int,
+    frame_id: str = "base_link",
+) -> object:
+    from aion_msgs.msg import ActionChunk
+    from geometry_msgs.msg import Pose2D
+
+    msg = ActionChunk()
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.header.frame_id = frame_id
+    msg.seq_num = seq_num
+    offsets = list(future_time_offsets_s)
+    while len(offsets) < len(msg.relative_poses):
+        offsets.append(offsets[-1] if offsets else 0.3)
+
+    for index in range(len(msg.relative_poses)):
+        target_time = current_progress_time_s + float(offsets[index])
+        target_position, target_yaw, _, _ = trajectory.sample(target_time)
+        x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        pose = Pose2D()
+        pose.x = float(x)
+        pose.y = float(y)
+        pose.theta = float(theta)
+        msg.relative_poses[index] = pose
+    return msg
+
+
+def fence_by_name(scene: dict[str, Any], name: str) -> dict[str, Any]:
+    for fence in scene.get("fences", []):
+        if fence.get("name") == name:
+            return fence
+    raise ValueError(f"Fence {name!r} not found.")
+
+
+def road_by_name(scene: dict[str, Any], name: str) -> dict[str, Any]:
+    for road in scene.get("roads", []):
+        if road.get("name") == name:
+            return road
+    raise ValueError(f"Road {name!r} not found.")
+
+
+def segment_polyline(segment: dict[str, Any], flip_isaac_y: bool) -> list[np.ndarray]:
+    return [point2(segment["start"], flip_isaac_y), point2(segment["end"], flip_isaac_y)]
+
+
+def concat_segments(segments: list[dict[str, Any]], flip_isaac_y: bool) -> list[np.ndarray]:
+    points: list[np.ndarray] = []
+    for segment in segments:
+        start, end = segment_polyline(segment, flip_isaac_y)
+        if not points:
+            points.append(start)
+        elif np.linalg.norm(points[-1] - start) > 1e-6:
+            points.append(start)
+        points.append(end)
+    return points
+
+
+def line_path_from_points(points: list[list[float]], flip_isaac_y: bool) -> list[np.ndarray]:
+    return [point2(point, flip_isaac_y) for point in points]
+
+
+def get_asset_bbox(scene: dict[str, Any], asset_group: str, asset_name: str, scene_path: Path) -> list[float] | None:
+    assets = scene.get("assets", {})
+    direct = assets.get(asset_group)
+    if isinstance(direct, dict) and "bbox_size" in direct:
+        return direct["bbox_size"]
+    if isinstance(direct, dict) and asset_name in direct and "bbox_size" in direct[asset_name]:
+        return direct[asset_name]["bbox_size"]
+
+    asset_ref = assets.get(asset_group)
+    if isinstance(asset_ref, str):
+        asset_name = asset_ref
+
+    library_path = scene.get("asset_library")
+    if not library_path:
+        return None
+    library = Path(library_path)
+    if not library.is_absolute():
+        library = (scene_path.parent / library).resolve()
+        if not library.exists():
+            library = (Path("C:/Users/miahv/Documents/Capstone_Project/isaac") / library_path).resolve()
+    if not library.exists():
+        return None
+    library_data = load_yaml(library)
+    entry = library_data.get("assets", {}).get(asset_group, {}).get(asset_name)
+    if isinstance(entry, dict):
+        return entry.get("bbox_size")
+    return None

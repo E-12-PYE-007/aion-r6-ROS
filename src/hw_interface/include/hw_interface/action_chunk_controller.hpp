@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <aion_msgs/msg/action_chunk.hpp>

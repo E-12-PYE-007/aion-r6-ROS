@@ -32,7 +32,7 @@ class SimWaypointTracker : public rclcpp::Node
 
         publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
 
-        _controller = std::make_unique<hw_interface::AsyncFeedForwardController>();
+        _controller = std::make_unique<hw_interface::PurePursuitController>();
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(1000/CONTROL_RATE),

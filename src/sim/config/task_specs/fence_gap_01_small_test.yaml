@@ -1,0 +1,89 @@
+spec_version: 0.1
+suite_id: fence_gap_01_small_test
+
+scene:
+  scene_id: fence_gap_01_base
+  config_type: fenceline
+  source_yaml: C:/Users/miahv/Documents/Capstone_Project/isaac/configs/base_configs/fencelines/fence_gap_01.yaml
+  generated_layout_yaml: null
+  generated_usd: null
+  notes: Base Isaac config with two fence segments and a gap between fence_01 and fence_02.
+
+collection:
+  base_dir: C:/Users/miahv/Documents/Capstone_Project/sim_datasets/fence_gap_01_small_test
+  duration_s: 20
+  camera_topic: /vla/cam1
+  odom_topic: sim_odom
+  cmd_vel_topic: cmd_vel
+  action_chunk_topic: /vla/action_chunk
+  sample_frequency_hz: 3.0
+
+expert:
+  publisher: fenceline_action_chunk_publisher
+  controller: sim_waypoint_tracker
+  preferred_offset_m: 0.8
+  waypoint_spacing_m: 0.18
+  publish_rate_hz: 3.0
+
+tasks:
+  - task_id: follow_fence_01_left_forward
+    task_type: follow_fence
+    instruction: Follow the fence on your left.
+    instruction_variants:
+      - Drive forward while keeping the fence on your left.
+      - Track the fence line ahead on the left side.
+      - Continue along the left side of the fence.
+    start_pose: start_left
+    target_fence: fence_01
+    follow_side: left
+    travel_direction: forward
+    success_condition:
+      type: reach_path_end
+      min_progress_m: 4.0
+    validation:
+      min_samples: 30
+      require_action_chunk: true
+      require_motion_m: 2.0
+
+  - task_id: follow_fence_01_right_forward
+    task_type: follow_fence
+    instruction: Follow the fence on your right.
+    instruction_variants:
+      - Drive forward while keeping the fence on your right.
+      - Track the fence line ahead on the right side.
+      - Continue along the right side of the fence.
+    start_pose: start_right
+    target_fence: fence_01
+    follow_side: right
+    travel_direction: forward
+    success_condition:
+      type: reach_path_end
+      min_progress_m: 4.0
+    validation:
+      min_samples: 30
+      require_action_chunk: true
+      require_motion_m: 2.0
+
+  - task_id: stop_at_fence_gap_from_left
+    task_type: stop_at_gap
+    instruction: Stop at the opening in the fence.
+    instruction_variants:
+      - Drive up to the fence gap and stop.
+      - Approach the opening between the fence sections and stop there.
+      - Move forward to the gap in the fence, then hold position.
+    start_pose: start_left
+    target_gap:
+      before_fence: fence_01
+      after_fence: fence_02
+      approximate_center: [4.5, 0.0, 0.0]
+    follow_side: left
+    travel_direction: forward
+    success_condition:
+      type: stop_near_point
+      target_point: [4.5, 0.8, 0.0]
+      tolerance_m: 0.5
+      max_speed_mps: 0.05
+    validation:
+      min_samples: 30
+      require_action_chunk: true
+      require_motion_m: 2.0
