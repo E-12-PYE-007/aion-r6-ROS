@@ -1,0 +1,1241 @@
+spec_version: 0.1
+suite_id: fence_gap_01_seed43_roverstart_right_base_tasks
+scene:
+  scene_id: fence_gap_01_seed43_roverstart_right_base
+  config_type: fenceline
+  source_yaml: /home/vla-cap/isaac_files/configs/generated_layouts/fence_gap_01/fence_gap_01_seed43_roverstart_right.yaml
+  generated_layout_yaml: /home/vla-cap/isaac_files/configs/generated_layouts/fence_gap_01/fence_gap_01_seed43_roverstart_right.yaml
+  generated_usd: scenes/generated/fence_gap_01/fence_gap_01_seed43_roverstart_right_base.usd
+  notes: Generated from Isaac scene YAML.
+collection:
+  base_dir: C:/Users/miahv/Documents/Capstone_Project/sim_datasets/generated
+  duration_s: 20
+  camera_topic: /vla/cam
+  odom_topic: /sim_odom
+  cmd_vel_topic: /cmd_vel
+  action_chunk_topic: /vla/action_chunk
+  sample_frequency_hz: 3.0
+expert:
+  publisher: fenceline_action_chunk_publisher
+  controller: sim_waypoint_tracker
+  preferred_offset_m: 0.8
+  waypoint_spacing_m: 0.18
+  publish_rate_hz: 3.0
+tasks:
+- task_id: follow_fence_01_left_from_scene_rover_pose
+  task_type: follow_fence
+  instruction: Follow the fence on your left.
+  instruction_variants:
+  - Drive forward while keeping the fence on your left.
+  - Track the fence line ahead on the left side.
+  - Continue along the left side of the fence.
+  start_pose: scene_rover_pose
+  target_fence: fence_01
+  follow_side: left
+  path_side: right
+  travel_direction: forward
+  success_condition:
+    type: reach_path_end
+    min_progress_m: 5.0
+  validation:
+    min_samples: 30
+    require_action_chunk: true
+    require_motion_m: 2.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.225
+      obstacle_padding_m: 0.05
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: cautious_wide_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 1.0
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.35
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.85
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: normal_tight_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 0.65
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.2
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_left_offset
+    variant_type: recovery
+    recovery_case: lost_target_left
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.15
+      yaw_rad: 0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_right_offset
+    variant_type: recovery
+    recovery_case: lost_target_right
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: -0.15
+      yaw_rad: -0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_wrong_heading
+    variant_type: recovery
+    recovery_case: wrong_heading
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.85
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+- task_id: stop_at_end_of_fence_01_from_scene_rover_pose
+  task_type: stop_at_landmark
+  instruction: Stop when you reach the end of the fence.
+  instruction_variants:
+  - Drive along the fence and stop at its end.
+  - Follow the fence until it ends, then hold position.
+  - Stop beside the final fence post.
+  start_pose: scene_rover_pose
+  target_fence: fence_01
+  landmark:
+    type: fence_end
+    point:
+    - 3.0
+    - 0.0
+    - 0.0
+  follow_side: left
+  path_side: right
+  travel_direction: forward
+  success_condition:
+    type: stop_near_point
+    target_point:
+    - 3.0
+    - 0.0
+    - 0.0
+    tolerance_m: 0.5
+    max_speed_mps: 0.05
+  validation:
+    min_samples: 30
+    require_action_chunk: true
+    require_motion_m: 2.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: cautious_wide_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 1.0
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.35
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.85
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: normal_tight_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 0.65
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.2
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_left_offset
+    variant_type: recovery
+    recovery_case: lost_target_left
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.15
+      yaw_rad: 0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_right_offset
+    variant_type: recovery
+    recovery_case: lost_target_right
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: -0.15
+      yaw_rad: -0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_wrong_heading
+    variant_type: recovery
+    recovery_case: wrong_heading
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.85
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+- task_id: hold_position_from_scene_rover_pose
+  task_type: hold_position
+  instruction: Hold position.
+  instruction_variants:
+  - Stop here.
+  - Wait in place.
+  - Stay where you are.
+  start_pose: scene_rover_pose
+  success_condition:
+    type: remain_near_start
+    tolerance_m: 0.25
+    max_speed_mps: 0.05
+  validation:
+    min_samples: 10
+    require_action_chunk: true
+    require_motion_m: 0.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+- task_id: pass_gap_between_fence_01_and_fence_02_from_scene_rover_pose
+  task_type: pass_through_gap
+  instruction: Drive through the opening in the fence.
+  instruction_variants:
+  - Pass between the two fence sections.
+  - Go through the gap and continue forward.
+  - Navigate through the fence gap ahead.
+  start_pose: scene_rover_pose
+  target_gap:
+    before_fence: fence_01
+    after_fence: fence_02
+    approximate_center:
+    - 4.5
+    - 0.0
+    - 0.0
+  follow_side: left
+  path_side: right
+  gate_intent: pass_through
+  travel_direction: forward
+  success_condition:
+    type: pass_point
+    target_point:
+    - 4.5
+    - 0.0
+    - 0.0
+    min_progress_m: 4.0
+  validation:
+    min_samples: 30
+    require_action_chunk: true
+    require_motion_m: 2.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: cautious_wide_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 1.0
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.35
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: normal_tight_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 0.65
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.2
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_left_offset
+    variant_type: recovery
+    recovery_case: lost_target_left
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.15
+      yaw_rad: 0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_right_offset
+    variant_type: recovery
+    recovery_case: lost_target_right
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: -0.15
+      yaw_rad: -0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_wrong_heading
+    variant_type: recovery
+    recovery_case: wrong_heading
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.85
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+- task_id: stop_at_gap_between_fence_01_and_fence_02_from_scene_rover_pose
+  task_type: stop_at_gap
+  instruction: Stop at the opening in the fence.
+  instruction_variants:
+  - Drive up to the fence gap and stop.
+  - Approach the opening between the fence sections and stop there.
+  - Move forward to the gap in the fence, then hold position.
+  start_pose: scene_rover_pose
+  target_gap:
+    before_fence: fence_01
+    after_fence: fence_02
+    approximate_center:
+    - 4.5
+    - 0.0
+    - 0.0
+  follow_side: left
+  path_side: right
+  travel_direction: forward
+  success_condition:
+    type: stop_near_point
+    target_point:
+    - 4.5
+    - 0.0
+    - 0.0
+    tolerance_m: 0.5
+    max_speed_mps: 0.05
+  validation:
+    min_samples: 30
+    require_action_chunk: true
+    require_motion_m: 2.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: cautious_wide_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 1.0
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.35
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.85
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: normal_tight_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 0.65
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.2
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_left_offset
+    variant_type: recovery
+    recovery_case: lost_target_left
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.15
+      yaw_rad: 0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_right_offset
+    variant_type: recovery
+    recovery_case: lost_target_right
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: -0.15
+      yaw_rad: -0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_wrong_heading
+    variant_type: recovery
+    recovery_case: wrong_heading
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.85
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.75
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 3.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.0
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: false
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+- task_id: cross_over_gap_between_fence_01_and_fence_02_from_scene_rover_pose
+  task_type: switch_sides
+  instruction: Move to the other side of the fence through the gap, then follow it
+    on your right.
+  instruction_variants:
+  - Cross through the opening, then keep the fence on your right.
+  - Use the fence gap to move to the other side.
+  - Pass through the gap and continue along the right side of the fence.
+  start_pose: scene_rover_pose
+  target_gap:
+    before_fence: fence_01
+    after_fence: fence_02
+    approximate_center:
+    - 4.5
+    - 0.0
+    - 0.0
+  entry_side: left
+  exit_side: right
+  entry_path_side: right
+  exit_path_side: left
+  travel_direction: forward
+  success_condition:
+    type: pass_point_and_continue
+    target_point:
+    - 4.5
+    - 0.0
+    - 0.0
+    min_progress_m: 5.0
+  validation:
+    min_samples: 30
+    require_action_chunk: true
+    require_motion_m: 2.0
+  trajectory_variants:
+  - variant_id: nominal
+    variant_type: nominal
+    recovery_case: null
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: cautious_wide_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 1.0
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.35
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: normal_tight_clearance
+    variant_type: clearance
+    recovery_case: null
+    preferred_offset_m: 0.65
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.0
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.2
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_left_offset
+    variant_type: recovery
+    recovery_case: lost_target_left
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.15
+      yaw_rad: 0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_right_offset
+    variant_type: recovery
+    recovery_case: lost_target_right
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: -0.15
+      yaw_rad: -0.35
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.35
+      max_yaw_rate_radps: 0.45
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
+  - variant_id: recovery_wrong_heading
+    variant_type: recovery
+    recovery_case: wrong_heading
+    preferred_offset_m: 0.8
+    start_pose_delta:
+      x_m: 0.0
+      y_m: 0.0
+      yaw_rad: 0.85
+    planner_settings:
+      robot_radius_m: 0.35
+      obstacle_padding_m: 0.25
+      grid_resolution_m: 0.25
+      yaw_resolution_deg: 15.0
+      subgoal_yaw_tolerance_deg: 180.0
+      step_size_m: 0.35
+      min_turn_radius_m: 0.5
+      goal_tolerance_m: 0.35
+      planner_subgoal_spacing_m: 4.0
+      planner_subgoal_lateral_search_m: 2.0
+      planner_subgoal_longitudinal_search_m: 2.5
+      planner_subgoal_search_step_m: 0.5
+      planner_subgoal_max_candidates: 48
+      planner_subgoal_vertex_margin_m: 0.5
+      planner_subgoal_endpoint_margin_m: 0.5
+      hybrid_astar_max_iterations: 20000
+      allow_reverse: true
+    speed_profile:
+      max_speed_mps: 0.25
+      max_yaw_rate_radps: 0.35
+      max_accel_mps2: 0.25
+      max_decel_mps2: 0.35
+      max_angular_accel_radps2: 0.6
+      min_profile_speed_mps: 0.03
+      stop_at_end: true
