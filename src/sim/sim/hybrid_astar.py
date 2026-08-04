@@ -26,6 +26,7 @@ class SearchNode:
     pose: Pose
     cost: float
     parent: Optional[tuple[int, int, int]]
+    primitive_points: list[np.ndarray]
 
 
 class HybridAStarPlanner:
@@ -60,7 +61,14 @@ class HybridAStarPlanner:
         open_heap: list[tuple[float, int, tuple[int, int, int]]] = []
         nodes: dict[tuple[int, int, int], SearchNode] = {}
         start_key = self.key(start)
-        nodes[start_key] = SearchNode(start, 0.0, None)
+        nodes[start_key] = SearchNode(
+            pose=start,
+            cost=0.0,
+            parent=None,
+            primitive_points=[
+                np.asarray([start.x, start.y], dtype=np.float64)
+            ],
+        )
         counter = 0
         heapq.heappush(open_heap, (self.heuristic(start, goal), counter, start_key))
         closed: set[tuple[int, int, int]] = set()
@@ -83,7 +91,7 @@ class HybridAStarPlanner:
             if self.reached_goal(current.pose, goal):
                 return self.reconstruct(nodes, key)
 
-            for next_pose, motion_cost in self.expand(current.pose):
+            for next_pose, motion_cost, primitive_points in self.expand(current.pose):
                 next_point = np.asarray([next_pose.x, next_pose.y], dtype=np.float64)
                 if self.collision_map.is_collision(next_point):
                     continue
@@ -92,24 +100,101 @@ class HybridAStarPlanner:
                     continue
                 new_cost = current.cost + motion_cost
                 if next_key not in nodes or new_cost < nodes[next_key].cost:
-                    nodes[next_key] = SearchNode(next_pose, new_cost, key)
+                    nodes[next_key] = SearchNode(
+                        pose=next_pose,
+                        cost=new_cost,
+                        parent=key,
+                        primitive_points=primitive_points,
+                    )
                     counter += 1
                     priority = new_cost + self.heuristic(next_pose, goal)
                     heapq.heappush(open_heap, (priority, counter, next_key))
 
-        if best_goal_distance <= self.goal_tolerance_m * 2.0:
-            return self.reconstruct(nodes, best_key)
         return None
 
-    def expand(self, pose: Pose) -> list[tuple[Pose, float]]:
+    def sample_primitive(
+        self,
+        start: Pose,
+        direction: float,
+        curvature: float,
+        sample_spacing_m: float = 0.05,
+    ) -> list[np.ndarray] | None:
+        """
+        Sample one Hybrid A* motion primitive.
+
+        Returns the sampled points when collision-free.
+        Returns None when any sampled point is in collision.
+        """
+
+        num_samples = max(
+            2,
+            int(math.ceil(self.step_size_m / sample_spacing_m)),
+        )
+
+        primitive_points: list[np.ndarray] = []
+
+        for index in range(1, num_samples + 1):
+            fraction = index / num_samples
+            ds = self.step_size_m * direction * fraction
+
+            if abs(curvature) < 1e-9:
+                x = start.x + ds * math.cos(start.yaw)
+                y = start.y + ds * math.sin(start.yaw)
+            else:
+                yaw = wrap_to_pi(start.yaw + ds * curvature)
+                radius = 1.0 / curvature
+
+                x = start.x + radius * (
+                    math.sin(yaw) - math.sin(start.yaw)
+                )
+                y = start.y - radius * (
+                    math.cos(yaw) - math.cos(start.yaw)
+                )
+
+            point = np.asarray([x, y], dtype=np.float64)
+
+            if self.collision_map.is_collision(point):
+                return None
+
+            primitive_points.append(point)
+
+        return primitive_points
+
+    def expand(
+            self,
+            pose: Pose,
+        ) -> list[tuple[Pose, float, list[np.ndarray]]]:
         directions = [1.0]
+
         if self.allow_reverse:
             directions.append(-1.0)
-        curvatures = [-self.max_curvature, -self.max_curvature * 0.5, 0.0, self.max_curvature * 0.5, self.max_curvature]
-        successors = []
+
+        curvatures = [
+            -self.max_curvature,
+            -self.max_curvature * 0.5,
+            0.0,
+            self.max_curvature * 0.5,
+            self.max_curvature,
+        ]
+
+        successors: list[
+            tuple[Pose, float, list[np.ndarray]]
+        ] = []
+
         for direction in directions:
             for curvature in curvatures:
+                primitive_points = self.sample_primitive(
+                    start=pose,
+                    direction=direction,
+                    curvature=curvature,
+                    sample_spacing_m=0.05,
+                )
+
+                if primitive_points is None:
+                    continue
+
                 ds = self.step_size_m * direction
+
                 if abs(curvature) < 1e-9:
                     next_yaw = pose.yaw
                     next_x = pose.x + ds * math.cos(pose.yaw)
@@ -118,11 +203,27 @@ class HybridAStarPlanner:
                     d_yaw = ds * curvature
                     next_yaw = wrap_to_pi(pose.yaw + d_yaw)
                     radius = 1.0 / curvature
-                    next_x = pose.x + radius * (math.sin(next_yaw) - math.sin(pose.yaw))
-                    next_y = pose.y - radius * (math.cos(next_yaw) - math.cos(pose.yaw))
-                turn_penalty = 0.05 * abs(curvature) / self.max_curvature
+
+                    next_x = pose.x + radius * (
+                        math.sin(next_yaw) - math.sin(pose.yaw)
+                    )
+                    next_y = pose.y - radius * (
+                        math.cos(next_yaw) - math.cos(pose.yaw)
+                    )
+
+                turn_penalty = (
+                    0.05 * abs(curvature) / self.max_curvature
+                )
                 reverse_penalty = 0.4 if direction < 0.0 else 0.0
-                successors.append((Pose(next_x, next_y, next_yaw), abs(ds) + turn_penalty + reverse_penalty))
+
+                successors.append(
+                    (
+                        Pose(next_x, next_y, next_yaw),
+                        abs(ds) + turn_penalty + reverse_penalty,
+                        primitive_points,
+                    )
+                )
+
         return successors
 
     def key(self, pose: Pose) -> tuple[int, int, int]:
@@ -134,6 +235,7 @@ class HybridAStarPlanner:
 
     def heuristic(self, pose: Pose, goal: Pose) -> float:
         return self.distance(pose, goal) + 0.1 * abs(wrap_to_pi(goal.yaw - pose.yaw))
+    
 
     @staticmethod
     def distance(a: Pose, b: Pose) -> float:
@@ -143,12 +245,33 @@ class HybridAStarPlanner:
         return self.distance(pose, goal) <= self.goal_tolerance_m and abs(wrap_to_pi(goal.yaw - pose.yaw)) <= self.yaw_tolerance_rad
 
     @staticmethod
-    def reconstruct(nodes: dict[tuple[int, int, int], SearchNode], key: tuple[int, int, int]) -> list[np.ndarray]:
-        poses = []
+    def reconstruct(
+        nodes: dict[tuple[int, int, int], SearchNode],
+        key: tuple[int, int, int],
+    ) -> list[np.ndarray]:
+        """
+        Reconstruct the exact sampled Hybrid A* primitives.
+        """
+
+        node_sequence: list[SearchNode] = []
         current_key: tuple[int, int, int] | None = key
+
         while current_key is not None:
             node = nodes[current_key]
-            poses.append(np.asarray([node.pose.x, node.pose.y], dtype=np.float64))
+            node_sequence.append(node)
             current_key = node.parent
-        poses.reverse()
-        return poses
+
+        node_sequence.reverse()
+
+        if not node_sequence:
+            return []
+
+        path: list[np.ndarray] = []
+
+        for index, node in enumerate(node_sequence):
+            if index == 0:
+                path.extend(node.primitive_points)
+            else:
+                path.extend(node.primitive_points)
+
+        return path

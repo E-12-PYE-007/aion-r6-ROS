@@ -81,6 +81,10 @@ class CollisionMap:
                 bbox = [0.6, 0.6, 0.3]
             center = point2(obstacle["position"], flip_isaac_y)
             yaw = float(obstacle.get("yaw", 0.0))
+            # Generated Isaac layouts may store yaw in degrees.
+            if abs(yaw) > math.tau:
+                yaw = math.radians(yaw)
+
             if flip_isaac_y:
                 yaw = -yaw
             half_extents = np.asarray([float(bbox[0]) * 0.5, float(bbox[1]) * 0.5], dtype=np.float64)
