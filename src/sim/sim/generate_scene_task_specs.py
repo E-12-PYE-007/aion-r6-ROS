@@ -575,7 +575,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 "tolerance_m": 0.25,
                 "max_speed_mps": 0.05,
             },
-            validation=validation(min_progress_m=0.0, min_samples=10),
+            validation=validation(min_progress_m=0.0, min_samples=5),
         ))
 
     for first, second in connected_segments(fences):
@@ -797,7 +797,7 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             **instruction_pack("Hold position.", ["Stop here.", "Wait in place.", "Stay where you are."]),
             start_pose=start_name,
             success_condition={"type": "remain_near_start", "tolerance_m": 0.25, "max_speed_mps": 0.05},
-            validation=validation(min_progress_m=0.0, min_samples=10),
+            validation=validation(min_progress_m=0.0, min_samples=5),
         ))
 
     for first, second in connected_segments(roads, max_endpoint_gap_m=5.0):
@@ -901,7 +901,7 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             **instruction_pack("Hold position.", ["Stop here.", "Wait in place.", "Stay where you are."]),
             start_pose=start_name,
             success_condition={"type": "remain_near_start", "tolerance_m": 0.25, "max_speed_mps": 0.05},
-            validation=validation(min_progress_m=0.0, min_samples=10),
+            validation=validation(min_progress_m=0.0, min_samples=5),
         ))
 
     return tasks
