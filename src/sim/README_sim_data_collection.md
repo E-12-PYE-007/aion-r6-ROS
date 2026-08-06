@@ -43,6 +43,105 @@ sim_dataset_collector
 
 The main driving command for Isaac should be `cmd_vel` from `sim_waypoint_tracking`, not `/expert/cmd_vel`. The `/expert/cmd_vel` topic is useful for debugging the expert profile, but the pure pursuit tracker is the control path intended for collection.
 
+## Rollout Orchestration
+
+`src/sim/sim/collect_task_spec_rollouts.py`
+
+This script is the automation layer for collecting a batch of task/variant rollouts from a validated task spec. It reads the task spec, selects every requested `task_id` and `variant_id`, launches the matching expert trajectory node, launches the pure-pursuit sim waypoint tracker, launches `sim_dataset_collector`, waits for the configured collection duration, then stops the nodes and moves to the next combination.
+
+The basic dry-run command is:
+
+```bash
+ros2 run sim collect_task_spec_rollouts \
+  src/sim/config/generated_task_specs/fence_gap_01_seed43_roverstart_right_base_task_spec.yaml \
+  --task-id follow_fence_01_left_from_scene_rover_pose \
+  --variant-id nominal \
+  --dry-run
+```
+
+The basic collection command is:
+
+```bash
+ros2 run sim collect_task_spec_rollouts \
+  src/sim/config/generated_task_specs/fence_gap_01_seed43_roverstart_right_base_task_spec.yaml \
+  --task-id follow_fence_01_left_from_scene_rover_pose \
+  --variant-id nominal
+```
+
+By default it uses the task spec's `collection.duration_s`, `collection.base_dir`, camera topic, odom topic, command topic, and action chunk topic. Each rollout folder gets a deterministic trajectory name containing the suite, task, and variant. The collector records the selected task metadata, selected variant metadata, planner settings, speed profile, language instruction, odom, `cmd_vel`, and `/vla/action_chunk`.
+
+Useful options:
+
+```text
+--dry-run
+  Print the commands without starting ROS nodes.
+
+--task-id <id>
+  Collect only a specific task. Can be repeated.
+
+--variant-id <id>
+  Collect only a specific variant. Can be repeated.
+
+--limit N
+  Collect only the first N selected rollouts.
+
+--duration-s N
+  Override the spec's collection duration.
+
+--base-dir <path>
+  Override the output dataset directory.
+
+--no-tracker
+  Start the expert and collector without the pure-pursuit tracker.
+
+--prepare-scene-command "<command>"
+  Optional hook to reload/reset Isaac before each rollout. The command can use placeholders:
+  {scene_yaml}, {generated_layout_yaml}, {generated_usd}, {task_spec}, {task_id}, {variant_id}, {trajectory_name}.
+
+--use-isaac-bridge
+  Use the file-based Isaac rollout bridge before each rollout. This writes a request to the bridge, waits for Isaac to load/reset the requested scene, then waits for the camera and odom topics before starting the tracker/expert/collector.
+```
+
+Important limitation: Isaac still needs to be running the bridge process. The rollout script can request a scene through `--use-isaac-bridge`, but it does not start Isaac itself.
+
+### Isaac rollout bridge
+
+The bridge is split across the two repos:
+
+- Isaac side: `scripts/isaac_rollout_bridge.py`
+- ROS side: `src/sim/sim/prepare_isaac_rollout.py`
+
+Start the Isaac-side bridge first from the Isaac repo, using Isaac Sim's Python. Replace `$ISAAC_SIM_PYTHON` with the workstation's Isaac Python launcher, for example the `python.sh` inside the Isaac Sim installation:
+
+```bash
+cd ~/isaac_files
+
+$ISAAC_SIM_PYTHON scripts/isaac_rollout_bridge.py \
+  --headless \
+  --isaac-root ~/isaac_files \
+  --command-file /tmp/isaac_rollout_request.json \
+  --status-file /tmp/isaac_rollout_status.json
+```
+
+Then run collection with bridge preparation enabled:
+
+```bash
+cd ~/aion-r6-ROS
+source install/setup.bash
+
+ros2 run sim collect_task_spec_rollouts \
+  src/sim/config/generated_task_specs/fence_gap_01_seed43_roverstart_right_base_task_spec.yaml \
+  --use-isaac-bridge \
+  --isaac-root ~/isaac_files \
+  --task-id follow_fence_01_left_from_scene_rover_pose \
+  --variant-id nominal \
+  --limit 1
+```
+
+For each selected task/variant, the ROS prepare command writes a JSON request containing the task spec, task id, variant id, generated USD path, and layout YAML path. The Isaac bridge opens the requested USD, applies the layout YAML's `rover_pose` to `/World/RoverSystem` in memory, starts simulation playback, and writes a ready/error status JSON. The ROS prepare command then waits for `/sim_odom` and `/vla/cam` before the rollout nodes start.
+
+Pose-perturbed recovery variants still require a layout YAML/USD generated for the perturbed start pose. The bridge applies whatever `rover_pose` is present in the requested layout YAML; it does not invent recovery poses by itself.
+
 ## Main Files Added Or Changed
 
 ### Task generation
@@ -678,6 +777,11 @@ shed_expert_trajectory
 generate_scene_task_specs
 validate_scene_task_specs
 expand_pose_variants
+generate_collection_manifest
+run_collection_manifest
+validate_collected_rollout
+prepare_isaac_rollout
+collect_task_spec_rollouts
 ```
 
 The older `fenceline_action_chunk_publisher` remains in the repo, but the task-spec-driven expert trajectory nodes are the intended path for the new sim data generation pipeline.
@@ -701,6 +805,144 @@ Validate planner support and write collection-ready specs:
 ```bash
 ros2 run sim validate_scene_task_specs src/sim/config/scene_valid_task_specs --check-planner --write-valid-output-dir src/sim/config/collection_ready_task_specs
 ```
+
+Generate a collection manifest:
+
+```bash
+ros2 run sim generate_collection_manifest \
+  src/sim/config/collection_ready_task_specs \
+  --output src/sim/config/collection_manifest.yaml \
+  --isaac-root ~/isaac_files \
+  --summary
+```
+
+Include existing sky/ground USD variations as separate rollout rows:
+
+```bash
+ros2 run sim generate_collection_manifest \
+  src/sim/config/collection_ready_task_specs \
+  --output src/sim/config/collection_manifest.yaml \
+  --isaac-root ~/isaac_files \
+  --include-visual-variations \
+  --summary
+```
+
+If recovery pose variants have been expanded with `expand_pose_variants`, pass their layout directory so the manifest can point those rows at the perturbed layout/USD files:
+
+```bash
+ros2 run sim generate_collection_manifest \
+  src/sim/config/collection_ready_task_specs \
+  --output src/sim/config/collection_manifest.yaml \
+  --isaac-root ~/isaac_files \
+  --pose-variant-layout-dir ~/isaac_files/configs/generated_layouts/pose_variants \
+  --summary
+```
+
+Dry-run the first pending manifest row:
+
+```bash
+ros2 run sim run_collection_manifest \
+  src/sim/config/collection_manifest.yaml \
+  --limit 1 \
+  --use-isaac-bridge \
+  --isaac-root ~/isaac_files \
+  --dry-run
+```
+
+Collect the first pending manifest row:
+
+```bash
+ros2 run sim run_collection_manifest \
+  src/sim/config/collection_manifest.yaml \
+  --limit 1 \
+  --use-isaac-bridge \
+  --isaac-root ~/isaac_files
+```
+
+The manifest runner selects rows with `status: pending` and `pose_variant_ready: true`. It writes each selected row to `running`, creates a temporary per-rollout task spec with the row's `layout_yaml` and `visual_usd`, runs the Isaac bridge plus tracker/expert/collector, then updates the row to `complete` or `failed`. Use `--retry-failed` to retry failed rows.
+
+After a real rollout, the manifest runner validates the collected folder before marking the row complete. It checks for `metadata.json`, `poses.jsonl`, saved JPEGs, image references, minimum sample count, action chunks, `cmd_vel`, task/variant metadata, and required motion. Use `--skip-validation` only for debugging.
+
+Validate one collected rollout folder manually:
+
+```bash
+ros2 run sim validate_collected_rollout \
+  ~/sim_datasets/generated/<trajectory_name> \
+  --expected-task-id follow_example_task \
+  --expected-variant-id nominal
+```
+
+### Manual parallel worker test
+
+Only run this after the single-worker test is passing. Each worker needs its own Isaac process and ROS domain. The manifest runner uses a lock file beside the manifest so workers claim pending rows one at a time.
+
+Worker 00 Isaac terminal:
+
+```bash
+cd ~/isaac_files
+export ROS_DOMAIN_ID=31
+
+$ISAAC_SIM_PYTHON scripts/isaac_rollout_bridge.py \
+  --headless \
+  --isaac-root ~/isaac_files \
+  --command-file /tmp/isaac_rollout_worker_00_request.json \
+  --status-file /tmp/isaac_rollout_worker_00_status.json
+```
+
+Worker 00 ROS terminal:
+
+```bash
+cd ~/aion-r6-ROS
+source install/setup.bash
+export ROS_DOMAIN_ID=31
+
+ros2 run sim run_collection_manifest \
+  src/sim/config/collection_manifest.yaml \
+  --worker-id worker_00 \
+  --limit 1 \
+  --use-isaac-bridge \
+  --isaac-root ~/isaac_files
+```
+
+Worker 01 Isaac terminal:
+
+```bash
+cd ~/isaac_files
+export ROS_DOMAIN_ID=32
+
+$ISAAC_SIM_PYTHON scripts/isaac_rollout_bridge.py \
+  --headless \
+  --isaac-root ~/isaac_files \
+  --command-file /tmp/isaac_rollout_worker_01_request.json \
+  --status-file /tmp/isaac_rollout_worker_01_status.json
+```
+
+Worker 01 ROS terminal:
+
+```bash
+cd ~/aion-r6-ROS
+source install/setup.bash
+export ROS_DOMAIN_ID=32
+
+ros2 run sim run_collection_manifest \
+  src/sim/config/collection_manifest.yaml \
+  --worker-id worker_01 \
+  --limit 1 \
+  --use-isaac-bridge \
+  --isaac-root ~/isaac_files
+```
+
+When `--worker-id` is set, the runner automatically uses worker-specific defaults:
+
+```text
+bridge request: /tmp/isaac_rollout_<worker_id>_request.json
+bridge status:  /tmp/isaac_rollout_<worker_id>_status.json
+logs:           logs/sim_rollouts/<worker_id>
+runtime specs:  logs/sim_rollouts/<worker_id>/runtime_task_specs
+dataset dir:    <collection.base_dir>/<worker_id>
+```
+
+The worker claims one pending row at a time by marking it `running` with `worker_id`, releases the manifest lock while Isaac collects, then reacquires the lock to write `complete` or `failed`.
 
 Run a fenceline expert:
 

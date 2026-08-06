@@ -42,6 +42,11 @@ setup(
             'validate_scene_task_specs = sim.validate_scene_task_specs:main',
             'plot_task_plan = sim.plot_task_plan:main',
             'expand_pose_variants = sim.expand_pose_variants:main',
+            'generate_collection_manifest = sim.generate_collection_manifest:main',
+            'run_collection_manifest = sim.run_collection_manifest:main',
+            'validate_collected_rollout = sim.validate_collected_rollout:main',
+            'prepare_isaac_rollout = sim.prepare_isaac_rollout:main',
+            'collect_task_spec_rollouts = sim.collect_task_spec_rollouts:main',
 
         ],
     },

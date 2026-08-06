@@ -88,7 +88,7 @@ class CollisionMap:
             if flip_isaac_y:
                 yaw = -yaw
             half_extents = np.asarray(
-                [float(bbox[0]) * 0.3,float(bbox[1]) * 0.3],
+                [float(bbox[0]) * 0.1,float(bbox[1]) * 0.1],
                 dtype=np.float64,
             )
             obstacles.append(OrientedBoxObstacle(center, yaw, half_extents, name, obstacle_type))

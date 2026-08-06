@@ -33,10 +33,10 @@ class HybridAStarPlanner:
     def __init__(
         self,
         collision_map: CollisionMap,
-        grid_resolution_m: float = 0.25,
-        yaw_resolution_rad: float = math.radians(15.0),
-        step_size_m: float = 0.35,
-        min_turn_radius_m: float = 0.75,
+        grid_resolution_m: float = 0.15,
+        yaw_resolution_rad: float = math.radians(10.0),
+        step_size_m: float = 0.2,
+        min_turn_radius_m: float = 0.35,
         goal_tolerance_m: float = 0.35,
         yaw_tolerance_rad: float = math.radians(35.0),
         max_iterations: int = 20000,
@@ -161,9 +161,9 @@ class HybridAStarPlanner:
         return primitive_points
 
     def expand(
-            self,
-            pose: Pose,
-        ) -> list[tuple[Pose, float, list[np.ndarray]]]:
+        self,
+        pose: Pose,
+    ) -> list[tuple[Pose, float, list[np.ndarray]]]:
         directions = [1.0]
 
         if self.allow_reverse:
@@ -181,6 +181,7 @@ class HybridAStarPlanner:
             tuple[Pose, float, list[np.ndarray]]
         ] = []
 
+        # Translational motion primitives.
         for direction in directions:
             for curvature in curvatures:
                 primitive_points = self.sample_primitive(
@@ -201,26 +202,73 @@ class HybridAStarPlanner:
                     next_y = pose.y + ds * math.sin(pose.yaw)
                 else:
                     d_yaw = ds * curvature
-                    next_yaw = wrap_to_pi(pose.yaw + d_yaw)
+                    next_yaw = wrap_to_pi(
+                        pose.yaw + d_yaw
+                    )
                     radius = 1.0 / curvature
 
                     next_x = pose.x + radius * (
-                        math.sin(next_yaw) - math.sin(pose.yaw)
+                        math.sin(next_yaw)
+                        - math.sin(pose.yaw)
                     )
+
                     next_y = pose.y - radius * (
-                        math.cos(next_yaw) - math.cos(pose.yaw)
+                        math.cos(next_yaw)
+                        - math.cos(pose.yaw)
                     )
 
                 turn_penalty = (
-                    0.05 * abs(curvature) / self.max_curvature
+                    0.05
+                    * abs(curvature)
+                    / self.max_curvature
                 )
-                reverse_penalty = 0.4 if direction < 0.0 else 0.0
+
+                reverse_penalty = (
+                    0.4 if direction < 0.0 else 0.0
+                )
 
                 successors.append(
                     (
-                        Pose(next_x, next_y, next_yaw),
-                        abs(ds) + turn_penalty + reverse_penalty,
+                        Pose(
+                            next_x,
+                            next_y,
+                            next_yaw,
+                        ),
+                        abs(ds)
+                        + turn_penalty
+                        + reverse_penalty,
                         primitive_points,
+                    )
+                )
+
+        # Rotation-in-place primitives for a skid-steer rover.
+        rotation_step = self.yaw_resolution_rad
+
+        current_point = np.asarray(
+            [pose.x, pose.y],
+            dtype=np.float64,
+        )
+
+        if not self.collision_map.is_collision(
+            current_point
+        ):
+            for yaw_change in (
+                -rotation_step,
+                rotation_step,
+            ):
+                next_yaw = wrap_to_pi(
+                    pose.yaw + yaw_change
+                )
+
+                successors.append(
+                    (
+                        Pose(
+                            x=pose.x,
+                            y=pose.y,
+                            yaw=next_yaw,
+                        ),
+                        0.10,
+                        [current_point.copy()],
                     )
                 )
 
