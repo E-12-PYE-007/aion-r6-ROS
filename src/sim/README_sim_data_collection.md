@@ -913,6 +913,21 @@ The diagnostics record topic message counts, topic rates, odom distance, action-
 
 Rollout duration is measured in simulation time, not wall-clock time. The runner starts `wait_for_sim_duration` and waits until `/sim_odom` timestamps have advanced by the requested `duration_s`. If Isaac runs slower than real time, the wall-clock rollout will take longer, but the collected data should cover the intended amount of simulated motion.
 
+### Actuation Smoke Test
+
+After the frame diagnostics are correct, use `actuation_smoke_test` to isolate the low-level Isaac `/cmd_vel` to `/sim_odom` response without Pure Pursuit, ActionChunks, the expert, or the collector. Prepare/reset one Isaac scene first, make sure no other node is publishing `/cmd_vel`, then run:
+
+```bash
+ros2 run sim actuation_smoke_test \
+  --ros-args \
+  -p output:=logs/actuation_smoke_test.json \
+  -p odom_topic:=/sim_odom \
+  -p cmd_vel_topic:=/cmd_vel \
+  -p duration_s:=3.0
+```
+
+The test uses simulation time from `/sim_odom` header stamps. It runs three direct commands: turn left with `linear.x=0, angular.z=+0.3`, turn right with `linear.x=0, angular.z=-0.3`, and drive straight with `linear.x=+0.2, angular.z=0`. The JSON output records initial/final yaw, yaw change, measured yaw rates, commanded angular velocity, angular response ratio, distance, measured linear velocity, and linear response ratio. Use this before tuning Pure Pursuit if the tracker is saturating angular command but the rover barely turns.
+
 Inspect diagnostics after a failed rollout:
 
 ```bash
