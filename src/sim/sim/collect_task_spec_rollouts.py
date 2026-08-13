@@ -161,6 +161,7 @@ def command_for_expert(task_spec_path: Path, task_spec: dict[str, Any], rollout:
         "variant_id": rollout.variant.get("variant_id", "nominal"),
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
+        "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
         "flip_isaac_y": True,
@@ -211,6 +212,7 @@ def command_for_diagnostics(
         "cmd_vel_topic": collection.get("cmd_vel_topic", "/cmd_vel"),
         "expert_cmd_vel_topic": collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
+        "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
         "sample_frequency_hz": max(float(collection.get("sample_frequency_hz", 3.0)), 5.0),
     }
     return ["ros2", "run", "sim", "rollout_diagnostics"] + ros_param_args(params)

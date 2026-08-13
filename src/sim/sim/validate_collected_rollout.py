@@ -244,6 +244,8 @@ def validate_rollout_dir(
             warnings.append("diagnostics: no /vla/action_chunk messages observed")
         if nested_int(diagnostics_summary, "messages", "cmd_vel") == 0:
             warnings.append("diagnostics: no /cmd_vel messages observed")
+        if nested_int(diagnostics_summary, "messages", "frame_debug") == 0:
+            warnings.append("diagnostics: no /expert/frame_debug messages observed")
         if nested_float(diagnostics_summary, "rates_hz", "action_chunk") < 2.0:
             warnings.append(
                 f"diagnostics: action_chunk rate {nested_float(diagnostics_summary, 'rates_hz', 'action_chunk'):.2f} Hz"

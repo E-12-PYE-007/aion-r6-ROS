@@ -19,6 +19,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 
 
 def yaw_from_quaternion(quat) -> float:
@@ -67,6 +68,7 @@ class RolloutDiagnosticsNode(Node):
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("sample_frequency_hz", 5.0)
 
         output_dir = str(self.get_parameter("output_dir").value)
@@ -88,6 +90,7 @@ class RolloutDiagnosticsNode(Node):
             "action_chunk": [],
             "expert_cmd_vel": [],
             "cmd_vel": [],
+            "frame_debug": [],
         }
         self.stamps: dict[str, list[float]] = {
             "odom": [],
@@ -99,6 +102,7 @@ class RolloutDiagnosticsNode(Node):
             "action_chunk": {},
             "expert_cmd_vel": {},
             "cmd_vel": {},
+            "frame_debug": {},
         }
         self.odom_distance_m = 0.0
         self.previous_odom_xy: tuple[float, float] | None = None
@@ -147,6 +151,12 @@ class RolloutDiagnosticsNode(Node):
             self.cmd_vel_callback,
             10,
         )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("frame_debug_topic").value),
+            self.frame_debug_callback,
+            10,
+        )
 
         sample_frequency_hz = float(self.get_parameter("sample_frequency_hz").value)
         period_s = 1.0 / sample_frequency_hz if sample_frequency_hz > 0.0 else 0.2
@@ -186,11 +196,33 @@ class RolloutDiagnosticsNode(Node):
             "expert_angular_z",
             "cmd_linear_x",
             "cmd_angular_z",
+            "raw_odom_x",
+            "raw_odom_y",
+            "raw_odom_yaw",
+            "flip_isaac_y",
+            "local_x_after_flip",
+            "local_y_after_flip",
+            "local_yaw_after_flip",
+            "world_x",
+            "world_y",
+            "world_yaw",
+            "current_world_x",
+            "current_world_y",
+            "current_world_yaw",
+            "target_world_x",
+            "target_world_y",
+            "target_world_yaw",
+            "delta_world_x",
+            "delta_world_y",
+            "relative_x",
+            "relative_y",
+            "relative_theta",
             "odom_messages",
             "camera_messages",
             "action_chunk_messages",
             "expert_cmd_messages",
             "cmd_vel_messages",
+            "frame_debug_messages",
         ]
 
     def now(self) -> float:
@@ -269,6 +301,16 @@ class RolloutDiagnosticsNode(Node):
         self.cmd_angular_z_values.append(angular_z)
         self.latest["cmd_vel"] = {"linear_x": linear_x, "angular_z": angular_z}
 
+    def frame_debug_callback(self, msg: String) -> None:
+        self.times["frame_debug"].append(self.now())
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed /expert/frame_debug JSON")
+            return
+        if isinstance(data, dict):
+            self.latest["frame_debug"] = data
+
     def write_row(self) -> None:
         wall_elapsed_s = self.now() - self.start_time
         sim_elapsed_s = None
@@ -285,6 +327,7 @@ class RolloutDiagnosticsNode(Node):
         last = action.get("last") or [None, None, None]
         expert = self.latest.get("expert_cmd_vel") or {}
         cmd = self.latest.get("cmd_vel") or {}
+        frame = self.latest.get("frame_debug") or {}
         row = {
             "elapsed_s": wall_elapsed_s,
             "wall_elapsed_s": wall_elapsed_s,
@@ -316,11 +359,33 @@ class RolloutDiagnosticsNode(Node):
             "expert_angular_z": finite(expert.get("angular_z")),
             "cmd_linear_x": finite(cmd.get("linear_x")),
             "cmd_angular_z": finite(cmd.get("angular_z")),
+            "raw_odom_x": finite(frame.get("raw_odom_x")),
+            "raw_odom_y": finite(frame.get("raw_odom_y")),
+            "raw_odom_yaw": finite(frame.get("raw_odom_yaw")),
+            "flip_isaac_y": frame.get("flip_isaac_y"),
+            "local_x_after_flip": finite(frame.get("local_x_after_flip")),
+            "local_y_after_flip": finite(frame.get("local_y_after_flip")),
+            "local_yaw_after_flip": finite(frame.get("local_yaw_after_flip")),
+            "world_x": finite(frame.get("world_x")),
+            "world_y": finite(frame.get("world_y")),
+            "world_yaw": finite(frame.get("world_yaw")),
+            "current_world_x": finite(frame.get("current_world_x")),
+            "current_world_y": finite(frame.get("current_world_y")),
+            "current_world_yaw": finite(frame.get("current_world_yaw")),
+            "target_world_x": finite(frame.get("target_world_x")),
+            "target_world_y": finite(frame.get("target_world_y")),
+            "target_world_yaw": finite(frame.get("target_world_yaw")),
+            "delta_world_x": finite(frame.get("delta_world_x")),
+            "delta_world_y": finite(frame.get("delta_world_y")),
+            "relative_x": finite(frame.get("relative_x")),
+            "relative_y": finite(frame.get("relative_y")),
+            "relative_theta": finite(frame.get("relative_theta")),
             "odom_messages": len(self.times["odom"]),
             "camera_messages": len(self.times["camera"]),
             "action_chunk_messages": len(self.times["action_chunk"]),
             "expert_cmd_messages": len(self.times["expert_cmd_vel"]),
             "cmd_vel_messages": len(self.times["cmd_vel"]),
+            "frame_debug_messages": len(self.times["frame_debug"]),
         }
         self.csv_writer.writerow(row)
         self.csv_file.flush()
@@ -345,6 +410,7 @@ class RolloutDiagnosticsNode(Node):
                 "action_chunk": len(self.times["action_chunk"]),
                 "expert_cmd_vel": len(self.times["expert_cmd_vel"]),
                 "cmd_vel": len(self.times["cmd_vel"]),
+                "frame_debug": len(self.times["frame_debug"]),
             },
             "rates_hz": {
                 "odom": rate_hz(self.times["odom"]),
@@ -352,6 +418,7 @@ class RolloutDiagnosticsNode(Node):
                 "action_chunk": rate_hz(self.times["action_chunk"]),
                 "expert_cmd_vel": rate_hz(self.times["expert_cmd_vel"]),
                 "cmd_vel": rate_hz(self.times["cmd_vel"]),
+                "frame_debug": rate_hz(self.times["frame_debug"]),
             },
             "sim_time_rates_hz": {
                 "odom": rate_hz(self.stamps["odom"]),
@@ -380,6 +447,7 @@ class RolloutDiagnosticsNode(Node):
                 "max_abs_theta": self.max_abs_action_theta,
                 **(self.latest.get("action_chunk") or {}),
             },
+            "frame_debug": self.latest.get("frame_debug") or {},
         }
 
     def finalize(self) -> None:

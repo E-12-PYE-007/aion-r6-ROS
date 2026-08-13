@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -13,6 +14,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from std_msgs.msg import String
 
 from sim.expert_trajectory_utils import (
     build_timed_action_chunk,
@@ -26,6 +28,8 @@ from sim.expert_trajectory_utils import (
     path_length,
     point2,
     sample_path_pose,
+    world_to_robot,
+    yaw_from_quaternion,
 )
 from sim.collision_map import CollisionMap
 from sim.hybrid_astar import HybridAStarPlanner, Pose
@@ -148,6 +152,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
+        self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
@@ -212,9 +217,11 @@ class ExpertPolicyNode(Node):
 
         self.current_position: Optional[np.ndarray] = None
         self.current_yaw: Optional[float] = None
+        self.latest_odom_frame_debug: dict[str, object] = {}
         self.seq_num = 1
 
         self.publisher = self.create_publisher(ActionChunk, str(self.get_parameter("action_chunk_topic").value), 10)
+        self.frame_debug_publisher = self.create_publisher(String, str(self.get_parameter("frame_debug_topic").value), 10)
         self.cmd_vel_publisher = None
         expert_cmd_vel_topic = str(self.get_parameter("expert_cmd_vel_topic").value)
         if expert_cmd_vel_topic:
@@ -236,13 +243,30 @@ class ExpertPolicyNode(Node):
         raise NotImplementedError
 
     def odom_callback(self, msg: Odometry) -> None:
+        raw_x = float(msg.pose.pose.position.x)
+        raw_y = float(msg.pose.pose.position.y)
+        raw_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
         local_position, local_yaw = odom_to_pose(msg, self.flip_isaac_y)
-        self.current_position, self.current_yaw = local_odom_to_world(
+        world_position, world_yaw = local_odom_to_world(
             local_position,
             local_yaw,
             self.world_start_position,
             self.world_start_yaw,
         )
+        self.current_position = world_position
+        self.current_yaw = world_yaw
+        self.latest_odom_frame_debug = {
+            "raw_odom_x": raw_x,
+            "raw_odom_y": raw_y,
+            "raw_odom_yaw": raw_yaw,
+            "flip_isaac_y": self.flip_isaac_y,
+            "local_x_after_flip": float(local_position[0]),
+            "local_y_after_flip": float(local_position[1]),
+            "local_yaw_after_flip": float(local_yaw),
+            "world_x": float(world_position[0]),
+            "world_y": float(world_position[1]),
+            "world_yaw": float(world_yaw),
+        }
 
     def active_path(self) -> list[np.ndarray]:
         if self.use_hybrid_astar and self.planned_path is not None:
@@ -483,6 +507,7 @@ class ExpertPolicyNode(Node):
         self.maybe_plan_path()
         trajectory = self.active_trajectory()
         profile_time_s = self.current_profile_time(trajectory)
+        self.publish_frame_debug(trajectory, profile_time_s)
         msg = build_timed_action_chunk(
             self,
             trajectory,
@@ -495,3 +520,33 @@ class ExpertPolicyNode(Node):
         self.publisher.publish(msg)
         self.publish_expert_cmd_vel(trajectory, profile_time_s)
         self.seq_num += 1
+
+    def publish_frame_debug(self, trajectory: TimedTrajectory, profile_time_s: float) -> None:
+        if self.current_position is None or self.current_yaw is None:
+            return
+        first_offset_s = float(self.future_time_offsets_s[0]) if self.future_time_offsets_s else 0.3
+        target_position, target_yaw, _, _ = trajectory.sample(profile_time_s + first_offset_s)
+        delta_world = target_position - self.current_position
+        relative_x, relative_y, relative_theta = world_to_robot(
+            self.current_position,
+            self.current_yaw,
+            target_position,
+            target_yaw,
+        )
+        payload = {
+            **self.latest_odom_frame_debug,
+            "current_world_x": float(self.current_position[0]),
+            "current_world_y": float(self.current_position[1]),
+            "current_world_yaw": float(self.current_yaw),
+            "target_world_x": float(target_position[0]),
+            "target_world_y": float(target_position[1]),
+            "target_world_yaw": float(target_yaw),
+            "delta_world_x": float(delta_world[0]),
+            "delta_world_y": float(delta_world[1]),
+            "relative_x": float(relative_x),
+            "relative_y": float(relative_y),
+            "relative_theta": float(relative_theta),
+        }
+        msg = String()
+        msg.data = json.dumps(payload, sort_keys=True)
+        self.frame_debug_publisher.publish(msg)
