@@ -65,14 +65,33 @@ def json_param(value: Any) -> str:
 
 def ros_param_args(params: dict[str, Any]) -> list[str]:
     args = ["--ros-args"]
+
     for key, value in params.items():
+        if value is None:
+            continue
+
+        if isinstance(value, str) and not value.strip():
+            continue
+
         if isinstance(value, bool):
             encoded = "true" if value else "false"
+
         elif isinstance(value, (dict, list)):
-            encoded = json_param(value)
+            # First convert the object to compact JSON, then encode that
+            # JSON as a quoted YAML/ROS string parameter.
+            json_text = json_param(value)
+            encoded = json.dumps(json_text)
+
+        elif isinstance(value, str):
+            # JSON string quoting is also valid YAML string quoting.
+            # This protects spaces, punctuation, colons and nested JSON.
+            encoded = json.dumps(value)
+
         else:
             encoded = str(value)
+
         args.extend(["-p", f"{key}:={encoded}"])
+
     return args
 
 
@@ -166,7 +185,7 @@ def command_for_collector(
         "task_id": rollout.task["task_id"],
         "variant_id": rollout.variant.get("variant_id", "nominal"),
         "variant_type": rollout.variant.get("variant_type", "nominal"),
-        "recovery_case": rollout.variant.get("recovery_case") or "",
+        "recovery_case": rollout.variant.get("recovery_case"),
         "language_instruction": rollout.task.get("instruction", ""),
         "structured_task_json": json_param(structured_task),
         "planner_settings_json": json_param(rollout.variant.get("planner_settings")),
