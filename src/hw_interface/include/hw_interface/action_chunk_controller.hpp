@@ -19,14 +19,6 @@ struct VelocityCommand
 {
   float speed_body_x{0.0f}; // [m/s] Forward velocity in body frame
   float yaw_rate{0.0f};     // [rad/s] Yaw rate
-  float target_x{0.0f};
-  float target_y{0.0f};
-  float target_distance{0.0f};
-  float heading_error{0.0f};
-  float curvature{0.0f};
-  float raw_yaw_rate{0.0f};
-  uint32_t target_index{0};
-  bool target_found{false};
 };
 
 /// Generic interface for turning a buffered action chunk into a velocity command.
@@ -199,34 +191,12 @@ class PurePursuitController: public ActionChunkController
       lookahead_vector[0] =  x*std::cos(delta_theta) + y*std::sin(delta_theta);  // x_body
       lookahead_vector[1] = -x*std::sin(delta_theta) + y*std::cos(delta_theta);  // y_body
 
-      const double heading_error = std::atan2(lookahead_vector[1], lookahead_vector[0]);
+      double R = 2.0 * lookahead_vector[1]/(euclid_dist*euclid_dist); // Curvature to approach path on
 
-      VelocityCommand command;
-      command.target_x = static_cast<float>(lookahead_vector[0]);
-      command.target_y = static_cast<float>(lookahead_vector[1]);
-      command.target_distance = static_cast<float>(euclid_dist);
-      command.heading_error = static_cast<float>(heading_error);
-      command.target_index = static_cast<uint32_t>(_waypoint_idx);
-      command.target_found = true;
-      if (std::abs(heading_error) > kRotateInPlaceHeadingError) {
-        command.speed_body_x = 0.0f;
-        command.raw_yaw_rate = static_cast<float>(kHeadingGain * heading_error);
-        command.yaw_rate = static_cast<float>(
-          std::clamp(kHeadingGain * heading_error, -kMaxW, kMaxW)
-        );
-        return command;
-      }
+      return saturate(kMaxV, R * kMaxV);
 
-      const double curvature = 2.0 * lookahead_vector[1] /
-        std::max(euclid_dist * euclid_dist, kMinLookaheadDistanceSq);
 
-      command.speed_body_x = static_cast<float>(kMaxV);
-      command.curvature = static_cast<float>(curvature);
-      command.raw_yaw_rate = static_cast<float>(curvature * kMaxV);
-      command.yaw_rate = static_cast<float>(
-        std::clamp(curvature * kMaxV, -kMaxW, kMaxW)
-      );
-      return command;
+      
     }
   
   private:
