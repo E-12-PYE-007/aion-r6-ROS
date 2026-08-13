@@ -15,6 +15,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
+from std_msgs.msg import String
 
 
 def stamp_to_seconds(stamp) -> float:
@@ -51,6 +52,9 @@ class ActuationSmokeTest(Node):
         self.declare_parameter("wall_timeout_s", 120.0)
         self.declare_parameter("angular_test_radps", 0.3)
         self.declare_parameter("linear_test_mps", 0.2)
+        self.declare_parameter("wheel_debug_topic", "/isaac/wheel_actuation_debug")
+        self.declare_parameter("wheel_radius_m", 0.08)
+        self.declare_parameter("wheel_distance_m", 0.32634)
 
         self.output_path = Path(str(self.get_parameter("output").value))
         self.duration_s = float(self.get_parameter("duration_s").value)
@@ -59,6 +63,8 @@ class ActuationSmokeTest(Node):
         self.wall_timeout_s = float(self.get_parameter("wall_timeout_s").value)
         self.angular_test_radps = float(self.get_parameter("angular_test_radps").value)
         self.linear_test_mps = float(self.get_parameter("linear_test_mps").value)
+        self.wheel_radius_m = float(self.get_parameter("wheel_radius_m").value)
+        self.wheel_distance_m = float(self.get_parameter("wheel_distance_m").value)
 
         self.cmd_publisher = self.create_publisher(Twist, str(self.get_parameter("cmd_vel_topic").value), 10)
         self.create_subscription(
@@ -67,10 +73,17 @@ class ActuationSmokeTest(Node):
             self.odom_callback,
             qos_profile_sensor_data,
         )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("wheel_debug_topic").value),
+            self.wheel_debug_callback,
+            10,
+        )
 
         self.latest_odom: dict[str, float] | None = None
         self.odom_history: list[dict[str, float]] = []
         self.command_history: list[dict[str, float]] = []
+        self.wheel_debug_history: list[dict[str, Any]] = []
 
     def odom_callback(self, msg: Odometry) -> None:
         stamp_s = stamp_to_seconds(msg.header.stamp)
@@ -89,6 +102,16 @@ class ActuationSmokeTest(Node):
         }
         self.latest_odom = record
         self.odom_history.append(record)
+
+    def wheel_debug_callback(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed wheel actuation debug JSON")
+            return
+        if isinstance(data, dict):
+            data.setdefault("receive_stamp_s", self.latest_odom["stamp_s"] if self.latest_odom is not None else None)
+            self.wheel_debug_history.append(data)
 
     def publish_cmd(self, linear_x: float, angular_z: float) -> None:
         msg = Twist()
@@ -167,6 +190,12 @@ class ActuationSmokeTest(Node):
 
         yaw_rates = [record["yaw_rate"] for record in odom_records]
         linear_x_values = [record["linear_x"] for record in odom_records]
+        wheel_debug = self.summarize_wheel_debug(
+            commanded_linear_x,
+            commanded_angular_z,
+            first["stamp_s"],
+            last["stamp_s"],
+        )
         mean_cmd_angular = commanded_angular_z
         mean_cmd_linear = commanded_linear_x
         mean_odom_yaw_rate = mean(yaw_rates)
@@ -198,7 +227,75 @@ class ActuationSmokeTest(Node):
             "linear_response_ratio": (
                 mean_odom_linear_x / mean_cmd_linear if abs(mean_cmd_linear) > 1e-9 else None
             ),
+            "wheel_actuation": wheel_debug,
             "odom_messages": len(odom_records),
+        }
+
+    def expected_wheel_targets(self, linear_x: float, angular_z: float) -> dict[str, float]:
+        left = (linear_x - angular_z * self.wheel_distance_m * 0.5) / self.wheel_radius_m
+        right = (linear_x + angular_z * self.wheel_distance_m * 0.5) / self.wheel_radius_m
+        return {
+            "lf_wheel_joint": left,
+            "lb_wheel_joint": left,
+            "rf_wheel_joint": right,
+            "rb_wheel_joint": right,
+        }
+
+    def summarize_wheel_debug(
+        self,
+        commanded_linear_x: float,
+        commanded_angular_z: float,
+        start_stamp_s: float,
+        end_stamp_s: float,
+    ) -> dict[str, Any]:
+        samples = [
+            sample
+            for sample in self.wheel_debug_history
+            if sample.get("receive_stamp_s") is not None
+            and start_stamp_s <= float(sample["receive_stamp_s"]) <= end_stamp_s
+        ]
+        expected = self.expected_wheel_targets(commanded_linear_x, commanded_angular_z)
+        wheel_names = ["lf_wheel_joint", "lb_wheel_joint", "rf_wheel_joint", "rb_wheel_joint"]
+        wheels: dict[str, Any] = {}
+        for wheel_name in wheel_names:
+            measured_values = []
+            drive_targets = []
+            commanded_values = []
+            for sample in samples:
+                wheel = (sample.get("wheels") or {}).get(wheel_name) or {}
+                measured = wheel.get("measured_velocity_radps")
+                drive_target = wheel.get("drive_target_velocity")
+                commanded = wheel.get("commanded_velocity_radps")
+                if measured is not None:
+                    measured_values.append(float(measured))
+                if drive_target is not None:
+                    drive_targets.append(float(drive_target))
+                if commanded is not None:
+                    commanded_values.append(float(commanded))
+            expected_target = expected[wheel_name]
+            mean_measured = mean(measured_values)
+            mean_drive_target = mean(drive_targets)
+            mean_commanded = mean(commanded_values) if commanded_values else expected_target
+            wheels[wheel_name] = {
+                "expected_commanded_velocity_radps": expected_target,
+                "mean_reported_commanded_velocity_radps": mean_commanded,
+                "mean_measured_velocity_radps": mean_measured,
+                "max_abs_measured_velocity_radps": max([abs(value) for value in measured_values], default=0.0),
+                "mean_drive_target_velocity": mean_drive_target if drive_targets else None,
+                "measured_to_expected_ratio": (
+                    mean_measured / expected_target if abs(expected_target) > 1e-9 and measured_values else None
+                ),
+                "drive_target_to_expected_ratio": (
+                    mean_drive_target / expected_target if abs(expected_target) > 1e-9 and drive_targets else None
+                ),
+                "samples": len(measured_values),
+            }
+        return {
+            "wheel_debug_topic": str(self.get_parameter("wheel_debug_topic").value),
+            "wheel_radius_m": self.wheel_radius_m,
+            "wheel_distance_m": self.wheel_distance_m,
+            "samples": len(samples),
+            "wheels": wheels,
         }
 
     def run_tests(self) -> dict[str, Any]:
@@ -225,6 +322,10 @@ class ActuationSmokeTest(Node):
             "duration_s": self.duration_s,
             "settle_duration_s": self.settle_duration_s,
             "publish_rate_hz": 1.0 / self.publish_period_s,
+            "wheel_debug_topic": str(self.get_parameter("wheel_debug_topic").value),
+            "wheel_radius_m": self.wheel_radius_m,
+            "wheel_distance_m": self.wheel_distance_m,
+            "wheel_debug_messages": len(self.wheel_debug_history),
             "tests": results,
         }
 

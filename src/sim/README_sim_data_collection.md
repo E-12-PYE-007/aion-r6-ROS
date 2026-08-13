@@ -928,6 +928,18 @@ ros2 run sim actuation_smoke_test \
 
 The test uses simulation time from `/sim_odom` header stamps. It runs three direct commands: turn left with `linear.x=0, angular.z=+0.3`, turn right with `linear.x=0, angular.z=-0.3`, and drive straight with `linear.x=+0.2, angular.z=0`. The JSON output records initial/final yaw, yaw change, measured yaw rates, commanded angular velocity, angular response ratio, distance, measured linear velocity, and linear response ratio. Use this before tuning Pure Pursuit if the tracker is saturating angular command but the rover barely turns.
 
+For wheel-level diagnosis, run the Isaac-side wheel telemetry publisher from the Isaac repo with Isaac's Python. Give it the same generated USD you want to test:
+
+```bash
+cd ~/isaac_files
+$ISAAC_SIM_PYTHON scripts/isaac_wheel_actuation_debug.py \
+  --usd-path scenes/generated/fence_gap_01/fence_gap_01_seed43_roverstart_right_base.usd
+```
+
+This opens the USD without modifying controller geometry, starts simulation playback, publishes `/isaac/wheel_actuation_debug`, and `actuation_smoke_test` automatically includes it in `actuation_smoke_test.json`. The wheel debug output includes nominal wheel targets, any existing `wheelRadius` / `wheelDistance` attributes found in the USD, `PhysicsDriveAPI:angular` `targetVelocity`, measured PhysX wheel DOF velocity, and measured/target ratios for each wheel.
+
+Leave the Isaac wheel telemetry process running while `actuation_smoke_test` runs. If the first terminal returns to a shell prompt before the ROS test starts, wheel telemetry is not active.
+
 Inspect diagnostics after a failed rollout:
 
 ```bash
