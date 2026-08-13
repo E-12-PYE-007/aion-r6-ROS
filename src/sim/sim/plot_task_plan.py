@@ -15,6 +15,7 @@ from sim.hybrid_astar import Pose
 from sim.validate_scene_task_specs import (
     build_planner,
     candidate_preserves_side,
+    fence_offset_cost_for_task,
     reference_path_for_task,
     reference_subgoals,
     shifted_subgoal_candidates,
@@ -61,8 +62,9 @@ def plan_path(
     start_yaw: float,
     subgoals: list[tuple[np.ndarray, float]],
     side_constraint_segments: list[tuple[np.ndarray, np.ndarray]],
+    point_cost_fn=None,
 ) -> tuple[list[np.ndarray] | None, list[tuple[np.ndarray, float]], int]:
-    planner = build_planner(collision_map, settings)
+    planner = build_planner(collision_map, settings, point_cost_fn=point_cost_fn)
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
     planned_path: list[np.ndarray] = []
     selected_subgoals: list[tuple[np.ndarray, float]] = []
@@ -155,6 +157,7 @@ def main() -> None:
         start_yaw,
         subgoals,
         side_constraint_segments_for_task(scene, task, flip_isaac_y),
+        fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y),
     )
     planned_ok = planned_path is not None
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""

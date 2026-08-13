@@ -91,6 +91,35 @@ def rollout_trajectory_name(suite_id: str, task_id: str, variant_id: str, visual
     return "__".join(parts)
 
 
+def unique_tags(*tag_groups: list[Any] | tuple[Any, ...] | None) -> list[str]:
+    tags: list[str] = []
+    for group in tag_groups:
+        if not group:
+            continue
+        for tag in group:
+            normalized = normalize_name(str(tag))
+            if normalized and normalized not in tags:
+                tags.append(normalized)
+    return tags
+
+
+FOLLOWING_TASK_TYPES = {
+    "follow_fence",
+    "follow_and_turn",
+    "follow_fence_sequence",
+    "follow_road",
+    "follow_shed_side",
+}
+
+
+def include_task_type(task_type: str | None, task_family: str) -> bool:
+    if task_family == "all_supported":
+        return True
+    if task_family == "following_only":
+        return task_type in FOLLOWING_TASK_TYPES
+    raise ValueError(f"Unsupported task_family: {task_family!r}")
+
+
 def pose_variant_layout_name(scene: dict[str, Any], task_id: str, variant_id: str) -> str:
     output_name = str(scene.get("scene_id") or scene.get("generated_usd") or "layout")
     output_name = Path(output_name).stem.removesuffix(".usd")
@@ -158,6 +187,7 @@ def build_rollouts_for_spec(
     include_invalid_variants: bool,
     include_visual_variations: bool,
     include_base_usd: bool,
+    task_family: str,
 ) -> list[dict[str, Any]]:
     scene = spec.get("scene", {})
     collection = spec.get("collection", {})
@@ -173,6 +203,8 @@ def build_rollouts_for_spec(
     for task in spec.get("tasks", []):
         task_id = str(task.get("task_id", ""))
         if not task_id:
+            continue
+        if not include_task_type(task.get("task_type"), task_family):
             continue
         variants = task.get("trajectory_variants") or [{"variant_id": "nominal", "variant_type": "nominal"}]
         for variant in variants:
@@ -200,6 +232,8 @@ def build_rollouts_for_spec(
                     "task_spec": spec_path.as_posix(),
                     "task_id": task_id,
                     "task_type": task.get("task_type"),
+                    "data_category": variant.get("data_category") or task.get("data_category", "normal"),
+                    "scenario_tags": unique_tags(task.get("scenario_tags", []), variant.get("scenario_tags", [])),
                     "variant_id": variant_id,
                     "variant_type": variant.get("variant_type", "nominal"),
                     "recovery_case": variant.get("recovery_case"),
@@ -237,6 +271,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-visual-variations", action="store_true")
     parser.add_argument("--no-base-usd", action="store_true")
     parser.add_argument("--summary", action="store_true")
+    parser.add_argument(
+        "--task-family",
+        choices=("following_only", "all_supported"),
+        default="following_only",
+        help=(
+            "Task set to include. The default keeps only path-following tasks and "
+            "skips stop, hold, gap-pass, switch-side, and approach-target tasks."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -262,6 +305,7 @@ def main() -> None:
                 include_invalid_variants=bool(args.include_invalid_variants),
                 include_visual_variations=bool(args.include_visual_variations),
                 include_base_usd=not bool(args.no_base_usd),
+                task_family=args.task_family,
             )
         )
 
@@ -273,6 +317,7 @@ def main() -> None:
         "pose_variant_layout_dir": as_manifest_path(pose_variant_layout_dir),
         "include_visual_variations": bool(args.include_visual_variations),
         "include_base_usd": not bool(args.no_base_usd),
+        "task_family": args.task_family,
         "counts": {
             "specs": len(spec_paths),
             "rollouts": len(rollouts),

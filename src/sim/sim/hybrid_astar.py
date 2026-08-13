@@ -6,7 +6,7 @@ from __future__ import annotations
 import heapq
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -41,6 +41,7 @@ class HybridAStarPlanner:
         yaw_tolerance_rad: float = math.radians(35.0),
         max_iterations: int = 20000,
         allow_reverse: bool = False,
+        point_cost_fn: Callable[[np.ndarray], float] | None = None,
     ) -> None:
         self.collision_map = collision_map
         self.grid_resolution_m = grid_resolution_m
@@ -51,6 +52,7 @@ class HybridAStarPlanner:
         self.yaw_tolerance_rad = yaw_tolerance_rad
         self.max_iterations = max_iterations
         self.allow_reverse = allow_reverse
+        self.point_cost_fn = point_cost_fn
 
     def plan(self, start: Pose, goal: Pose) -> list[np.ndarray] | None:
         if self.collision_map.is_collision(np.asarray([start.x, start.y], dtype=np.float64)):
@@ -236,7 +238,8 @@ class HybridAStarPlanner:
                         ),
                         abs(ds)
                         + turn_penalty
-                        + reverse_penalty,
+                        + reverse_penalty
+                        + self.primitive_soft_cost(primitive_points, abs(ds)),
                         primitive_points,
                     )
                 )
@@ -273,6 +276,12 @@ class HybridAStarPlanner:
                 )
 
         return successors
+
+    def primitive_soft_cost(self, primitive_points: list[np.ndarray], travel_distance_m: float) -> float:
+        if self.point_cost_fn is None or not primitive_points or travel_distance_m <= 0.0:
+            return 0.0
+        costs = [max(0.0, float(self.point_cost_fn(point))) for point in primitive_points]
+        return float(sum(costs) / len(costs)) * travel_distance_m
 
     def key(self, pose: Pose) -> tuple[int, int, int]:
         return (

@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import yaml
@@ -689,7 +689,11 @@ def reference_subgoals(reference_path: list[np.ndarray], settings: dict[str, Any
     return [sample_path_pose(reference_path, float(progress)) for progress in adjusted_progress_values]
 
 
-def build_planner(collision_map: CollisionMap, settings: dict[str, Any]) -> HybridAStarPlanner:
+def build_planner(
+    collision_map: CollisionMap,
+    settings: dict[str, Any],
+    point_cost_fn: Callable[[np.ndarray], float] | None = None,
+) -> HybridAStarPlanner:
     return HybridAStarPlanner(
         collision_map,
         grid_resolution_m=float(settings.get("grid_resolution_m", 0.25)),
@@ -700,6 +704,7 @@ def build_planner(collision_map: CollisionMap, settings: dict[str, Any]) -> Hybr
         yaw_tolerance_rad=math.radians(float(settings.get("subgoal_yaw_tolerance_deg", 180.0))),
         max_iterations=int(settings.get("hybrid_astar_max_iterations", 20000)),
         allow_reverse=bool(settings.get("allow_reverse", False)),
+        point_cost_fn=point_cost_fn,
     )
 
 
@@ -752,6 +757,34 @@ def side_constraint_segments_for_task(
     return segments
 
 
+def fence_offset_cost_for_task(
+    scene: dict[str, Any],
+    task: dict[str, Any],
+    variant: dict[str, Any],
+    settings: dict[str, Any],
+    flip_isaac_y: bool,
+) -> Callable[[np.ndarray], float] | None:
+    weight = float(settings.get("fence_offset_cost_weight", 0.6))
+    if weight <= 0.0:
+        return None
+    segments = side_constraint_segments_for_task(scene, task, flip_isaac_y)
+    if not segments:
+        return None
+
+    preferred_offset_m = float(variant.get("preferred_offset_m", 0.8))
+    deadband_m = max(0.0, float(settings.get("fence_offset_cost_deadband_m", 0.15)))
+    max_error_m = max(deadband_m, float(settings.get("fence_offset_cost_max_error_m", 2.0)))
+
+    def point_cost(point: np.ndarray) -> float:
+        distance_to_fence = min(point_to_segment_distance(point, start, end) for start, end in segments)
+        offset_error = abs(distance_to_fence - preferred_offset_m)
+        if offset_error <= deadband_m:
+            return 0.0
+        return weight * min(offset_error - deadband_m, max_error_m)
+
+    return point_cost
+
+
 def plan_through_subgoals(
     planner: HybridAStarPlanner,
     start_position: np.ndarray,
@@ -760,12 +793,14 @@ def plan_through_subgoals(
     collision_map: CollisionMap,
     settings: dict[str, Any],
     side_constraint_segments: list[tuple[np.ndarray, np.ndarray]] | None = None,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, dict[str, Any]]:
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
     if collision_map.is_collision(start_position):
-        return False, f"start pose {start_position.tolist()} is in collision"
+        return False, f"start pose {start_position.tolist()} is in collision", {}
 
     nudged_count = 0
+    nudge_distances: list[float] = []
+    planned_path: list[np.ndarray] = [start_position]
     max_lateral_m = float(settings.get("planner_subgoal_lateral_search_m", 2.0))
     max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
@@ -773,6 +808,7 @@ def plan_through_subgoals(
     side_constraint_segments = side_constraint_segments or []
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
+        selected_segment: list[np.ndarray] | None = None
         collision_candidates = 0
         free_candidates = 0
         attempted_candidates = 0
@@ -800,6 +836,7 @@ def plan_through_subgoals(
             )
             if segment is not None:
                 selected_position = candidate
+                selected_segment = segment
                 break
 
         if selected_position is None:
@@ -808,15 +845,47 @@ def plan_through_subgoals(
                 f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
                 f"({attempted_candidates}/{free_candidates} free candidates attempted, "
                 f"{collision_candidates} colliding candidates, {wrong_side_candidates} wrong-side candidates)"
-            )
+            ), {}
 
-        if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:
+        nudge_distance = float(np.linalg.norm(selected_position - goal_position))
+        if nudge_distance > 1e-6:
             nudged_count += 1
+            nudge_distances.append(nudge_distance)
+        if selected_segment:
+            planned_path.extend(selected_segment[1:] if len(selected_segment) > 1 else selected_segment)
         start_pose = Pose(float(selected_position[0]), float(selected_position[1]), float(goal_yaw))
 
+    metrics = {
+        "subgoal_count": len(subgoals),
+        "nudged_subgoals": nudged_count,
+        "max_nudge_m": max(nudge_distances) if nudge_distances else 0.0,
+        "mean_nudge_m": float(np.mean(nudge_distances)) if nudge_distances else 0.0,
+        "planned_path_length_m": path_length(planned_path),
+        "planned_point_count": len(planned_path),
+    }
     if nudged_count:
-        return True, f"nudged {nudged_count} reference subgoals to nearby reachable points"
-    return True, None
+        return True, f"nudged {nudged_count} reference subgoals to nearby reachable points", metrics
+    return True, None, metrics
+
+
+def trajectory_quality_errors(metrics: dict[str, Any], settings: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    max_nudged = int(settings.get("quality_max_nudged_subgoals", 8))
+    max_nudge_m = float(settings.get("quality_max_nudge_m", 2.0))
+    max_mean_nudge_m = float(settings.get("quality_max_mean_nudge_m", 1.25))
+    max_length_ratio = float(settings.get("quality_max_path_length_ratio", 4.0))
+
+    if int(metrics.get("nudged_subgoals", 0)) > max_nudged:
+        errors.append(f"nudged_subgoals {metrics.get('nudged_subgoals')} > {max_nudged}")
+    if float(metrics.get("max_nudge_m", 0.0)) > max_nudge_m:
+        errors.append(f"max_nudge_m {float(metrics.get('max_nudge_m', 0.0)):.2f} > {max_nudge_m:.2f}")
+    if float(metrics.get("mean_nudge_m", 0.0)) > max_mean_nudge_m:
+        errors.append(f"mean_nudge_m {float(metrics.get('mean_nudge_m', 0.0)):.2f} > {max_mean_nudge_m:.2f}")
+    if float(metrics.get("path_length_ratio", 1.0)) > max_length_ratio:
+        errors.append(
+            f"path_length_ratio {float(metrics.get('path_length_ratio', 1.0)):.2f} > {max_length_ratio:.2f}"
+        )
+    return errors
 
 
 def shifted_subgoal_candidates(
@@ -878,17 +947,18 @@ def planner_accepts_variant(
     task: dict[str, Any],
     variant: dict[str, Any],
     flip_isaac_y: bool,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, dict[str, Any]]:
     if task.get("task_type") == "hold_position":
-        return True, None
+        return True, None, {}
     try:
         reference_path = reference_path_for_task(scene, scene_yaml, task, variant, flip_isaac_y)
+        reference_length = path_length(reference_path)
         start_position, start_yaw = shifted_start_pose(scene, task, variant, flip_isaac_y)
         settings = variant.get("planner_settings") or {}
         required_clearance = float(settings.get("robot_radius_m", 0.35)) + float(settings.get("obstacle_padding_m", 0.25))
         clearance_error = fence_clearance_error(scene, start_position, required_clearance, flip_isaac_y)
         if clearance_error is not None:
-            return False, clearance_error
+            return False, clearance_error, {}
         subgoals = reference_subgoals(reference_path, settings)
         collision_map = CollisionMap.from_scene(
             scene,
@@ -898,8 +968,9 @@ def planner_accepts_variant(
             robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
             obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
         )
-        planner = build_planner(collision_map, settings)
-        planned, subgoal_note = plan_through_subgoals(
+        fence_cost_fn = fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y)
+        planner = build_planner(collision_map, settings, point_cost_fn=fence_cost_fn)
+        planned, subgoal_note, metrics = plan_through_subgoals(
             planner,
             start_position,
             start_yaw,
@@ -908,11 +979,23 @@ def planner_accepts_variant(
             settings,
             side_constraint_segments_for_task(scene, task, flip_isaac_y),
         )
+        metrics["reference_path_length_m"] = reference_length
+        metrics["path_length_ratio"] = (
+            float(metrics.get("planned_path_length_m", 0.0)) / max(reference_length, 1e-9)
+            if reference_length > 1e-9
+            else 1.0
+        )
+        if fence_cost_fn is not None:
+            metrics["fence_offset_cost_enabled"] = True
+            metrics["fence_offset_cost_weight"] = float(settings.get("fence_offset_cost_weight", 0.6))
     except Exception as exc:
-        return False, str(exc)
+        return False, str(exc), {}
     if not planned:
-        return False, subgoal_note or "Hybrid A* failed to plan through reference subgoals"
-    return True, subgoal_note
+        return False, subgoal_note or "Hybrid A* failed to plan through reference subgoals", metrics
+    quality_errors = trajectory_quality_errors(metrics, settings)
+    if quality_errors:
+        return False, "trajectory quality failed: " + "; ".join(quality_errors), metrics
+    return True, subgoal_note, metrics
 
 
 def filter_planner_valid_variants(
@@ -925,10 +1008,12 @@ def filter_planner_valid_variants(
     valid_variants = []
     errors = []
     for variant in variants:
-        accepted, reason = planner_accepts_variant(scene, scene_yaml, task, variant, flip_isaac_y)
+        accepted, reason, metrics = planner_accepts_variant(scene, scene_yaml, task, variant, flip_isaac_y)
         if accepted:
             checked_variant = dict(variant)
             checked_variant["planner_validation"] = {"checked": True, "valid": True}
+            if metrics:
+                checked_variant["planner_validation"]["quality"] = metrics
             if reason:
                 checked_variant["planner_validation"]["note"] = reason
             valid_variants.append(checked_variant)

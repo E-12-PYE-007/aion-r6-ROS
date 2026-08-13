@@ -165,20 +165,22 @@ It writes specs containing:
 - validation requirements
 - trajectory variants
 
-Current generated task families include:
+Current generated task families are following-only by default. This is intentional for the first edge-adapter fine-tuning set, because the supervision should focus on visually grounded path following rather than ambiguous stop/hold decisions.
 
 - `follow_fence`
 - `follow_and_turn`
 - `follow_fence_sequence`
-- `follow_corridor`
+- `follow_road`
+- `follow_shed_side`
+
+The old non-following task support is still present in the lower-level scripts for compatibility with older YAMLs, but it is excluded from new generation and collection manifests unless `--task-family all_supported` is passed. The excluded first-pass task types are:
+
 - `pass_through_gap`
 - `stop_at_gap`
 - `switch_sides`
 - `stop_at_landmark`
-- `follow_road`
-- `approach_target`
-- `follow_shed_side`
 - `hold_position`
+- `approach_target`
 
 Explicit obstacle-language tasks are intentionally disabled for now. Generated layout YAMLs can still contain obstacles, and Hybrid A* still plans around them, but the task language does not currently say things like "go around the boulder" or "pass the log on your left." This avoids generating instructions that the expert policy does not semantically guarantee yet.
 
@@ -187,7 +189,6 @@ The generator was updated to be geometry-aware instead of applying every task to
 - skips fence tasks when the start pose is too far from the relevant fence segment
 - computes `left`/`right` from actual segment geometry instead of only guessing from the start name
 - generates connected multi-segment fence tasks for loops, perimeters, and U-shaped fences
-- generates corridor-centerline tasks when two parallel fence lines form a corridor
 - improves gate/gap wording for inside/outside starts
 - still deduplicates task IDs before writing the final spec
 
@@ -210,7 +211,6 @@ Semantic validation checks things like:
 - connected segment tasks are actually connected
 - gap tasks refer to real collinear gaps
 - switch-side gaps are wide enough
-- corridor fences are parallel
 - expert support exists for the task type
 
 Planner validation checks each trajectory variant using Hybrid A*. Variants that fail planning can be filtered out when writing collection-ready specs. If all variants for a task fail, that task becomes invalid.
@@ -284,7 +284,6 @@ Resolves fenceline task specs into geometric reference paths. It supports:
 - single-fence following
 - two-segment turn following
 - multi-segment connected fence sequences
-- corridor centerline following
 - gap pass-through
 - stop at gap
 - switch sides through a gap
@@ -292,8 +291,6 @@ Resolves fenceline task specs into geometric reference paths. It supports:
 - hold position
 
 For fence-following tasks, it offsets the path from the fence by `preferred_offset_m`, which can come from the selected trajectory variant.
-
-For corridor tasks, it creates a centerline between the two parallel fences.
 
 ### Road expert policy
 
@@ -328,7 +325,7 @@ It uses shed bounding box dimensions from the Isaac asset metadata to build a pa
 
 Hybrid A* is used for obstacle-aware expert path generation. The geometric task resolver still defines the semantic intent and rough target path, and Hybrid A* creates a physically plausible path while respecting turning limits and collision constraints.
 
-The planner now follows reference subgoals sampled along the semantic path instead of planning only to the final goal. This is important for fence/road/shed following: it prevents the planner from taking a valid but semantically wrong shortcut across a rectangle, corridor, or perimeter scene.
+The planner now follows reference subgoals sampled along the semantic path instead of planning only to the final goal. This is important for fence/road/shed following: it prevents the planner from taking a valid but semantically wrong shortcut across a rectangle or perimeter scene.
 
 This is important because Isaac generated layouts can include obstacles such as plants, logs, and boulders. The planner helps route around them instead of blindly following a straight offset path.
 
@@ -677,7 +674,6 @@ This lets us collect multiple valid trajectories for one language instruction/ta
 - Only generate gap tasks for collinear fence sections with a real gap.
 - Only generate switch-side tasks when the gap is wide enough.
 - Only generate sequence tasks for connected chains with at least three fences.
-- Only generate corridor tasks when exactly two fences are parallel and separated.
 - Gate wording is based on start labels such as `inside`, `outside`, and `gate`.
 
 ### Validation rules
@@ -688,7 +684,6 @@ This lets us collect multiple valid trajectories for one language instruction/ta
 - Follow side must match actual geometry.
 - Turn direction must match actual geometry.
 - Connected sequence fences must have matching endpoints.
-- Corridor fences must be parallel.
 - Gap center must match the detected gap.
 - Planner validation checks Hybrid A* through reference subgoals and can filter impossible variants.
 
@@ -727,30 +722,9 @@ sequence_type: perimeter
 
 The fenceline expert resolves this by concatenating all target fences and offsetting the resulting path.
 
-### `follow_corridor`
-
-Used for two parallel fence lines forming a passage.
-
-Important fields:
-
-```yaml
-task_type: follow_corridor
-corridor_fences:
-  - left_fence
-  - right_fence
-```
-
-The fenceline expert resolves this as the centerline between the two fences.
-
 ### Gate/gap tasks
 
-Existing gap task types are reused:
-
-- `pass_through_gap`
-- `stop_at_gap`
-- `switch_sides`
-
-For gate-like scenes, the generated language now includes enter/exit/pass-through wording when the start pose name indicates inside/outside/gate context.
+Gate/gap task support still exists for older task specs, but these tasks are excluded from the current first-pass training data. This avoids mixing path-following supervision with ambiguous squeeze-through, stop-at-gap, or switch-side behaviours while the edge-adapter training pipeline is being stabilised.
 
 ## Deleted Old Generated Task Files
 
@@ -778,6 +752,8 @@ generate_scene_task_specs
 validate_scene_task_specs
 expand_pose_variants
 generate_collection_manifest
+balance_collection_manifest
+summarize_collection_manifest
 run_collection_manifest
 validate_collected_rollout
 prepare_isaac_rollout
@@ -793,6 +769,8 @@ Generate task specs:
 ```bash
 ros2 run sim generate_scene_task_specs <isaac_yaml_or_dir> --output-dir src/sim/config/generated_task_specs --summary
 ```
+
+This command defaults to `--task-family following_only`, so it generates only fence, road, and shed following tasks. To reproduce old experimental task specs, explicitly pass `--task-family all_supported`.
 
 Validate scene semantics:
 
@@ -815,6 +793,69 @@ ros2 run sim generate_collection_manifest \
   --isaac-root ~/isaac_files \
   --summary
 ```
+
+This also defaults to `--task-family following_only`, which means stale generated specs containing old stop/gap/switch tasks will not be scheduled for collection. Use `--task-family all_supported` only when intentionally collecting those older task families.
+
+Balance a larger manifest before collection:
+
+```bash
+ros2 run sim balance_collection_manifest \
+  src/sim/config/collection_manifest.yaml \
+  --output src/sim/config/collection_manifest_balanced.yaml \
+  --max-rollouts 200 \
+  --group-by task_type \
+  --summary
+```
+
+The balancer is a manifest post-processing step. It does not regenerate Isaac scenes or task specs. By default it uses the `following_first_pass` preset, which weights following rows toward basic fence following while still keeping turn, sequence, road, and shed-side examples. Use `--group-by variant_type` to balance nominal/clearance/recovery rows, or repeat `--group-by` to balance combinations such as `task_type` plus `variant_type`.
+
+Summarise manifest coverage before collection:
+
+```bash
+ros2 run sim summarize_collection_manifest src/sim/config/collection_manifest_balanced.yaml
+```
+
+This prints rollout counts by status, pose-variant readiness, config type, scene, task type, variant type, data category, recovery case, visual variant, and scenario tags. Use it before launching a batch to check that the manifest contains the intended mix of normal, ambiguous, recovery, and terminal rows.
+
+For a machine-readable summary:
+
+```bash
+ros2 run sim summarize_collection_manifest src/sim/config/collection_manifest_balanced.yaml --json
+```
+
+Planner validation also records trajectory-quality metrics for each accepted variant under `planner_validation.quality`. These include:
+
+```text
+subgoal_count
+nudged_subgoals
+max_nudge_m
+mean_nudge_m
+planned_path_length_m
+reference_path_length_m
+path_length_ratio
+planned_point_count
+```
+
+The default quality gates reject planner variants that require more than 8 nudged subgoals, nudge any single subgoal by more than 2.0 m, have mean nudge distance above 1.25 m, or produce a planned/reference path length ratio above 4.0. Per-variant `planner_settings` can override these with:
+
+```text
+quality_max_nudged_subgoals
+quality_max_nudge_m
+quality_max_mean_nudge_m
+quality_max_path_length_ratio
+```
+
+For fenceline tasks, Hybrid A* also uses a soft fence-offset cost. This does not make fence distance a hard constraint; obstacles and collision avoidance still win. It simply makes plans cheaper when they stay near the selected `preferred_offset_m`, so detours should return to the fence-following offset instead of staying unnecessarily wide.
+
+Default fenceline offset-cost settings:
+
+```text
+fence_offset_cost_weight: 0.6
+fence_offset_cost_deadband_m: 0.15
+fence_offset_cost_max_error_m: 2.0
+```
+
+Increase `fence_offset_cost_weight` if valid paths are still drifting too far from the fence. Decrease it if the planner becomes too reluctant to make necessary obstacle detours.
 
 Include existing sky/ground USD variations as separate rollout rows:
 
@@ -871,6 +912,41 @@ ros2 run sim validate_collected_rollout \
   --expected-task-id follow_example_task \
   --expected-variant-id nominal
 ```
+
+Export collected rollouts for AG-VLA edge-adapter training:
+
+```bash
+ros2 run sim export_edge_training_manifest \
+  ~/sim_datasets/generated \
+  --out-manifest ~/sim_datasets/generated/manifests/train.jsonl \
+  --min-samples 2 \
+  --overwrite
+```
+
+This scans rollout folders containing:
+
+```text
+img/
+poses.jsonl
+metadata.json
+```
+
+and writes:
+
+```text
+target_waypoints.npy
+timestamps.npy
+manifests/train.jsonl
+```
+
+The exported manifest lines match the `ag_vla` `edge_adapter_training` branch. The target labels come from each logged `/vla/action_chunk`:
+
+```text
+target_waypoints [T, 8, 3]
+waypoint = [x_forward_m, y_left_m, yaw_rad]
+```
+
+Samples without a valid image, timestamp, or 8-pose action chunk are skipped. Stop cases are kept as long as the expert publishes an action chunk; they should appear as near-zero future relative poses.
 
 ### Manual parallel worker test
 

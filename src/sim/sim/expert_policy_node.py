@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 from aion_msgs.msg import ActionChunk
@@ -170,6 +170,9 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("planner_subgoal_endpoint_margin_m", 0.5)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
         self.declare_parameter("allow_reverse", False)
+        self.declare_parameter("fence_offset_cost_weight", 0.6)
+        self.declare_parameter("fence_offset_cost_deadband_m", 0.15)
+        self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
         self.declare_parameter("max_speed_mps", 0.35)
         self.declare_parameter("max_yaw_rate_radps", 0.45)
         self.declare_parameter("max_accel_mps2", 0.25)
@@ -315,7 +318,32 @@ class ExpertPolicyNode(Node):
             ),
             max_iterations=int(self.planner_setting("hybrid_astar_max_iterations", "hybrid_astar_max_iterations")),
             allow_reverse=bool(self.planner_setting("allow_reverse", "allow_reverse")),
+            point_cost_fn=self.fence_offset_cost_fn(),
         )
+
+    def fence_offset_cost_fn(self) -> Callable[[np.ndarray], float] | None:
+        weight = float(self.planner_setting("fence_offset_cost_weight", "fence_offset_cost_weight"))
+        if weight <= 0.0:
+            return None
+        segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_isaac_y)
+        if not segments:
+            return None
+
+        preferred_offset_m = float(self.variant.get("preferred_offset_m", 0.8))
+        deadband_m = max(0.0, float(self.planner_setting("fence_offset_cost_deadband_m", "fence_offset_cost_deadband_m")))
+        max_error_m = max(
+            deadband_m,
+            float(self.planner_setting("fence_offset_cost_max_error_m", "fence_offset_cost_max_error_m")),
+        )
+
+        def point_cost(point: np.ndarray) -> float:
+            distance_to_fence = min(point_to_segment_distance(point, start, end) for start, end in segments)
+            offset_error = abs(distance_to_fence - preferred_offset_m)
+            if offset_error <= deadband_m:
+                return 0.0
+            return weight * min(offset_error - deadband_m, max_error_m)
+
+        return point_cost
 
     def plan_through_subgoals(
         self,

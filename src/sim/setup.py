@@ -43,10 +43,13 @@ setup(
             'plot_task_plan = sim.plot_task_plan:main',
             'expand_pose_variants = sim.expand_pose_variants:main',
             'generate_collection_manifest = sim.generate_collection_manifest:main',
+            'balance_collection_manifest = sim.balance_collection_manifest:main',
+            'summarize_collection_manifest = sim.summarize_collection_manifest:main',
             'run_collection_manifest = sim.run_collection_manifest:main',
             'validate_collected_rollout = sim.validate_collected_rollout:main',
             'prepare_isaac_rollout = sim.prepare_isaac_rollout:main',
             'collect_task_spec_rollouts = sim.collect_task_spec_rollouts:main',
+            'export_edge_training_manifest = sim.export_edge_training_manifest:main',
 
         ],
     },

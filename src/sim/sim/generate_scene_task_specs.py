@@ -203,6 +203,13 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_endpoint_margin_m": 0.5,
     "hybrid_astar_max_iterations": 20000,
     "allow_reverse": False,
+    "fence_offset_cost_weight": 0.6,
+    "fence_offset_cost_deadband_m": 0.15,
+    "fence_offset_cost_max_error_m": 2.0,
+    "quality_max_nudged_subgoals": 8,
+    "quality_max_nudge_m": 2.0,
+    "quality_max_mean_nudge_m": 1.25,
+    "quality_max_path_length_ratio": 4.0,
 }
 
 DEFAULT_SPEED_PROFILE = {
@@ -215,6 +222,62 @@ DEFAULT_SPEED_PROFILE = {
     "stop_at_end": True,
 }
 
+TERMINAL_TASK_TYPES = {"hold_position", "stop_at_gap", "stop_at_landmark"}
+AMBIGUOUS_TASK_TYPES = {"pass_through_gap", "switch_sides"}
+TURN_TASK_TYPES = {"follow_and_turn", "follow_fence_sequence"}
+FOLLOWING_TASK_TYPES = {
+    "follow_fence",
+    "follow_and_turn",
+    "follow_fence_sequence",
+    "follow_road",
+    "follow_shed_side",
+}
+
+
+def unique_tags(*tag_groups: list[str] | tuple[str, ...] | None) -> list[str]:
+    tags: list[str] = []
+    for group in tag_groups:
+        if not group:
+            continue
+        for tag in group:
+            normalized = normalize_name(str(tag))
+            if normalized and normalized not in tags:
+                tags.append(normalized)
+    return tags
+
+
+def default_task_category(task_type: str) -> str:
+    if task_type in TERMINAL_TASK_TYPES:
+        return "terminal"
+    if task_type in AMBIGUOUS_TASK_TYPES:
+        return "ambiguous"
+    return "normal"
+
+
+def default_task_tags(task_type: str) -> list[str]:
+    tags = [task_type]
+    if task_type in TERMINAL_TASK_TYPES:
+        tags.append("terminal")
+    if task_type in AMBIGUOUS_TASK_TYPES:
+        tags.append("ambiguous")
+    if task_type in TURN_TASK_TYPES:
+        tags.extend(["turning", "curved_reference"])
+    if task_type in {"follow_fence", "follow_road", "follow_shed_side"}:
+        tags.append("path_following")
+    if task_type in {"approach_target", "pass_through_gap", "switch_sides"}:
+        tags.append("goal_directed")
+    return unique_tags(tags)
+
+
+def terminal_speed_profile() -> dict[str, Any]:
+    return {
+        "max_speed_mps": 0.22,
+        "max_yaw_rate_radps": 0.35,
+        "max_decel_mps2": 0.2,
+        "min_profile_speed_mps": 0.02,
+        "stop_at_end": True,
+    }
+
 
 def variant_settings(
     variant_id: str,
@@ -224,6 +287,8 @@ def variant_settings(
     speed_overrides: dict[str, Any] | None = None,
     start_pose_delta: dict[str, float] | None = None,
     recovery_case: str | None = None,
+    data_category: str = "normal",
+    scenario_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     planner_settings = dict(DEFAULT_PLANNER_SETTINGS)
     if planner_overrides:
@@ -234,6 +299,8 @@ def variant_settings(
     return {
         "variant_id": variant_id,
         "variant_type": variant_type,
+        "data_category": data_category,
+        "scenario_tags": unique_tags(scenario_tags),
         "recovery_case": recovery_case,
         "preferred_offset_m": preferred_offset_m,
         "start_pose_delta": start_pose_delta or {"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.0},
@@ -242,25 +309,62 @@ def variant_settings(
     }
 
 
-def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
+def trajectory_variants_for_task(
+    task_type: str,
+    task_category: str | None = None,
+    task_tags: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    category = task_category or default_task_category(task_type)
+    base_tags = unique_tags(task_tags, default_task_tags(task_type))
     variants = [
-        variant_settings("nominal", "nominal", 0.8),
+        variant_settings(
+            "nominal",
+            "nominal",
+            0.8,
+            data_category=category,
+            scenario_tags=unique_tags(base_tags, ["nominal"]),
+        ),
         variant_settings(
             "cautious_wide_clearance",
             "clearance",
             1.0,
             planner_overrides={"obstacle_padding_m": 0.35, "min_turn_radius_m": 0.85},
             speed_overrides={"max_speed_mps": 0.25, "max_yaw_rate_radps": 0.35},
+            data_category="ambiguous",
+            scenario_tags=unique_tags(base_tags, ["ambiguous", "wide_clearance", "alternate_offset"]),
         ),
         variant_settings(
             "normal_tight_clearance",
             "clearance",
             0.65,
             planner_overrides={"obstacle_padding_m": 0.2},
+            data_category="ambiguous",
+            scenario_tags=unique_tags(base_tags, ["ambiguous", "tight_clearance", "alternate_offset"]),
         ),
     ]
     if task_type == "hold_position":
         return variants[:1]
+
+    if task_type in TERMINAL_TASK_TYPES:
+        variants.extend([
+            variant_settings(
+                "terminal_slow_approach",
+                "terminal",
+                0.8,
+                speed_overrides=terminal_speed_profile(),
+                data_category="terminal",
+                scenario_tags=unique_tags(base_tags, ["terminal", "slow_approach", "precise_stop"]),
+            ),
+            variant_settings(
+                "terminal_cautious_offset",
+                "terminal",
+                1.0,
+                planner_overrides={"obstacle_padding_m": 0.3, "min_turn_radius_m": 0.85},
+                speed_overrides=terminal_speed_profile(),
+                data_category="terminal",
+                scenario_tags=unique_tags(base_tags, ["terminal", "cautious_stop", "alternate_offset"]),
+            ),
+        ])
 
     variants.extend([
         variant_settings(
@@ -269,6 +373,8 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
             0.8,
             start_pose_delta={"x_m": 0.0, "y_m": 0.15, "yaw_rad": 0.35},
             recovery_case="lost_target_left",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "lateral_offset", "wrong_heading"]),
         ),
         variant_settings(
             "recovery_right_offset",
@@ -276,6 +382,8 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
             0.8,
             start_pose_delta={"x_m": 0.0, "y_m": -0.15, "yaw_rad": -0.35},
             recovery_case="lost_target_right",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "lateral_offset", "wrong_heading"]),
         ),
         variant_settings(
             "recovery_wrong_heading",
@@ -284,6 +392,38 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
             speed_overrides={"max_speed_mps": 0.25, "max_yaw_rate_radps": 0.35},
             start_pose_delta={"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.85},
             recovery_case="wrong_heading",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "wrong_heading"]),
+        ),
+        variant_settings(
+            "recovery_too_close",
+            "recovery",
+            0.8,
+            speed_overrides={"max_speed_mps": 0.22, "max_yaw_rate_radps": 0.35},
+            start_pose_delta={"x_m": 0.0, "y_m": -0.35, "yaw_rad": 0.2},
+            recovery_case="start_too_close",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "start_too_close"]),
+        ),
+        variant_settings(
+            "recovery_too_far",
+            "recovery",
+            0.8,
+            speed_overrides={"max_speed_mps": 0.25, "max_yaw_rate_radps": 0.35},
+            start_pose_delta={"x_m": 0.0, "y_m": 0.45, "yaw_rad": -0.2},
+            recovery_case="start_too_far",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "start_too_far"]),
+        ),
+        variant_settings(
+            "recovery_bad_approach_heading",
+            "recovery",
+            0.8,
+            speed_overrides={"max_speed_mps": 0.2, "max_yaw_rate_radps": 0.4},
+            start_pose_delta={"x_m": -0.25, "y_m": 0.0, "yaw_rad": 1.2},
+            recovery_case="bad_approach_heading",
+            data_category="recovery",
+            scenario_tags=unique_tags(base_tags, ["recovery", "bad_approach", "wrong_heading"]),
         ),
     ])
     if task_type in {"pass_through_gap", "switch_sides"}:
@@ -298,13 +438,25 @@ def trajectory_variants_for_task(task_type: str) -> list[dict[str, Any]]:
 
 
 def make_task(task_id: str, task_type: str, **fields: Any) -> dict[str, Any]:
+    data_category = fields.pop("data_category", default_task_category(task_type))
+    scenario_tags = unique_tags(default_task_tags(task_type), fields.pop("scenario_tags", None))
     task = {
         "task_id": normalize_name(task_id),
         "task_type": task_type,
+        "data_category": data_category,
+        "scenario_tags": scenario_tags,
     }
     task.update(fields)
-    task.setdefault("trajectory_variants", trajectory_variants_for_task(task_type))
+    task.setdefault("trajectory_variants", trajectory_variants_for_task(task_type, data_category, scenario_tags))
     return task
+
+
+def add_domain_tags(tasks: list[dict[str, Any]], *domain_tags: str) -> list[dict[str, Any]]:
+    for task in tasks:
+        task["scenario_tags"] = unique_tags(task.get("scenario_tags", []), list(domain_tags))
+        for variant in task.get("trajectory_variants", []):
+            variant["scenario_tags"] = unique_tags(variant.get("scenario_tags", []), list(domain_tags))
+    return tasks
 
 
 def connected_segments(
@@ -370,45 +522,6 @@ def is_closed_chain(chain: list[dict[str, Any]]) -> bool:
     return len(chain) >= 3 and endpoint_key(chain[0]["start"]) == endpoint_key(chain[-1]["end"])
 
 
-def parallel_corridor_pair(segments: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    if len(segments) != 2:
-        return None
-    first, second = segments
-    first_heading = heading_of(first)
-    second_heading = heading_of(second)
-    heading_delta = abs(wrap_to_pi(first_heading - second_heading))
-    if min(heading_delta, abs(math.pi - heading_delta)) > 0.12:
-        return None
-    direction = (math.cos(first_heading), math.sin(first_heading))
-    normal = (-direction[1], direction[0])
-
-    first_start = xy(first["start"])
-    first_end = xy(first["end"])
-    second_start = xy(second["start"])
-    second_end = xy(second["end"])
-
-    first_s = 0.0
-    first_e = distance(first_start, first_end)
-    second_projections = [
-        (point[0] - first_start[0]) * direction[0] + (point[1] - first_start[1]) * direction[1]
-        for point in (second_start, second_end)
-    ]
-    second_s = min(second_projections)
-    second_e = max(second_projections)
-    overlap = min(first_e, second_e) - max(first_s, second_s)
-    if overlap < 1.0:
-        return None
-
-    lateral_offsets = [
-        (point[0] - first_start[0]) * normal[0] + (point[1] - first_start[1]) * normal[1]
-        for point in (second_start, second_end)
-    ]
-    lateral_separation = abs(sum(lateral_offsets) * 0.5)
-    if lateral_separation < 1.2 or lateral_separation > 4.0:
-        return None
-    return first, second
-
-
 def start_region_label(start_name: str) -> str:
     name = start_name.lower()
     if "inside" in name:
@@ -463,42 +576,12 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
         ))
 
 
-def add_corridor_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]], starts: dict[str, dict[str, Any]]) -> None:
-    corridor = parallel_corridor_pair(fences)
-    if corridor is None:
-        return
-    left_fence, right_fence = corridor
-    for start_name in starts:
-        tasks.append(make_task(
-            f"follow_corridor_between_{left_fence['name']}_and_{right_fence['name']}_from_{start_name}",
-            "follow_corridor",
-            **instruction_pack(
-                "Drive between the fences.",
-                [
-                    "Follow the corridor between the fence lines.",
-                    "Stay centered between the two fences.",
-                    "Continue forward through the fenced passage.",
-                ],
-            ),
-            start_pose=start_name,
-            corridor_fences=[left_fence["name"], right_fence["name"]],
-            travel_direction="forward",
-            success_condition={
-                "type": "reach_path_end",
-                "target_point": midpoint(xy(left_fence["end"]), xy(right_fence["end"])),
-                "min_progress_m": max(2.0, distance(xy(left_fence["start"]), xy(left_fence["end"])) - 1.0),
-            },
-            validation=validation(),
-        ))
-
-
 def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     fences = scene.get("fences") or []
     starts = get_start_poses(scene)
     tasks: list[dict[str, Any]] = []
 
     add_sequence_tasks(tasks, fences, starts)
-    add_corridor_tasks(tasks, fences, starts)
 
     for start_name in starts:
         start_pose = starts[start_name]
@@ -715,7 +798,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 validation=validation(),
             ))
 
-    return tasks
+    return add_domain_tags(tasks, "fenceline")
 
 
 def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
@@ -824,7 +907,7 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 validation=validation(),
             ))
 
-    return tasks
+    return add_domain_tags(tasks, "road")
 
 
 def shed_side_from_start(start_pose_name: str) -> str:
@@ -904,7 +987,7 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             validation=validation(min_progress_m=0.0, min_samples=10),
         ))
 
-    return tasks
+    return add_domain_tags(tasks, "shedline")
 
 
 def obstacle_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
@@ -967,7 +1050,15 @@ def _disabled_obstacle_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     return tasks
 
 
-def generate_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
+def filter_tasks_for_family(tasks: list[dict[str, Any]], task_family: str) -> list[dict[str, Any]]:
+    if task_family == "all_supported":
+        return tasks
+    if task_family == "following_only":
+        return [task for task in tasks if task.get("task_type") in FOLLOWING_TASK_TYPES]
+    raise ValueError(f"Unsupported task_family: {task_family!r}")
+
+
+def generate_tasks(scene: dict[str, Any], task_family: str = "following_only") -> list[dict[str, Any]]:
     config_type = infer_config_type(scene)
     if config_type == "fenceline":
         tasks = generate_fenceline_tasks(scene)
@@ -978,7 +1069,7 @@ def generate_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         raise ValueError(f"Unsupported config_type: {config_type!r}")
     tasks.extend(obstacle_tasks(scene))
-    return dedupe_tasks(tasks)
+    return filter_tasks_for_family(dedupe_tasks(tasks), task_family)
 
 
 def dedupe_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -993,7 +1084,7 @@ def dedupe_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique
 
 
-def build_spec(scene_path: Path, scene: dict[str, Any]) -> dict[str, Any]:
+def build_spec(scene_path: Path, scene: dict[str, Any], task_family: str = "following_only") -> dict[str, Any]:
     scene_id = scene_id_from_path(scene_path, scene)
     config_type = infer_config_type(scene)
     generated_usd = None
@@ -1013,7 +1104,7 @@ def build_spec(scene_path: Path, scene: dict[str, Any]) -> dict[str, Any]:
         },
         "collection": DEFAULT_COLLECTION.copy(),
         "expert": DEFAULT_EXPERT.copy(),
-        "tasks": generate_tasks(scene),
+        "tasks": generate_tasks(scene, task_family),
     }
 
 
@@ -1047,6 +1138,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print a compact task count summary after writing files.",
     )
+    parser.add_argument(
+        "--task-family",
+        choices=("following_only", "all_supported"),
+        default="following_only",
+        help=(
+            "Task set to generate. The default keeps only path-following tasks and "
+            "excludes stop, hold, gap-pass, switch-side, and approach-target tasks."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1061,7 +1161,7 @@ def main() -> None:
         scene = load_yaml(scene_path)
         if infer_config_type(scene) == "unknown":
             continue
-        spec = build_spec(scene_path, scene)
+        spec = build_spec(scene_path, scene, args.task_family)
         output_path = args.output_dir / f"{spec['scene']['scene_id']}_task_spec.yaml"
         write_yaml(output_path, spec)
         task_count = len(spec["tasks"])
