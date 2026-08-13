@@ -909,13 +909,16 @@ Each rollout also starts `rollout_diagnostics` beside the tracker, expert, and c
 <rollout_dir>/diagnostics_summary.json
 ```
 
-The diagnostics record topic message counts, topic rates, odom distance, action-chunk first/last waypoints, negative action-x fraction, expert `/expert/cmd_vel`, and tracker `/cmd_vel`. `validate_collected_rollout` reads `diagnostics_summary.json` when present and adds likely-failure hints, such as missing action chunks, missing tracker commands, tiny tracker output, or Isaac not moving despite positive commands.
+The diagnostics record topic message counts, topic rates, odom distance, action-chunk first/last waypoints, negative action-x fraction, expert `/expert/cmd_vel`, and tracker `/cmd_vel`. They also record both wall-clock elapsed time and simulation elapsed time from `/sim_odom` header stamps, plus the estimated real-time factor. `validate_collected_rollout` reads `diagnostics_summary.json` when present and adds likely-failure hints, such as missing action chunks, missing tracker commands, tiny tracker output, or Isaac not moving despite positive commands.
+
+Rollout duration is measured in simulation time, not wall-clock time. The runner starts `wait_for_sim_duration` and waits until `/sim_odom` timestamps have advanced by the requested `duration_s`. If Isaac runs slower than real time, the wall-clock rollout will take longer, but the collected data should cover the intended amount of simulated motion.
 
 Inspect diagnostics after a failed rollout:
 
 ```bash
 cat <rollout_dir>/diagnostics_summary.json
 head <rollout_dir>/diagnostics.csv
+cat logs/sim_rollouts/<trajectory_name>/tracker.log
 ```
 
 After a real rollout, the manifest runner validates the collected folder before marking the row complete. It checks for `metadata.json`, `poses.jsonl`, saved JPEGs, image references, minimum sample count, action chunks, `cmd_vel`, task/variant metadata, and required motion. Use `--skip-validation` only for debugging.

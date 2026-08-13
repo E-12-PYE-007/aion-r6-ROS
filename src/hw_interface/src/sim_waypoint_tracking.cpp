@@ -70,15 +70,22 @@ class SimWaypointTracker : public rclcpp::Node
             vel_targets = _controller->computeCommand(*_current_action_chunk, *_current_pose);
             auto msg = geometry_msgs::msg::Twist();
 
-            msg.angular.z = -vel_targets.yaw_rate;
+            msg.angular.z = vel_targets.yaw_rate;
             msg.linear.x = vel_targets.speed_body_x;
 
             RCLCPP_INFO(
                 this->get_logger(),
-                "Controller: linear=%.3f internal_angular=%.3f published_angular=%.3f",
+                "Controller: linear=%.3f angular=%.3f target_idx=%u target=(%.3f, %.3f) dist=%.3f heading_error=%.3f curvature=%.3f raw_angular=%.3f found=%s",
                 vel_targets.speed_body_x,
                 vel_targets.yaw_rate,
-                msg.angular.z
+                vel_targets.target_index,
+                vel_targets.target_x,
+                vel_targets.target_y,
+                vel_targets.target_distance,
+                vel_targets.heading_error,
+                vel_targets.curvature,
+                vel_targets.raw_yaw_rate,
+                vel_targets.target_found ? "true" : "false"
             );
             publisher_->publish(msg);
         }

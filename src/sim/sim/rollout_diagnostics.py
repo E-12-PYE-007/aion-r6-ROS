@@ -31,6 +31,10 @@ def yaw_from_quaternion(quat) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def stamp_to_seconds(stamp) -> float:
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+
 def rate_hz(times: list[float]) -> float:
     if len(times) < 2:
         return 0.0
@@ -74,6 +78,8 @@ class RolloutDiagnosticsNode(Node):
         self.summary_path = self.output_dir / "diagnostics_summary.json"
 
         self.start_time = time.monotonic()
+        self.initial_odom_stamp_s: float | None = None
+        self.latest_odom_stamp_s: float | None = None
         self.finalized = False
 
         self.times: dict[str, list[float]] = {
@@ -82,6 +88,11 @@ class RolloutDiagnosticsNode(Node):
             "action_chunk": [],
             "expert_cmd_vel": [],
             "cmd_vel": [],
+        }
+        self.stamps: dict[str, list[float]] = {
+            "odom": [],
+            "camera": [],
+            "action_chunk": [],
         }
         self.latest: dict[str, Any] = {
             "odom": {},
@@ -146,6 +157,12 @@ class RolloutDiagnosticsNode(Node):
     def csv_fields() -> list[str]:
         return [
             "elapsed_s",
+            "wall_elapsed_s",
+            "odom_stamp_s",
+            "sim_elapsed_s",
+            "real_time_factor",
+            "camera_stamp_s",
+            "action_stamp_s",
             "odom_x",
             "odom_y",
             "odom_yaw",
@@ -182,6 +199,12 @@ class RolloutDiagnosticsNode(Node):
     def odom_callback(self, msg: Odometry) -> None:
         now = self.now()
         self.times["odom"].append(now)
+        odom_stamp_s = stamp_to_seconds(msg.header.stamp)
+        if odom_stamp_s > 0.0:
+            self.stamps["odom"].append(odom_stamp_s)
+            self.latest_odom_stamp_s = odom_stamp_s
+            if self.initial_odom_stamp_s is None:
+                self.initial_odom_stamp_s = odom_stamp_s
         x = float(msg.pose.pose.position.x)
         y = float(msg.pose.pose.position.y)
         yaw = yaw_from_quaternion(msg.pose.pose.orientation)
@@ -199,9 +222,15 @@ class RolloutDiagnosticsNode(Node):
 
     def camera_callback(self, _msg: Image) -> None:
         self.times["camera"].append(self.now())
+        stamp_s = stamp_to_seconds(_msg.header.stamp)
+        if stamp_s > 0.0:
+            self.stamps["camera"].append(stamp_s)
 
     def action_chunk_callback(self, msg: ActionChunk) -> None:
         self.times["action_chunk"].append(self.now())
+        stamp_s = stamp_to_seconds(msg.header.stamp)
+        if stamp_s > 0.0:
+            self.stamps["action_chunk"].append(stamp_s)
         poses = list(msg.relative_poses)
         if poses:
             xs = [float(pose.x) for pose in poses]
@@ -241,6 +270,15 @@ class RolloutDiagnosticsNode(Node):
         self.latest["cmd_vel"] = {"linear_x": linear_x, "angular_z": angular_z}
 
     def write_row(self) -> None:
+        wall_elapsed_s = self.now() - self.start_time
+        sim_elapsed_s = None
+        if self.initial_odom_stamp_s is not None and self.latest_odom_stamp_s is not None:
+            sim_elapsed_s = max(0.0, self.latest_odom_stamp_s - self.initial_odom_stamp_s)
+        real_time_factor = (
+            sim_elapsed_s / wall_elapsed_s
+            if sim_elapsed_s is not None and wall_elapsed_s > 1e-9
+            else None
+        )
         odom = self.latest.get("odom") or {}
         action = self.latest.get("action_chunk") or {}
         first = action.get("first") or [None, None, None]
@@ -248,7 +286,13 @@ class RolloutDiagnosticsNode(Node):
         expert = self.latest.get("expert_cmd_vel") or {}
         cmd = self.latest.get("cmd_vel") or {}
         row = {
-            "elapsed_s": self.now() - self.start_time,
+            "elapsed_s": wall_elapsed_s,
+            "wall_elapsed_s": wall_elapsed_s,
+            "odom_stamp_s": self.latest_odom_stamp_s,
+            "sim_elapsed_s": sim_elapsed_s,
+            "real_time_factor": real_time_factor,
+            "camera_stamp_s": self.stamps["camera"][-1] if self.stamps["camera"] else None,
+            "action_stamp_s": self.stamps["action_chunk"][-1] if self.stamps["action_chunk"] else None,
             "odom_x": finite(odom.get("x")),
             "odom_y": finite(odom.get("y")),
             "odom_yaw": finite(odom.get("yaw")),
@@ -283,11 +327,17 @@ class RolloutDiagnosticsNode(Node):
 
     def summary(self) -> dict[str, Any]:
         duration_s = max(self.now() - self.start_time, 0.0)
+        sim_elapsed_s = 0.0
+        if self.initial_odom_stamp_s is not None and self.latest_odom_stamp_s is not None:
+            sim_elapsed_s = max(0.0, self.latest_odom_stamp_s - self.initial_odom_stamp_s)
+        real_time_factor = sim_elapsed_s / duration_s if duration_s > 1e-9 else 0.0
         action_negative_fraction = (
             self.action_negative_x_count / self.action_pose_count if self.action_pose_count else 0.0
         )
         return {
-            "duration_s": duration_s,
+            "wall_duration_s": duration_s,
+            "sim_duration_s": sim_elapsed_s,
+            "real_time_factor": real_time_factor,
             "diagnostics_csv": self.csv_path.as_posix(),
             "messages": {
                 "odom": len(self.times["odom"]),
@@ -302,6 +352,11 @@ class RolloutDiagnosticsNode(Node):
                 "action_chunk": rate_hz(self.times["action_chunk"]),
                 "expert_cmd_vel": rate_hz(self.times["expert_cmd_vel"]),
                 "cmd_vel": rate_hz(self.times["cmd_vel"]),
+            },
+            "sim_time_rates_hz": {
+                "odom": rate_hz(self.stamps["odom"]),
+                "camera": rate_hz(self.stamps["camera"]),
+                "action_chunk": rate_hz(self.stamps["action_chunk"]),
             },
             "odom": {
                 "distance_travelled_m": self.odom_distance_m,

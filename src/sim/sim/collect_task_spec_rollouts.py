@@ -222,6 +222,19 @@ def command_for_tracker(enabled: bool) -> list[str] | None:
     return ["ros2", "run", "hw_interface", "sim_waypoint_tracking"]
 
 
+def command_for_sim_duration_wait(
+    collection: dict[str, Any],
+    duration_s: float,
+) -> list[str]:
+    wall_timeout_s = max(duration_s * 20.0, duration_s + 120.0)
+    params = {
+        "duration_s": duration_s,
+        "odom_topic": collection.get("odom_topic", "/sim_odom"),
+        "wall_timeout_s": wall_timeout_s,
+    }
+    return ["ros2", "run", "sim", "wait_for_sim_duration"] + ros_param_args(params)
+
+
 def render_prepare_command(template: str, task_spec_path: Path, task_spec: dict[str, Any], rollout: Rollout) -> str:
     scene = task_spec.get("scene", {})
     return template.format(
@@ -328,6 +341,7 @@ def run_rollout(
     commands.append(("expert", command_for_expert(task_spec_path, task_spec, rollout, collection)))
     commands.append(("diagnostics", command_for_diagnostics(rollout_dir, collection)))
     commands.append(("collector", command_for_collector(task_spec_path, rollout, collection, base_dir, dataset_name)))
+    sim_duration_wait_command = command_for_sim_duration_wait(collection, duration_s)
 
     print(f"\n=== {rollout.trajectory_name} ===")
     if prepare_scene_command:
@@ -337,6 +351,7 @@ def run_rollout(
         print(f"prepare: {' '.join(bridge_prepare_command)}")
     for name, command in commands:
         print(f"{name}: {' '.join(command)}")
+    print(f"duration_wait: {' '.join(sim_duration_wait_command)}")
     print(f"duration_s: {duration_s:.1f}")
     if dry_run:
         return True
@@ -357,13 +372,20 @@ def run_rollout(
             running.append((name, process))
             time.sleep(startup_wait_s)
 
-        end_time = time.monotonic() + duration_s
-        while time.monotonic() < end_time:
+        wait_process = start_process(
+            sim_duration_wait_command,
+            logs_dir / rollout.trajectory_name / "duration_wait.log",
+        )
+        while wait_process.poll() is None:
             for name, process in running:
                 if process.poll() is not None:
                     print(f"{name} exited early with code {process.returncode}")
+                    stop_process(wait_process, timeout_s=stop_wait_s)
                     return False
             time.sleep(0.5)
+        if wait_process.returncode != 0:
+            print(f"duration_wait exited with code {wait_process.returncode}")
+            return False
         return True
     finally:
         for _, process in reversed(running):
