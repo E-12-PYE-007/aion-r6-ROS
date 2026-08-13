@@ -18,7 +18,17 @@ namespace hw_interface
 struct VelocityCommand
 {
   float speed_body_x{0.0f}; // [m/s] Forward velocity in body frame
-  float yaw_rate{0.0f};     // [rad/s] Yaw rate
+  float yaw_rate{0.0f};     // [rad/s] Final saturated yaw rate
+
+  // Debug / diagnostics
+  int target_index{-1};
+  float target_x{0.0f};          // [m] Target x in current robot body frame
+  float target_y{0.0f};          // [m] Target y in current robot body frame
+  float target_distance{0.0f};   // [m]
+  float heading_error{0.0f};     // [rad]
+  float curvature{0.0f};         // [1/m]
+  float raw_yaw_rate{0.0f};      // [rad/s] Before saturation
+  bool target_found{false};
 };
 
 /// Generic interface for turning a buffered action chunk into a velocity command.
@@ -191,9 +201,25 @@ class PurePursuitController: public ActionChunkController
       lookahead_vector[0] =  x*std::cos(delta_theta) + y*std::sin(delta_theta);  // x_body
       lookahead_vector[1] = -x*std::sin(delta_theta) + y*std::cos(delta_theta);  // y_body
 
-      double R = 2.0 * lookahead_vector[1]/(euclid_dist*euclid_dist); // Curvature to approach path on
+      double R = 2.0 * lookahead_vector[1] / (euclid_dist * euclid_dist);
 
-      return saturate(kMaxV, R * kMaxV);
+      const double heading_error =
+        std::atan2(lookahead_vector[1], lookahead_vector[0]);
+
+      const double raw_yaw_rate = R * kMaxV;
+
+      VelocityCommand command = saturate(kMaxV, raw_yaw_rate);
+
+      command.target_index = static_cast<int>(_waypoint_idx);
+      command.target_x = static_cast<float>(lookahead_vector[0]);
+      command.target_y = static_cast<float>(lookahead_vector[1]);
+      command.target_distance = static_cast<float>(euclid_dist);
+      command.heading_error = static_cast<float>(heading_error);
+      command.curvature = static_cast<float>(R);
+      command.raw_yaw_rate = static_cast<float>(raw_yaw_rate);
+      command.target_found = true;
+
+      return command;
 
 
       
