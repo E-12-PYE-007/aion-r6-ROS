@@ -165,6 +165,8 @@ def command_for_expert(task_spec_path: Path, task_spec: dict[str, Any], rollout:
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
         "flip_isaac_y": True,
+        "flip_scene_y": True,
+        "flip_runtime_odom_y": False,
     }
     return ["ros2", "run", "sim", expert_executable(task_spec, rollout.task)] + ros_param_args(params)
 
@@ -197,6 +199,8 @@ def command_for_collector(
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
         "sample_frequency_hz": collection.get("sample_frequency_hz", 3.0),
         "flip_isaac_y": True,
+        "flip_scene_y": True,
+        "flip_runtime_odom_y": False,
     }
     return ["ros2", "run", "sim", "sim_dataset_collector"] + ros_param_args(params)
 

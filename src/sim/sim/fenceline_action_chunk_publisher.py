@@ -170,11 +170,15 @@ class FencelineActionChunkPublisher(Node):
         self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("flip_isaac_y", True)
+        self.declare_parameter("flip_scene_y", True)
+        self.declare_parameter("flip_runtime_odom_y", False)
 
         layout_yaml = Path(str(self.get_parameter("layout_yaml").value))
         if not layout_yaml.exists():
             raise RuntimeError(f"layout_yaml parameter must point to an existing YAML file: {layout_yaml}")
-        self.flip_isaac_y = bool(self.get_parameter("flip_isaac_y").value)
+        self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
+        self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
+        self.flip_isaac_y = self.flip_scene_y
         self.fence_id = str(self.get_parameter("fence_id").value)
         self.follow_side = str(self.get_parameter("follow_side").value).lower()
         if self.follow_side not in {"left", "right"}:
@@ -212,7 +216,7 @@ class FencelineActionChunkPublisher(Node):
         )
 
     def odom_callback(self, msg: Odometry) -> None:
-        local_position, local_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        local_position, local_yaw = odom_to_pose(msg, self.flip_runtime_odom_y)
         self.current_position, self.current_yaw = local_odom_to_world(
             local_position,
             local_yaw,

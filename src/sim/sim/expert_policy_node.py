@@ -157,6 +157,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", True)
+        self.declare_parameter("flip_scene_y", True)
+        self.declare_parameter("flip_runtime_odom_y", False)
         self.declare_parameter("use_hybrid_astar", True)
         self.declare_parameter("robot_radius_m", 0.35)
         self.declare_parameter("obstacle_padding_m", 0.25)
@@ -200,8 +202,10 @@ class ExpertPolicyNode(Node):
         self.variant_id = str(self.get_parameter("variant_id").value)
         self.variant = find_variant(self.task, self.variant_id)
 
-        self.flip_isaac_y = bool(self.get_parameter("flip_isaac_y").value)
-        self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_isaac_y)
+        self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
+        self.flip_isaac_y = self.flip_scene_y
+        self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
+        self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_scene_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
         self.future_time_offsets_s = [
             float(value)
@@ -246,7 +250,7 @@ class ExpertPolicyNode(Node):
         raw_x = float(msg.pose.pose.position.x)
         raw_y = float(msg.pose.pose.position.y)
         raw_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
-        local_position, local_yaw = odom_to_pose(msg, self.flip_isaac_y)
+        local_position, local_yaw = odom_to_pose(msg, self.flip_runtime_odom_y)
         world_position, world_yaw = local_odom_to_world(
             local_position,
             local_yaw,
@@ -260,6 +264,8 @@ class ExpertPolicyNode(Node):
             "raw_odom_y": raw_y,
             "raw_odom_yaw": raw_yaw,
             "flip_isaac_y": self.flip_isaac_y,
+            "flip_scene_y": self.flip_scene_y,
+            "flip_runtime_odom_y": self.flip_runtime_odom_y,
             "local_x_after_flip": float(local_position[0]),
             "local_y_after_flip": float(local_position[1]),
             "local_yaw_after_flip": float(local_yaw),
@@ -349,7 +355,7 @@ class ExpertPolicyNode(Node):
         weight = float(self.planner_setting("fence_offset_cost_weight", "fence_offset_cost_weight"))
         if weight <= 0.0:
             return None
-        segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_isaac_y)
+        segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
         if not segments:
             return None
 
@@ -389,7 +395,7 @@ class ExpertPolicyNode(Node):
         search_step_m = float(self.planner_setting("planner_subgoal_search_step_m", "planner_subgoal_search_step_m"))
         max_candidates = int(self.planner_setting("planner_subgoal_max_candidates", "planner_subgoal_max_candidates"))
         nudged_count = 0
-        side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_isaac_y)
+        side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
 
         for index, (goal_position, goal_yaw) in enumerate(subgoals):
             selected_position = None
@@ -458,7 +464,7 @@ class ExpertPolicyNode(Node):
             self.scene,
             self.scene_path,
             reference_points,
-            self.flip_isaac_y,
+            self.flip_scene_y,
             robot_radius_m=float(planner_settings.get("robot_radius_m", self.get_parameter("robot_radius_m").value)),
             obstacle_padding_m=float(
                 planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
