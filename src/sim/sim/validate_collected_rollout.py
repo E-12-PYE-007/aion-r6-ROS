@@ -98,6 +98,64 @@ def task_validation_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def load_diagnostics_summary(rollout_dir: Path) -> dict[str, Any] | None:
+    path = rollout_dir / "diagnostics_summary.json"
+    if not path.exists():
+        return None
+    return load_json(path)
+
+
+def nested_float(data: dict[str, Any], *keys: str, default: float = 0.0) -> float:
+    value: Any = data
+    for key in keys:
+        if not isinstance(value, dict):
+            return default
+        value = value.get(key)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def nested_int(data: dict[str, Any], *keys: str, default: int = 0) -> int:
+    value: Any = data
+    for key in keys:
+        if not isinstance(value, dict):
+            return default
+        value = value.get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def likely_failure_from_diagnostics(summary: dict[str, Any], travelled_m: float, min_motion_m: float) -> str | None:
+    action_rate = nested_float(summary, "rates_hz", "action_chunk")
+    expert_rate = nested_float(summary, "rates_hz", "expert_cmd_vel")
+    cmd_rate = nested_float(summary, "rates_hz", "cmd_vel")
+    odom_rate = nested_float(summary, "rates_hz", "odom")
+    camera_rate = nested_float(summary, "rates_hz", "camera")
+    mean_expert_vx = nested_float(summary, "commands", "mean_expert_linear_x")
+    mean_cmd_vx = nested_float(summary, "commands", "mean_cmd_linear_x")
+    negative_action_fraction = nested_float(summary, "action_chunk", "negative_x_fraction")
+
+    if action_rate < 1.0:
+        return "expert/action_chunk publication is too slow or stopped"
+    if odom_rate < 1.0:
+        return "Isaac odom is missing or too slow"
+    if camera_rate < 1.0:
+        return "Isaac camera is missing or too slow"
+    if expert_rate >= 1.0 and cmd_rate < 1.0:
+        return "tracker is not publishing /cmd_vel"
+    if mean_expert_vx > 0.05 and mean_cmd_vx < 0.03:
+        return "tracker output is much smaller than expert forward command"
+    if negative_action_fraction > 0.25:
+        return "many action-chunk future waypoints have negative x in robot frame"
+    if travelled_m < min_motion_m and mean_cmd_vx > 0.05:
+        return "cmd_vel is being published but Isaac rover is not moving as expected"
+    return None
+
+
 def validate_rollout_dir(
     rollout_dir: Path,
     expected_task_id: str | None = None,
@@ -134,6 +192,7 @@ def validate_rollout_dir(
         min_motion_m = 0.0
 
     image_count, missing_image_refs = validate_images(rollout_dir, records)
+    diagnostics_summary = load_diagnostics_summary(rollout_dir)
     action_chunk_fraction = fraction_present(records, "action_chunk")
     cmd_vel_fraction = fraction_present(records, "cmd_vel")
     travelled_m = path_distance(records)
@@ -152,6 +211,10 @@ def validate_rollout_dir(
             "min_motion_m": min_motion_m,
         }
     )
+    if diagnostics_summary is not None:
+        metrics["diagnostics"] = diagnostics_summary
+    else:
+        warnings.append("diagnostics_summary.json is missing")
 
     if expected_task_id and metadata.get("task_id") != expected_task_id:
         errors.append(f"metadata task_id {metadata.get('task_id')!r} != expected {expected_task_id!r}")
@@ -176,6 +239,20 @@ def validate_rollout_dir(
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
     if len(records) and image_count != len(records):
         warnings.append(f"image count {image_count} differs from sample count {len(records)}")
+    if diagnostics_summary is not None:
+        if nested_int(diagnostics_summary, "messages", "action_chunk") == 0:
+            warnings.append("diagnostics: no /vla/action_chunk messages observed")
+        if nested_int(diagnostics_summary, "messages", "cmd_vel") == 0:
+            warnings.append("diagnostics: no /cmd_vel messages observed")
+        if nested_float(diagnostics_summary, "rates_hz", "action_chunk") < 2.0:
+            warnings.append(
+                f"diagnostics: action_chunk rate {nested_float(diagnostics_summary, 'rates_hz', 'action_chunk'):.2f} Hz"
+            )
+        if nested_float(diagnostics_summary, "rates_hz", "cmd_vel") < 2.0:
+            warnings.append(f"diagnostics: cmd_vel rate {nested_float(diagnostics_summary, 'rates_hz', 'cmd_vel'):.2f} Hz")
+        likely_failure = likely_failure_from_diagnostics(diagnostics_summary, travelled_m, float(min_motion_m))
+        if likely_failure is not None:
+            warnings.append(f"likely failure stage: {likely_failure}")
 
     return ValidationResult(valid=not errors, errors=errors, warnings=warnings, metrics=metrics)
 

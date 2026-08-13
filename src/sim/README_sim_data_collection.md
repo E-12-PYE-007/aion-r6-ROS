@@ -902,6 +902,22 @@ ros2 run sim run_collection_manifest \
 
 The manifest runner selects rows with `status: pending` and `pose_variant_ready: true`. It writes each selected row to `running`, creates a temporary per-rollout task spec with the row's `layout_yaml` and `visual_usd`, runs the Isaac bridge plus tracker/expert/collector, then updates the row to `complete` or `failed`. Use `--retry-failed` to retry failed rows.
 
+Each rollout also starts `rollout_diagnostics` beside the tracker, expert, and collector. It writes:
+
+```text
+<rollout_dir>/diagnostics.csv
+<rollout_dir>/diagnostics_summary.json
+```
+
+The diagnostics record topic message counts, topic rates, odom distance, action-chunk first/last waypoints, negative action-x fraction, expert `/expert/cmd_vel`, and tracker `/cmd_vel`. `validate_collected_rollout` reads `diagnostics_summary.json` when present and adds likely-failure hints, such as missing action chunks, missing tracker commands, tiny tracker output, or Isaac not moving despite positive commands.
+
+Inspect diagnostics after a failed rollout:
+
+```bash
+cat <rollout_dir>/diagnostics_summary.json
+head <rollout_dir>/diagnostics.csv
+```
+
 After a real rollout, the manifest runner validates the collected folder before marking the row complete. It checks for `metadata.json`, `poses.jsonl`, saved JPEGs, image references, minimum sample count, action chunks, `cmd_vel`, task/variant metadata, and required motion. Use `--skip-validation` only for debugging.
 
 Validate one collected rollout folder manually:

@@ -200,6 +200,22 @@ def command_for_collector(
     return ["ros2", "run", "sim", "sim_dataset_collector"] + ros_param_args(params)
 
 
+def command_for_diagnostics(
+    rollout_dir: Path,
+    collection: dict[str, Any],
+) -> list[str]:
+    params = {
+        "output_dir": rollout_dir.as_posix(),
+        "camera_topic": collection.get("camera_topic", "/vla/cam"),
+        "odom_topic": collection.get("odom_topic", "/sim_odom"),
+        "cmd_vel_topic": collection.get("cmd_vel_topic", "/cmd_vel"),
+        "expert_cmd_vel_topic": collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
+        "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
+        "sample_frequency_hz": max(float(collection.get("sample_frequency_hz", 3.0)), 5.0),
+    }
+    return ["ros2", "run", "sim", "rollout_diagnostics"] + ros_param_args(params)
+
+
 def command_for_tracker(enabled: bool) -> list[str] | None:
     if not enabled:
         return None
@@ -304,11 +320,13 @@ def run_rollout(
     bridge_prepare_command: list[str] | None,
 ) -> bool:
     collection = task_spec.get("collection", {})
+    rollout_dir = base_dir / rollout.trajectory_name
     commands: list[tuple[str, list[str]]] = []
     tracker_command = command_for_tracker(use_tracker)
     if tracker_command is not None:
         commands.append(("tracker", tracker_command))
     commands.append(("expert", command_for_expert(task_spec_path, task_spec, rollout, collection)))
+    commands.append(("diagnostics", command_for_diagnostics(rollout_dir, collection)))
     commands.append(("collector", command_for_collector(task_spec_path, rollout, collection, base_dir, dataset_name)))
 
     print(f"\n=== {rollout.trajectory_name} ===")

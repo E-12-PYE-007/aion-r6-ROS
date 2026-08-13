@@ -49,6 +49,7 @@ setup(
             'validate_collected_rollout = sim.validate_collected_rollout:main',
             'prepare_isaac_rollout = sim.prepare_isaac_rollout:main',
             'collect_task_spec_rollouts = sim.collect_task_spec_rollouts:main',
+            'rollout_diagnostics = sim.rollout_diagnostics:main',
             'export_edge_training_manifest = sim.export_edge_training_manifest:main',
 
         ],
