@@ -13,6 +13,8 @@ find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ActionChunk.msg"
+  "msg/LeftRightFloat32.msg"
+  "msg/LeftRightInt32.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

@@ -51,6 +51,15 @@ ament_target_dependencies(
 install(TARGETS sim_waypoint_tracking
   DESTINATION lib/${PROJECT_NAME})
 
+# Roboclaw serial driver -- Python, not C++; the only node that talks to the
+# motor controller. See scripts/roboclaw_for_motors.py for why this package
+# stays ament_cmake despite carrying a Python node.
+find_package(rclpy REQUIRED)
+install(PROGRAMS
+  scripts/roboclaw_for_motors.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_for_motors
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
