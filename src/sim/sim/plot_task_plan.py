@@ -15,6 +15,8 @@ from sim.hybrid_astar import Pose
 from sim.validate_scene_task_specs import (
     build_planner,
     candidate_preserves_side,
+    combined_point_cost_fn,
+    obstacle_clearance_cost_for_map,
     fence_offset_cost_for_task,
     reference_path_for_task,
     reference_subgoals,
@@ -73,6 +75,7 @@ def plan_path(
     max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
     max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
+    min_clearance_m = float(settings.get("planner_subgoal_min_clearance_m", 0.15))
     for goal_position, goal_yaw in subgoals:
         selected_position = None
         selected_segment = None
@@ -85,6 +88,8 @@ def plan_path(
             step_m=search_step_m,
         ):
             if collision_map.is_collision(candidate):
+                continue
+            if collision_map.obstacle_clearance(candidate, include_fences=False) < min_clearance_m:
                 continue
             if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
                 continue
@@ -157,7 +162,10 @@ def main() -> None:
         start_yaw,
         subgoals,
         side_constraint_segments_for_task(scene, task, flip_isaac_y),
-        fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y),
+        combined_point_cost_fn(
+            fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y),
+            obstacle_clearance_cost_for_map(collision_map, settings),
+        ),
     )
     planned_ok = planned_path is not None
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""

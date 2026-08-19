@@ -785,6 +785,35 @@ def fence_offset_cost_for_task(
     return point_cost
 
 
+def obstacle_clearance_cost_for_map(
+    collision_map: CollisionMap,
+    settings: dict[str, Any],
+) -> Callable[[np.ndarray], float] | None:
+    weight = float(settings.get("obstacle_clearance_cost_weight", 0.5))
+    desired_clearance_m = float(settings.get("obstacle_clearance_cost_distance_m", 0.4))
+    if weight <= 0.0 or desired_clearance_m <= 0.0:
+        return None
+
+    def point_cost(point: np.ndarray) -> float:
+        clearance_m = collision_map.obstacle_clearance(point, include_fences=False)
+        if not math.isfinite(clearance_m) or clearance_m >= desired_clearance_m:
+            return 0.0
+        return weight * (desired_clearance_m - max(clearance_m, 0.0)) / desired_clearance_m
+
+    return point_cost
+
+
+def combined_point_cost_fn(*cost_fns: Callable[[np.ndarray], float] | None) -> Callable[[np.ndarray], float] | None:
+    enabled_cost_fns = [cost_fn for cost_fn in cost_fns if cost_fn is not None]
+    if not enabled_cost_fns:
+        return None
+
+    def point_cost(point: np.ndarray) -> float:
+        return sum(float(cost_fn(point)) for cost_fn in enabled_cost_fns)
+
+    return point_cost
+
+
 def plan_through_subgoals(
     planner: HybridAStarPlanner,
     start_position: np.ndarray,
@@ -805,6 +834,7 @@ def plan_through_subgoals(
     max_longitudinal_m = float(settings.get("planner_subgoal_longitudinal_search_m", 2.0))
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
     max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
+    min_clearance_m = float(settings.get("planner_subgoal_min_clearance_m", 0.15))
     side_constraint_segments = side_constraint_segments or []
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
@@ -813,6 +843,7 @@ def plan_through_subgoals(
         free_candidates = 0
         attempted_candidates = 0
         wrong_side_candidates = 0
+        low_clearance_candidates = 0
         for candidate in shifted_subgoal_candidates(
             goal_position,
             goal_yaw,
@@ -822,6 +853,9 @@ def plan_through_subgoals(
         ):
             if collision_map.is_collision(candidate):
                 collision_candidates += 1
+                continue
+            if collision_map.obstacle_clearance(candidate, include_fences=False) < min_clearance_m:
+                low_clearance_candidates += 1
                 continue
             if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
                 wrong_side_candidates += 1
@@ -844,7 +878,8 @@ def plan_through_subgoals(
                 f"Hybrid A* failed to reach subgoal {index} near {goal_position.tolist()} "
                 f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
                 f"({attempted_candidates}/{free_candidates} free candidates attempted, "
-                f"{collision_candidates} colliding candidates, {wrong_side_candidates} wrong-side candidates)"
+                f"{collision_candidates} colliding candidates, {low_clearance_candidates} low-clearance candidates, "
+                f"{wrong_side_candidates} wrong-side candidates)"
             ), {}
 
         nudge_distance = float(np.linalg.norm(selected_position - goal_position))
@@ -969,7 +1004,12 @@ def planner_accepts_variant(
             obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.08)),
         )
         fence_cost_fn = fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y)
-        planner = build_planner(collision_map, settings, point_cost_fn=fence_cost_fn)
+        clearance_cost_fn = obstacle_clearance_cost_for_map(collision_map, settings)
+        planner = build_planner(
+            collision_map,
+            settings,
+            point_cost_fn=combined_point_cost_fn(fence_cost_fn, clearance_cost_fn),
+        )
         planned, subgoal_note, metrics = plan_through_subgoals(
             planner,
             start_position,
@@ -988,6 +1028,12 @@ def planner_accepts_variant(
         if fence_cost_fn is not None:
             metrics["fence_offset_cost_enabled"] = True
             metrics["fence_offset_cost_weight"] = float(settings.get("fence_offset_cost_weight", 0.6))
+        if clearance_cost_fn is not None:
+            metrics["obstacle_clearance_cost_enabled"] = True
+            metrics["obstacle_clearance_cost_weight"] = float(settings.get("obstacle_clearance_cost_weight", 0.5))
+            metrics["obstacle_clearance_cost_distance_m"] = float(
+                settings.get("obstacle_clearance_cost_distance_m", 0.4)
+            )
     except Exception as exc:
         return False, str(exc), {}
     if not planned:

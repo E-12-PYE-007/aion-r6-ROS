@@ -100,7 +100,7 @@ class HybridAStarPlanner:
                 next_key = self.key(next_pose)
                 if next_key in closed:
                     continue
-                new_cost = current.cost + motion_cost
+                new_cost = current.cost + motion_cost + self.primitive_soft_cost(primitive_points, motion_cost)
                 if next_key not in nodes or new_cost < nodes[next_key].cost:
                     nodes[next_key] = SearchNode(
                         pose=next_pose,

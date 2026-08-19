@@ -38,6 +38,15 @@ class OrientedBoxObstacle:
         extents = self.half_extents + inflation_m
         return abs(float(local[0])) <= float(extents[0]) and abs(float(local[1])) <= float(extents[1])
 
+    def signed_distance(self, point: np.ndarray, inflation_m: float) -> float:
+        local = rotate(point - self.center, -self.yaw)
+        extents = self.half_extents + inflation_m
+        delta = np.abs(local) - extents
+        outside = np.maximum(delta, 0.0)
+        outside_distance = float(np.linalg.norm(outside))
+        inside_distance = min(max(float(delta[0]), float(delta[1])), 0.0)
+        return outside_distance + inside_distance
+
 
 class CollisionMap:
     def __init__(
@@ -59,6 +68,16 @@ class CollisionMap:
             return True
         return any(obstacle.contains(point, self.inflation_m) for obstacle in self.obstacles)
 
+    def obstacle_clearance(self, point: np.ndarray, include_fences: bool = False) -> float:
+        distances = [
+            obstacle.signed_distance(point, self.inflation_m)
+            for obstacle in self.obstacles
+            if include_fences or obstacle.obstacle_type != "fence"
+        ]
+        if not distances:
+            return math.inf
+        return min(distances)
+
     @classmethod
     def from_scene(
         cls,
@@ -76,7 +95,7 @@ class CollisionMap:
                 continue
             obstacle_type = str(obstacle.get("type", "obstacle"))
             name = str(obstacle.get("name", f"{obstacle_type}_{index:02d}"))
-            bbox = lookup_obstacle_bbox(scene, obstacle_type, name)
+            bbox = lookup_obstacle_footprint(scene, obstacle_type, name)
             if bbox is None:
                 bbox = [0.6, 0.6, 0.3]
             center = point2(obstacle["position"], flip_isaac_y)
@@ -129,7 +148,7 @@ class CollisionMap:
         return cls(obstacles, (min_x, max_x, min_y, max_y), robot_radius_m + obstacle_padding_m)
 
 
-def lookup_obstacle_bbox(scene: dict[str, Any], obstacle_type: str, name: str) -> list[float] | None:
+def lookup_obstacle_footprint(scene: dict[str, Any], obstacle_type: str, name: str) -> list[float] | None:
     assets = scene.get("assets", {})
     candidates = []
     if obstacle_type == "plant":
@@ -142,6 +161,19 @@ def lookup_obstacle_bbox(scene: dict[str, Any], obstacle_type: str, name: str) -
         group_data = assets.get(group)
         if isinstance(group_data, dict):
             entry = group_data.get(asset_name)
-            if isinstance(entry, dict) and "bbox_size" in entry:
-                return entry["bbox_size"]
+            if isinstance(entry, dict):
+                footprint = entry.get("navigation_footprint_m")
+                if is_valid_xy_size(footprint):
+                    return footprint
+                if "bbox_size" in entry:
+                    return entry["bbox_size"]
     return None
+
+
+def is_valid_xy_size(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return False
+    try:
+        return float(value[0]) > 0.0 and float(value[1]) > 0.0
+    except (TypeError, ValueError):
+        return False

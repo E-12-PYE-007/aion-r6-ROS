@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -179,6 +180,48 @@ def visual_usds_for(base_usd: Path | None, include_visual_variations: bool, incl
     return variants or [("base", base_usd)]
 
 
+def stable_visual_sample_key(seed: int, suite_id: str, task_id: str, variant_id: str, visual_id: str) -> str:
+    payload = "|".join([str(seed), suite_id, task_id, variant_id, visual_id])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def select_visual_usds(
+    visuals: list[tuple[str, Path | None]],
+    max_visuals_per_task_variant: int | None,
+    visual_sample_seed: int,
+    suite_id: str,
+    task_id: str,
+    variant_id: str,
+) -> list[tuple[str, Path | None]]:
+    if max_visuals_per_task_variant is None or max_visuals_per_task_variant <= 0:
+        return visuals
+    if len(visuals) <= max_visuals_per_task_variant:
+        return visuals
+
+    base_visuals = [visual for visual in visuals if visual[0] == "base"]
+    non_base_visuals = [visual for visual in visuals if visual[0] != "base"]
+    remaining_slots = max_visuals_per_task_variant
+    selected: list[tuple[str, Path | None]] = []
+    if base_visuals:
+        selected.extend(base_visuals[:1])
+        remaining_slots -= 1
+
+    if remaining_slots > 0:
+        ranked = sorted(
+            non_base_visuals,
+            key=lambda visual: stable_visual_sample_key(
+                visual_sample_seed,
+                suite_id,
+                task_id,
+                variant_id,
+                visual[0],
+            ),
+        )
+        selected.extend(ranked[:remaining_slots])
+
+    return selected or visuals[:max_visuals_per_task_variant]
+
+
 def build_rollouts_for_spec(
     spec_path: Path,
     spec: dict[str, Any],
@@ -187,6 +230,8 @@ def build_rollouts_for_spec(
     include_invalid_variants: bool,
     include_visual_variations: bool,
     include_base_usd: bool,
+    max_visuals_per_task_variant: int | None,
+    visual_sample_seed: int,
     task_family: str,
 ) -> list[dict[str, Any]]:
     scene = spec.get("scene", {})
@@ -222,7 +267,16 @@ def build_rollouts_for_spec(
                     layout_path = pose_variant_layout
                     usd_path = generated_usd_from_layout(pose_variant_layout, isaac_root) or usd_path
 
-            for visual_id, visual_usd in visual_usds_for(usd_path, include_visual_variations, include_base_usd):
+            available_visuals = visual_usds_for(usd_path, include_visual_variations, include_base_usd)
+            selected_visuals = select_visual_usds(
+                available_visuals,
+                max_visuals_per_task_variant,
+                visual_sample_seed,
+                suite_id,
+                task_id,
+                variant_id,
+            )
+            for visual_id, visual_usd in selected_visuals:
                 trajectory_name = rollout_trajectory_name(suite_id, task_id, variant_id, visual_id)
                 row = {
                     "rollout_id": trajectory_name,
@@ -243,6 +297,13 @@ def build_rollouts_for_spec(
                     "generated_usd": as_manifest_path(usd_path),
                     "visual_id": visual_id,
                     "visual_usd": as_manifest_path(visual_usd),
+                    "visual_sample": {
+                        "selected": True,
+                        "available_visual_count": len(available_visuals),
+                        "selected_visual_count": len(selected_visuals),
+                        "max_visuals_per_task_variant": max_visuals_per_task_variant,
+                        "seed": visual_sample_seed,
+                    },
                     "trajectory_name": trajectory_name,
                     "instruction": task.get("instruction", ""),
                     "collection": {
@@ -270,6 +331,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-invalid-variants", action="store_true")
     parser.add_argument("--include-visual-variations", action="store_true")
     parser.add_argument("--no-base-usd", action="store_true")
+    parser.add_argument(
+        "--max-visuals-per-task-variant",
+        type=int,
+        default=None,
+        help=(
+            "When visual variations are included, deterministically sample at most this many visuals for each "
+            "task/variant row. By default every available visual USD is included."
+        ),
+    )
+    parser.add_argument(
+        "--visual-sample-seed",
+        type=int,
+        default=0,
+        help="Seed for deterministic visual sampling.",
+    )
     parser.add_argument("--summary", action="store_true")
     parser.add_argument(
         "--task-family",
@@ -291,6 +367,9 @@ def main() -> None:
 
     isaac_root = args.isaac_root.resolve() if args.isaac_root else None
     pose_variant_layout_dir = args.pose_variant_layout_dir.resolve() if args.pose_variant_layout_dir else None
+    max_visuals_per_task_variant = args.max_visuals_per_task_variant
+    if max_visuals_per_task_variant is not None and max_visuals_per_task_variant < 1:
+        raise SystemExit("--max-visuals-per-task-variant must be >= 1")
     rollouts: list[dict[str, Any]] = []
     for spec_path in spec_paths:
         spec = load_yaml(spec_path)
@@ -305,6 +384,8 @@ def main() -> None:
                 include_invalid_variants=bool(args.include_invalid_variants),
                 include_visual_variations=bool(args.include_visual_variations),
                 include_base_usd=not bool(args.no_base_usd),
+                max_visuals_per_task_variant=max_visuals_per_task_variant,
+                visual_sample_seed=int(args.visual_sample_seed),
                 task_family=args.task_family,
             )
         )
@@ -317,6 +398,8 @@ def main() -> None:
         "pose_variant_layout_dir": as_manifest_path(pose_variant_layout_dir),
         "include_visual_variations": bool(args.include_visual_variations),
         "include_base_usd": not bool(args.no_base_usd),
+        "max_visuals_per_task_variant": max_visuals_per_task_variant,
+        "visual_sample_seed": int(args.visual_sample_seed),
         "task_family": args.task_family,
         "counts": {
             "specs": len(spec_paths),

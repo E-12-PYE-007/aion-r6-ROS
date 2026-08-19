@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -173,6 +174,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("planner_subgoal_longitudinal_search_m", 2.0)
         self.declare_parameter("planner_subgoal_search_step_m", 0.5)
         self.declare_parameter("planner_subgoal_max_candidates", 48)
+        self.declare_parameter("planner_subgoal_min_clearance_m", 0.15)
         self.declare_parameter("planner_subgoal_vertex_margin_m", 0.5)
         self.declare_parameter("planner_subgoal_endpoint_margin_m", 0.5)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
@@ -180,6 +182,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("fence_offset_cost_weight", 0.6)
         self.declare_parameter("fence_offset_cost_deadband_m", 0.15)
         self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
+        self.declare_parameter("obstacle_clearance_cost_weight", 0.5)
+        self.declare_parameter("obstacle_clearance_cost_distance_m", 0.4)
         self.declare_parameter("max_speed_mps", 0.35)
         self.declare_parameter("max_yaw_rate_radps", 0.45)
         self.declare_parameter("max_accel_mps2", 0.25)
@@ -348,8 +352,25 @@ class ExpertPolicyNode(Node):
             ),
             max_iterations=int(self.planner_setting("hybrid_astar_max_iterations", "hybrid_astar_max_iterations")),
             allow_reverse=bool(self.planner_setting("allow_reverse", "allow_reverse")),
-            point_cost_fn=self.fence_offset_cost_fn(),
+            point_cost_fn=self.combined_point_cost_fn(collision_map),
         )
+
+    def combined_point_cost_fn(self, collision_map: CollisionMap) -> Callable[[np.ndarray], float] | None:
+        cost_fns = [
+            cost_fn
+            for cost_fn in [
+                self.fence_offset_cost_fn(),
+                self.obstacle_clearance_cost_fn(collision_map),
+            ]
+            if cost_fn is not None
+        ]
+        if not cost_fns:
+            return None
+
+        def point_cost(point: np.ndarray) -> float:
+            return sum(float(cost_fn(point)) for cost_fn in cost_fns)
+
+        return point_cost
 
     def fence_offset_cost_fn(self) -> Callable[[np.ndarray], float] | None:
         weight = float(self.planner_setting("fence_offset_cost_weight", "fence_offset_cost_weight"))
@@ -375,6 +396,22 @@ class ExpertPolicyNode(Node):
 
         return point_cost
 
+    def obstacle_clearance_cost_fn(self, collision_map: CollisionMap) -> Callable[[np.ndarray], float] | None:
+        weight = float(self.planner_setting("obstacle_clearance_cost_weight", "obstacle_clearance_cost_weight"))
+        desired_clearance_m = float(
+            self.planner_setting("obstacle_clearance_cost_distance_m", "obstacle_clearance_cost_distance_m")
+        )
+        if weight <= 0.0 or desired_clearance_m <= 0.0:
+            return None
+
+        def point_cost(point: np.ndarray) -> float:
+            clearance_m = collision_map.obstacle_clearance(point, include_fences=False)
+            if not math.isfinite(clearance_m) or clearance_m >= desired_clearance_m:
+                return 0.0
+            return weight * (desired_clearance_m - max(clearance_m, 0.0)) / desired_clearance_m
+
+        return point_cost
+
     def plan_through_subgoals(
         self,
         planner: HybridAStarPlanner,
@@ -394,6 +431,9 @@ class ExpertPolicyNode(Node):
         )
         search_step_m = float(self.planner_setting("planner_subgoal_search_step_m", "planner_subgoal_search_step_m"))
         max_candidates = int(self.planner_setting("planner_subgoal_max_candidates", "planner_subgoal_max_candidates"))
+        min_clearance_m = float(
+            self.planner_setting("planner_subgoal_min_clearance_m", "planner_subgoal_min_clearance_m")
+        )
         nudged_count = 0
         side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
 
@@ -404,6 +444,7 @@ class ExpertPolicyNode(Node):
             free_candidates = 0
             collision_candidates = 0
             wrong_side_candidates = 0
+            low_clearance_candidates = 0
             for candidate in shifted_subgoal_candidates(
                 goal_position,
                 goal_yaw,
@@ -413,6 +454,9 @@ class ExpertPolicyNode(Node):
             ):
                 if collision_map.is_collision(candidate):
                     collision_candidates += 1
+                    continue
+                if collision_map.obstacle_clearance(candidate, include_fences=False) < min_clearance_m:
+                    low_clearance_candidates += 1
                     continue
                 if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
                     wrong_side_candidates += 1
@@ -434,7 +478,8 @@ class ExpertPolicyNode(Node):
                     f"Hybrid A* could not reach subgoal {index} near {goal_position.tolist()} "
                     f"within {max_lateral_m:.2f}m lateral / {max_longitudinal_m:.2f}m longitudinal search "
                     f"({attempted_candidates}/{free_candidates} free candidates attempted, "
-                    f"{collision_candidates} colliding candidates, {wrong_side_candidates} wrong-side candidates)"
+                    f"{collision_candidates} colliding candidates, {low_clearance_candidates} low-clearance candidates, "
+                    f"{wrong_side_candidates} wrong-side candidates)"
                 )
                 return None
             if float(np.linalg.norm(selected_position - goal_position)) > 1e-6:

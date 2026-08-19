@@ -350,11 +350,21 @@ step_size_m: 0.35
 min_turn_radius_m: 0.75
 goal_tolerance_m: 0.35
 planner_subgoal_spacing_m: 2.0
+planner_subgoal_min_clearance_m: 0.15
 hybrid_astar_max_iterations: 20000
 allow_reverse: false
+obstacle_clearance_cost_weight: 0.5
+obstacle_clearance_cost_distance_m: 0.4
 ```
 
-If Hybrid A* fails at runtime, the expert node falls back to the geometric reference path and logs a warning. During offline validation with `--check-planner`, variants that fail planning can be filtered before collection.
+If Hybrid A* fails at runtime, the expert node stops the rollout instead of falling back to the geometric reference path. During offline validation with `--check-planner`, variants that fail planning can be filtered before collection.
+
+The planner uses two soft costs:
+
+- a fence-offset cost that encourages the trajectory to return to the selected follow distance after detours
+- an obstacle-clearance cost that makes paths cheaper when they stay away from inflated non-fence obstacles
+
+The clearance cost is intentionally soft. It does not enlarge obstacles or forbid necessary close passes; it only discourages skimming along an obstacle boundary when a cleaner route exists. Relocated reference subgoals are stricter: `planner_subgoal_min_clearance_m` rejects nudged subgoals that are too close to an inflated non-fence obstacle, which prevents the planner from selecting a goal point on the edge of a plant/log/boulder footprint and then making an awkward turn-around maneuver to escape it.
 
 ## Obstacle Handling
 
@@ -892,6 +902,9 @@ Default fenceline offset-cost settings:
 fence_offset_cost_weight: 0.6
 fence_offset_cost_deadband_m: 0.15
 fence_offset_cost_max_error_m: 2.0
+obstacle_clearance_cost_weight: 0.5
+obstacle_clearance_cost_distance_m: 0.4
+planner_subgoal_min_clearance_m: 0.15
 ```
 
 Increase `fence_offset_cost_weight` if valid paths are still drifting too far from the fence. Decrease it if the planner becomes too reluctant to make necessary obstacle detours.
@@ -906,6 +919,21 @@ ros2 run sim generate_collection_manifest \
   --include-visual-variations \
   --summary
 ```
+
+By default, `--include-visual-variations` creates the full Cartesian product of every task/variant with every matching visual USD. If a layout has 9 sky/ground USDs, that can multiply collection size by 9. For full collection, prefer deterministic visual sampling so each task/variant only uses a small subset of visuals while the whole manifest still covers the visual set:
+
+```bash
+ros2 run sim generate_collection_manifest \
+  src/sim/config/collection_ready_task_specs \
+  --output src/sim/config/collection_manifest.yaml \
+  --isaac-root ~/isaac_files \
+  --include-visual-variations \
+  --max-visuals-per-task-variant 2 \
+  --visual-sample-seed 17 \
+  --summary
+```
+
+The sampler keeps the `base` USD when it is included, then fills the remaining visual slots with a deterministic hash-based sample. Rerunning with the same seed gives the same visual assignment. Use `--no-base-usd` if you want the sampled set to contain only sky/ground variation USDs.
 
 If recovery pose variants have been expanded with `expand_pose_variants`, pass their layout directory so the manifest can point those rows at the perturbed layout/USD files:
 
