@@ -53,6 +53,11 @@ class ActionChunkController
       return value < 0.0 ? -1.0 : 1.0;
     }
 
+    static double clamp(double value, double low, double high)
+    {
+      return std::max(low, std::min(high, value));
+    }
+
     /// Combined linear/angular saturation: scales both together (preserving turning
     /// radius) rather than clamping each independently, so a command that needs to
     /// turn sharply doesn't get its curvature distorted by clamping yaw rate alone.
@@ -89,6 +94,18 @@ class ActionChunkController
       VelocityCommand command;
       command.speed_body_x = static_cast<float>(linear_limited);
       command.yaw_rate = static_cast<float>(angular_limited);
+      return command;
+    }
+
+    /// Independent linear/angular clamping for differential/skid-steer tracking.
+    /// Unlike saturate(), this does not preserve turning radius by reducing forward
+    /// speed. That is preferable for the Isaac Pure Pursuit tracker because the rover
+    /// can command forward speed and yaw rate independently.
+    static VelocityCommand clampIndependent(double linear_vel, double angular_vel)
+    {
+      VelocityCommand command;
+      command.speed_body_x = static_cast<float>(clamp(linear_vel, -kMaxV, kMaxV));
+      command.yaw_rate = static_cast<float>(clamp(angular_vel, -kMaxW, kMaxW));
       return command;
     }
 };
@@ -207,7 +224,7 @@ class PurePursuitController: public ActionChunkController
 
       const double raw_yaw_rate = R * kMaxV;
 
-      VelocityCommand command = saturate(kMaxV, raw_yaw_rate);
+      VelocityCommand command = clampIndependent(kMaxV, raw_yaw_rate);
 
       command.target_index = static_cast<int>(_waypoint_idx);
       command.target_x = static_cast<float>(lookahead_vector[0]);
