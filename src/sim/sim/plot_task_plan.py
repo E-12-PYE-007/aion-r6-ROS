@@ -147,8 +147,8 @@ def main() -> None:
         scene_yaml,
         [start_position] + [position for position, _ in subgoals] + reference_path,
         flip_isaac_y,
-        robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
-        obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
+        robot_radius_m=float(settings.get("robot_radius_m", 0.32)),
+        obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.08)),
     )
     planned_path, selected_subgoals, nudged_count = plan_path(
         collision_map,

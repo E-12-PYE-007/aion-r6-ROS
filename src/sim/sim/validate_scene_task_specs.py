@@ -955,7 +955,7 @@ def planner_accepts_variant(
         reference_length = path_length(reference_path)
         start_position, start_yaw = shifted_start_pose(scene, task, variant, flip_isaac_y)
         settings = variant.get("planner_settings") or {}
-        required_clearance = float(settings.get("robot_radius_m", 0.35)) + float(settings.get("obstacle_padding_m", 0.25))
+        required_clearance = float(settings.get("robot_radius_m", 0.32)) + float(settings.get("obstacle_padding_m", 0.08))
         clearance_error = fence_clearance_error(scene, start_position, required_clearance, flip_isaac_y)
         if clearance_error is not None:
             return False, clearance_error, {}
@@ -965,8 +965,8 @@ def planner_accepts_variant(
             scene_yaml,
             [start_position] + [position for position, _ in subgoals] + reference_path,
             flip_isaac_y,
-            robot_radius_m=float(settings.get("robot_radius_m", 0.35)),
-            obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.25)),
+            robot_radius_m=float(settings.get("robot_radius_m", 0.32)),
+            obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.08)),
         )
         fence_cost_fn = fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y)
         planner = build_planner(collision_map, settings, point_cost_fn=fence_cost_fn)

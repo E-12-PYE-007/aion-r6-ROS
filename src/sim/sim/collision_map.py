@@ -87,8 +87,10 @@ class CollisionMap:
 
             if flip_isaac_y:
                 yaw = -yaw
+            # Isaac asset_library.yaml stores full XYZ bounding-box sizes in metres.
+            # The planner represents obstacles as oriented XY boxes, so store half extents.
             half_extents = np.asarray(
-                [float(bbox[0]) * 0.1,float(bbox[1]) * 0.1],
+                [0.5 * float(bbox[0]), 0.5 * float(bbox[1])],
                 dtype=np.float64,
             )
             obstacles.append(OrientedBoxObstacle(center, yaw, half_extents, name, obstacle_type))

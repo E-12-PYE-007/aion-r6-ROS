@@ -549,7 +549,7 @@ Uses the default planner and speed profile.
 variant_id: cautious_wide_clearance
 variant_type: clearance
 preferred_offset_m: 1.0
-obstacle_padding_m: 0.35
+obstacle_padding_m: 0.15
 min_turn_radius_m: 0.85
 max_speed_mps: 0.25
 max_yaw_rate_radps: 0.35
@@ -563,7 +563,7 @@ This produces slower, wider, more conservative behavior.
 variant_id: normal_tight_clearance
 variant_type: clearance
 preferred_offset_m: 0.65
-obstacle_padding_m: 0.2
+obstacle_padding_m: 0.04
 ```
 
 This keeps the robot closer to the target structure.
@@ -577,22 +577,61 @@ Current recovery cases:
 ```text
 recovery_left_offset
   recovery_case: lost_target_left
-  start_pose_delta: x=0.0, y=0.8, yaw=0.35 rad
+  start_pose_delta: x=0.0, y=0.15, yaw=0.35 rad
 
 recovery_right_offset
   recovery_case: lost_target_right
-  start_pose_delta: x=0.0, y=-0.8, yaw=-0.35 rad
+  start_pose_delta: x=0.0, y=-0.15, yaw=-0.35 rad
 
 recovery_wrong_heading
   recovery_case: wrong_heading
   start_pose_delta: x=0.0, y=0.0, yaw=0.85 rad
   max_speed_mps: 0.25
   max_yaw_rate_radps: 0.35
+
+recovery_too_close
+  recovery_case: start_too_close
+  start_pose_delta: x=0.0, y=-0.35, yaw=0.20 rad
+  max_speed_mps: 0.22
+  max_yaw_rate_radps: 0.35
+
+recovery_too_far
+  recovery_case: start_too_far
+  start_pose_delta: x=0.0, y=0.45, yaw=-0.20 rad
+  max_speed_mps: 0.25
+  max_yaw_rate_radps: 0.35
+
+recovery_bad_approach_heading
+  recovery_case: bad_approach_heading
+  start_pose_delta: x=-0.25, y=0.0, yaw=1.20 rad
+  max_speed_mps: 0.20
+  max_yaw_rate_radps: 0.40
 ```
 
 The `start_pose_delta` can be applied at the Isaac layout YAML level with `expand_pose_variants`. This avoids needing a runtime reset service in Isaac. The expert node still reads planner and speed settings from the selected variant.
 
-Hold-position tasks only get the nominal variant.
+For first-pass testing, keep these fixed variants so failures are reproducible. For full-scale recovery collection, `generate_scene_task_specs.py` also supports deterministic sampled recovery pose jitter:
+
+```bash
+ros2 run sim generate_scene_task_specs <isaac_yaml_or_dir> \
+  --output-dir src/sim/config/generated_task_specs \
+  --recovery-jitter-count 2 \
+  --recovery-jitter-seed 17 \
+  --summary
+```
+
+This adds extra variants named like `recovery_too_far_jitter_01`. The fixed variants remain in the spec, and each jittered variant records `source_variant_id`, `jitter_index`, and a sampled `start_pose_delta`. The sampled ranges are:
+
+```text
+recovery_left_offset: y=0.10..0.25, yaw=0.20..0.50
+recovery_right_offset: y=-0.25..-0.10, yaw=-0.50..-0.20
+recovery_wrong_heading: yaw=0.60..1.00
+recovery_too_close: y=-0.50..-0.25, yaw=0.10..0.35
+recovery_too_far: y=0.30..0.70, yaw=-0.35..0.10
+recovery_bad_approach_heading: x=-0.50..-0.15, yaw=0.80..1.40
+```
+
+The default `--recovery-jitter-count 0` keeps task generation unchanged for small tests.
 
 ## Pose Variant Expansion
 
@@ -981,6 +1020,7 @@ and writes:
 
 ```text
 target_waypoints.npy
+target_async_actions.npy
 timestamps.npy
 manifests/train.jsonl
 ```
@@ -991,6 +1031,24 @@ The exported manifest lines match the `ag_vla` `edge_adapter_training` branch. T
 target_waypoints [T, 8, 3]
 waypoint = [x_forward_m, y_left_m, yaw_rad]
 ```
+
+The exporter also writes an AsyncVLA-style converted label array:
+
+```text
+target_async_actions [T, 8, 4]
+action = [x_forward_m / spacing_m, y_left_m / spacing_m, cos(yaw_rad), sin(yaw_rad)]
+default spacing_m = 0.125
+default waypoint_convention = x_forward_y_left
+```
+
+The manifest records both paths:
+
+```text
+target_waypoints_path
+target_async_actions_path
+```
+
+Use `target_waypoints.npy` when a training stack wants raw robot-frame future poses. Use `target_async_actions.npy` when the stack expects AsyncVLA-style normalized XY plus continuous heading. If steering signs look mirrored for an AsyncVLA code path, export with `--waypoint-convention async_camera_like` and inspect a small batch before training.
 
 Samples without a valid image, timestamp, or 8-pose action chunk are skipped. Stop cases are kept as long as the expert publishes an action chunk; they should appear as near-zero future relative poses.
 

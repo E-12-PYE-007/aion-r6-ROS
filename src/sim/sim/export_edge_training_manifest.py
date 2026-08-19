@@ -13,6 +13,7 @@ Output per valid rollout:
 
     rollout_dir/
       target_waypoints.npy  # [T, 8, 3]
+      target_async_actions.npy  # [T, 8, 4]
       timestamps.npy        # [T]
 
 and one JSONL manifest where each line points AG-VLA at the rollout.
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+WAYPOINT_CONVENTIONS = ("x_forward_y_left", "async_camera_like")
 
 
 @dataclass
@@ -78,6 +81,39 @@ def action_chunk_waypoints(record: dict[str, Any]) -> np.ndarray | None:
     return arr
 
 
+def waypoints_to_async_actions(
+    waypoints: np.ndarray,
+    *,
+    spacing_m: float,
+    convention: str,
+) -> np.ndarray:
+    """Convert robot-frame [x_m, y_m, yaw_rad] chunks to AsyncVLA [x, y, cos, sin].
+
+    Raw sim labels are robot local frame: x forward in metres, y left in metres,
+    yaw in radians. AsyncVLA-style actions use normalized x/y plus heading as
+    cos/sin so the angle is continuous across the +/-pi boundary.
+    """
+    if convention not in WAYPOINT_CONVENTIONS:
+        raise ValueError(f"Unknown waypoint convention {convention!r}; expected one of {WAYPOINT_CONVENTIONS}")
+    if spacing_m <= 0.0:
+        raise ValueError(f"async_action_spacing_m must be positive, got {spacing_m}")
+
+    arr = np.asarray(waypoints, dtype=np.float32)
+    if arr.shape[-2:] != (8, 3):
+        raise ValueError(f"Expected waypoint chunk shape [..., 8, 3], got {arr.shape}")
+
+    x = arr[..., 0] / float(spacing_m)
+    y = arr[..., 1] / float(spacing_m)
+    yaw = arr[..., 2]
+
+    if convention == "async_camera_like":
+        y = -y
+        yaw = -yaw
+
+    actions = np.stack([x, y, np.cos(yaw), np.sin(yaw)], axis=-1)
+    return actions.astype(np.float32)
+
+
 def image_exists(rollout_dir: Path, record: dict[str, Any]) -> bool:
     image = record.get("image")
     return isinstance(image, str) and (rollout_dir / "img" / image).exists()
@@ -102,6 +138,8 @@ def export_rollout(
     *,
     min_samples: int,
     overwrite: bool,
+    async_action_spacing_m: float,
+    waypoint_convention: str,
 ) -> tuple[ExportResult, dict[str, Any] | None]:
     metadata_path = rollout_dir / "metadata.json"
     poses_path = rollout_dir / "poses.jsonl"
@@ -131,9 +169,18 @@ def export_rollout(
         return ExportResult(rollout_dir, len(waypoints), skipped, f"valid samples < {min_samples}"), None
 
     target_path = rollout_dir / "target_waypoints.npy"
+    async_actions_path = rollout_dir / "target_async_actions.npy"
     timestamps_path = rollout_dir / "timestamps.npy"
+    waypoint_array = np.stack(waypoints).astype(np.float32)
+    async_actions = waypoints_to_async_actions(
+        waypoint_array,
+        spacing_m=async_action_spacing_m,
+        convention=waypoint_convention,
+    )
     if overwrite or not target_path.exists():
-        np.save(target_path, np.stack(waypoints).astype(np.float32))
+        np.save(target_path, waypoint_array)
+    if overwrite or not async_actions_path.exists():
+        np.save(async_actions_path, async_actions)
     if overwrite or not timestamps_path.exists():
         np.save(timestamps_path, np.asarray(timestamps, dtype=np.float32))
 
@@ -150,6 +197,7 @@ def export_rollout(
         "timestamps_path": "timestamps.npy",
         "instruction": str(instruction),
         "target_waypoints_path": "target_waypoints.npy",
+        "target_async_actions_path": "target_async_actions.npy",
         "metadata": {
             "dataset_name": metadata.get("dataset_name"),
             "task_id": metadata.get("task_id"),
@@ -157,6 +205,10 @@ def export_rollout(
             "variant_type": metadata.get("variant_type"),
             "recovery_case": metadata.get("recovery_case"),
             "source_format": metadata.get("format", "stream_jsonl"),
+            "raw_waypoint_format": "x_forward_m_y_left_m_yaw_rad",
+            "async_action_format": "x_over_spacing_y_over_spacing_cos_yaw_sin_yaw",
+            "async_action_spacing_m": float(async_action_spacing_m),
+            "waypoint_convention": waypoint_convention,
         },
     }
     return ExportResult(rollout_dir, len(waypoints), skipped), manifest_record
@@ -169,6 +221,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-samples", type=int, default=2)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--summary-json", type=Path, default=None)
+    parser.add_argument(
+        "--async-action-spacing-m",
+        type=float,
+        default=0.125,
+        help="Distance scale used when converting waypoint metres to AsyncVLA normalized x/y actions.",
+    )
+    parser.add_argument(
+        "--waypoint-convention",
+        choices=WAYPOINT_CONVENTIONS,
+        default="x_forward_y_left",
+        help="Convention used for converting raw robot-frame waypoint labels to AsyncVLA actions.",
+    )
     return parser.parse_args()
 
 
@@ -187,6 +251,8 @@ def main() -> int:
             rollout_dir,
             min_samples=int(args.min_samples),
             overwrite=bool(args.overwrite),
+            async_action_spacing_m=float(args.async_action_spacing_m),
+            waypoint_convention=str(args.waypoint_convention),
         )
         results.append(result)
         if record is not None:
@@ -226,4 +292,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

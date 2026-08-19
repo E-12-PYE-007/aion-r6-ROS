@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,39 @@ DEFAULT_EXPERT = {
     "preferred_offset_m": 0.8,
     "waypoint_spacing_m": 0.18,
     "publish_rate_hz": 3.0,
+}
+
+RECOVERY_JITTER_RANGES = {
+    "recovery_left_offset": {
+        "x_m": (0.0, 0.0),
+        "y_m": (0.10, 0.25),
+        "yaw_rad": (0.20, 0.50),
+    },
+    "recovery_right_offset": {
+        "x_m": (0.0, 0.0),
+        "y_m": (-0.25, -0.10),
+        "yaw_rad": (-0.50, -0.20),
+    },
+    "recovery_wrong_heading": {
+        "x_m": (0.0, 0.0),
+        "y_m": (0.0, 0.0),
+        "yaw_rad": (0.60, 1.00),
+    },
+    "recovery_too_close": {
+        "x_m": (0.0, 0.0),
+        "y_m": (-0.50, -0.25),
+        "yaw_rad": (0.10, 0.35),
+    },
+    "recovery_too_far": {
+        "x_m": (0.0, 0.0),
+        "y_m": (0.30, 0.70),
+        "yaw_rad": (-0.35, 0.10),
+    },
+    "recovery_bad_approach_heading": {
+        "x_m": (-0.50, -0.15),
+        "y_m": (0.0, 0.0),
+        "yaw_rad": (0.80, 1.40),
+    },
 }
 
 
@@ -186,8 +220,8 @@ def validation(min_progress_m: float = 2.0, min_samples: int = 30) -> dict[str, 
 
 
 DEFAULT_PLANNER_SETTINGS = {
-    "robot_radius_m": 0.35,
-    "obstacle_padding_m": 0.25,
+    "robot_radius_m": 0.32,
+    "obstacle_padding_m": 0.08,
     "grid_resolution_m": 0.25,
     "yaw_resolution_deg": 15.0,
     "subgoal_yaw_tolerance_deg": 180.0,
@@ -309,6 +343,67 @@ def variant_settings(
     }
 
 
+def sample_recovery_jitter_delta(variant_id: str, rng: random.Random) -> dict[str, float] | None:
+    ranges = RECOVERY_JITTER_RANGES.get(variant_id)
+    if ranges is None:
+        return None
+
+    delta = {}
+    for key in ("x_m", "y_m", "yaw_rad"):
+        low, high = ranges[key]
+        delta[key] = float(low if abs(high - low) <= 1e-12 else rng.uniform(low, high))
+    return delta
+
+
+def add_recovery_jitter_variants_to_task(
+    task: dict[str, Any],
+    jitter_count: int,
+    jitter_seed: int,
+) -> None:
+    if jitter_count <= 0:
+        return
+
+    variants = task.get("trajectory_variants")
+    if not isinstance(variants, list):
+        return
+
+    task_id = str(task.get("task_id", "task"))
+    jittered_variants = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        variant_id = str(variant.get("variant_id", ""))
+        if variant_id not in RECOVERY_JITTER_RANGES:
+            continue
+        for index in range(1, jitter_count + 1):
+            rng = random.Random(f"{jitter_seed}:{task_id}:{variant_id}:{index}")
+            delta = sample_recovery_jitter_delta(variant_id, rng)
+            if delta is None:
+                continue
+            jittered = dict(variant)
+            jittered["variant_id"] = f"{variant_id}_jitter_{index:02d}"
+            jittered["start_pose_delta"] = delta
+            jittered["source_variant_id"] = variant_id
+            jittered["jitter_index"] = index
+            jittered["scenario_tags"] = unique_tags(
+                variant.get("scenario_tags", []),
+                ["recovery_jitter", "sampled_start_pose"],
+            )
+            jittered_variants.append(jittered)
+
+    variants.extend(jittered_variants)
+
+
+def add_recovery_jitter_variants(
+    tasks: list[dict[str, Any]],
+    jitter_count: int,
+    jitter_seed: int,
+) -> list[dict[str, Any]]:
+    for task in tasks:
+        add_recovery_jitter_variants_to_task(task, jitter_count, jitter_seed)
+    return tasks
+
+
 def trajectory_variants_for_task(
     task_type: str,
     task_category: str | None = None,
@@ -328,7 +423,7 @@ def trajectory_variants_for_task(
             "cautious_wide_clearance",
             "clearance",
             1.0,
-            planner_overrides={"obstacle_padding_m": 0.35, "min_turn_radius_m": 0.85},
+            planner_overrides={"obstacle_padding_m": 0.15, "min_turn_radius_m": 0.85},
             speed_overrides={"max_speed_mps": 0.25, "max_yaw_rate_radps": 0.35},
             data_category="ambiguous",
             scenario_tags=unique_tags(base_tags, ["ambiguous", "wide_clearance", "alternate_offset"]),
@@ -337,7 +432,7 @@ def trajectory_variants_for_task(
             "normal_tight_clearance",
             "clearance",
             0.65,
-            planner_overrides={"obstacle_padding_m": 0.2},
+            planner_overrides={"obstacle_padding_m": 0.04},
             data_category="ambiguous",
             scenario_tags=unique_tags(base_tags, ["ambiguous", "tight_clearance", "alternate_offset"]),
         ),
@@ -359,7 +454,7 @@ def trajectory_variants_for_task(
                 "terminal_cautious_offset",
                 "terminal",
                 1.0,
-                planner_overrides={"obstacle_padding_m": 0.3, "min_turn_radius_m": 0.85},
+                planner_overrides={"obstacle_padding_m": 0.12, "min_turn_radius_m": 0.85},
                 speed_overrides=terminal_speed_profile(),
                 data_category="terminal",
                 scenario_tags=unique_tags(base_tags, ["terminal", "cautious_stop", "alternate_offset"]),
@@ -1084,12 +1179,20 @@ def dedupe_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique
 
 
-def build_spec(scene_path: Path, scene: dict[str, Any], task_family: str = "following_only") -> dict[str, Any]:
+def build_spec(
+    scene_path: Path,
+    scene: dict[str, Any],
+    task_family: str = "following_only",
+    recovery_jitter_count: int = 0,
+    recovery_jitter_seed: int = 17,
+) -> dict[str, Any]:
     scene_id = scene_id_from_path(scene_path, scene)
     config_type = infer_config_type(scene)
     generated_usd = None
     if scene.get("output_dir") and scene.get("output_name"):
         generated_usd = f"{scene['output_dir']}/{scene['output_name']}.usd"
+    tasks = generate_tasks(scene, task_family)
+    add_recovery_jitter_variants(tasks, recovery_jitter_count, recovery_jitter_seed)
 
     return {
         "spec_version": 0.1,
@@ -1104,7 +1207,7 @@ def build_spec(scene_path: Path, scene: dict[str, Any], task_family: str = "foll
         },
         "collection": DEFAULT_COLLECTION.copy(),
         "expert": DEFAULT_EXPERT.copy(),
-        "tasks": generate_tasks(scene, task_family),
+        "tasks": tasks,
     }
 
 
@@ -1147,6 +1250,21 @@ def parse_args() -> argparse.Namespace:
             "excludes stop, hold, gap-pass, switch-side, and approach-target tasks."
         ),
     )
+    parser.add_argument(
+        "--recovery-jitter-count",
+        type=int,
+        default=0,
+        help=(
+            "Add this many sampled recovery start-pose variants per fixed recovery variant. "
+            "Default 0 keeps the deterministic fixed variants only."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-jitter-seed",
+        type=int,
+        default=17,
+        help="Deterministic seed used when --recovery-jitter-count is greater than 0.",
+    )
     return parser.parse_args()
 
 
@@ -1161,7 +1279,13 @@ def main() -> None:
         scene = load_yaml(scene_path)
         if infer_config_type(scene) == "unknown":
             continue
-        spec = build_spec(scene_path, scene, args.task_family)
+        spec = build_spec(
+            scene_path,
+            scene,
+            args.task_family,
+            recovery_jitter_count=max(0, int(args.recovery_jitter_count)),
+            recovery_jitter_seed=int(args.recovery_jitter_seed),
+        )
         output_path = args.output_dir / f"{spec['scene']['scene_id']}_task_spec.yaml"
         write_yaml(output_path, spec)
         task_count = len(spec["tasks"])

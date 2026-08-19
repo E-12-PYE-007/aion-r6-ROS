@@ -80,6 +80,57 @@ def fraction_present(records: list[dict[str, Any]], key: str) -> float:
     return sum(1 for record in records if record.get(key) is not None) / len(records)
 
 
+def finite_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return result
+
+
+def action_chunk_tracking_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    first_y_values: list[float] = []
+    first_theta_values: list[float] = []
+    age_values: list[float] = []
+    for record in records:
+        age_s = finite_float(record.get("action_chunk_age_s"))
+        if age_s is not None:
+            age_values.append(age_s)
+
+        action_chunk = record.get("action_chunk")
+        if not isinstance(action_chunk, dict):
+            continue
+        poses = action_chunk.get("relative_poses")
+        if not isinstance(poses, list) or not poses:
+            continue
+        first_pose = poses[0]
+        if not isinstance(first_pose, (list, tuple)) or len(first_pose) < 3:
+            continue
+        first_y = finite_float(first_pose[1])
+        first_theta = finite_float(first_pose[2])
+        if first_y is not None:
+            first_y_values.append(first_y)
+        if first_theta is not None:
+            first_theta_values.append(first_theta)
+
+    abs_first_y_values = [abs(value) for value in first_y_values]
+    abs_first_theta_values = [abs(value) for value in first_theta_values]
+    return {
+        "samples_with_first_waypoint": len(first_y_values),
+        "mean_abs_first_y_m": sum(abs_first_y_values) / len(abs_first_y_values) if abs_first_y_values else 0.0,
+        "max_abs_first_y_m": max(abs_first_y_values, default=0.0),
+        "mean_abs_first_theta_rad": (
+            sum(abs_first_theta_values) / len(abs_first_theta_values) if abs_first_theta_values else 0.0
+        ),
+        "max_abs_first_theta_rad": max(abs_first_theta_values, default=0.0),
+        "samples_with_action_chunk_age": len(age_values),
+        "mean_action_chunk_age_s": sum(age_values) / len(age_values) if age_values else 0.0,
+        "max_action_chunk_age_s": max(age_values, default=0.0),
+    }
+
+
 def validate_images(rollout_dir: Path, records: list[dict[str, Any]]) -> tuple[int, int]:
     image_dir = rollout_dir / "img"
     image_files = list(image_dir.glob("*.jpg")) if image_dir.exists() else []
@@ -164,6 +215,9 @@ def validate_rollout_dir(
     min_motion_m: float | None = None,
     min_action_chunk_fraction: float = 0.5,
     min_cmd_vel_fraction: float = 0.5,
+    max_mean_abs_action_first_y_m: float | None = 1.25,
+    max_abs_action_first_y_m: float | None = 3.0,
+    max_action_chunk_age_s: float | None = 1.0,
     allow_stationary: bool = False,
 ) -> ValidationResult:
     errors: list[str] = []
@@ -195,6 +249,7 @@ def validate_rollout_dir(
     diagnostics_summary = load_diagnostics_summary(rollout_dir)
     action_chunk_fraction = fraction_present(records, "action_chunk")
     cmd_vel_fraction = fraction_present(records, "cmd_vel")
+    tracking_metrics = action_chunk_tracking_metrics(records)
     travelled_m = path_distance(records)
     displacement_m = displacement(records)
 
@@ -205,6 +260,7 @@ def validate_rollout_dir(
             "missing_image_refs": missing_image_refs,
             "action_chunk_fraction": action_chunk_fraction,
             "cmd_vel_fraction": cmd_vel_fraction,
+            "tracking": tracking_metrics,
             "path_distance_m": travelled_m,
             "displacement_m": displacement_m,
             "min_samples": min_samples,
@@ -235,6 +291,37 @@ def validate_rollout_dir(
         errors.append(
             f"cmd_vel present in {cmd_vel_fraction:.2%} of samples, required {min_cmd_vel_fraction:.2%}"
         )
+    if tracking_metrics["samples_with_first_waypoint"] == 0 and action_chunk_fraction >= min_action_chunk_fraction:
+        errors.append("action_chunk messages are present but contain no usable first waypoint tracking data")
+    if (
+        max_mean_abs_action_first_y_m is not None
+        and tracking_metrics["mean_abs_first_y_m"] > float(max_mean_abs_action_first_y_m)
+    ):
+        errors.append(
+            f"mean first-waypoint lateral tracking error "
+            f"{tracking_metrics['mean_abs_first_y_m']:.3f}m > allowed "
+            f"{float(max_mean_abs_action_first_y_m):.3f}m"
+        )
+    if (
+        max_abs_action_first_y_m is not None
+        and tracking_metrics["max_abs_first_y_m"] > float(max_abs_action_first_y_m)
+    ):
+        errors.append(
+            f"max first-waypoint lateral tracking error "
+            f"{tracking_metrics['max_abs_first_y_m']:.3f}m > allowed "
+            f"{float(max_abs_action_first_y_m):.3f}m"
+        )
+    if (
+        max_action_chunk_age_s is not None
+        and tracking_metrics["samples_with_action_chunk_age"] > 0
+        and tracking_metrics["max_action_chunk_age_s"] > float(max_action_chunk_age_s)
+    ):
+        errors.append(
+            f"max action_chunk age {tracking_metrics['max_action_chunk_age_s']:.3f}s > allowed "
+            f"{float(max_action_chunk_age_s):.3f}s"
+        )
+    if tracking_metrics["samples_with_action_chunk_age"] == 0 and action_chunk_fraction >= min_action_chunk_fraction:
+        warnings.append("action_chunk_age_s is missing; freshness could not be checked for this rollout")
     if travelled_m < float(min_motion_m):
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
     if len(records) and image_count != len(records):
@@ -268,6 +355,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-motion-m", type=float, default=None)
     parser.add_argument("--min-action-chunk-fraction", type=float, default=0.5)
     parser.add_argument("--min-cmd-vel-fraction", type=float, default=0.5)
+    parser.add_argument("--max-mean-abs-action-first-y-m", type=float, default=1.25)
+    parser.add_argument("--max-abs-action-first-y-m", type=float, default=3.0)
+    parser.add_argument("--max-action-chunk-age-s", type=float, default=1.0)
     parser.add_argument("--allow-stationary", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
@@ -283,6 +373,9 @@ def main() -> int:
         min_motion_m=args.min_motion_m,
         min_action_chunk_fraction=args.min_action_chunk_fraction,
         min_cmd_vel_fraction=args.min_cmd_vel_fraction,
+        max_mean_abs_action_first_y_m=args.max_mean_abs_action_first_y_m,
+        max_abs_action_first_y_m=args.max_abs_action_first_y_m,
+        max_action_chunk_age_s=args.max_action_chunk_age_s,
         allow_stationary=bool(args.allow_stationary),
     )
     payload = {

@@ -268,6 +268,15 @@ class SimDatasetCollectorNode(Node):
             ],
         }
 
+    def current_action_chunk_age_s(self, sample_time_s):
+        if not isinstance(self.current_action_chunk, dict):
+            return None
+        action_time = self.current_action_chunk.get("time")
+        try:
+            return float(sample_time_s) - float(action_time)
+        except (TypeError, ValueError):
+            return None
+
     def encode_img(self, msg):
         bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         ok, encoded = cv2.imencode(
@@ -294,6 +303,7 @@ class SimDatasetCollectorNode(Node):
             "velocity": self.current_velocity,
             "cmd_vel": self.current_cmd_vel,
             "action_chunk": self.current_action_chunk,
+            "action_chunk_age_s": self.current_action_chunk_age_s(img_time),
             "language_instruction": self.language_instruction,
             "dataset_name": self.dataset_name,
             "task_id": self.task_id,

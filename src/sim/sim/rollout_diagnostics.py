@@ -111,7 +111,9 @@ class RolloutDiagnosticsNode(Node):
         self.cmd_linear_x_values: list[float] = []
         self.cmd_angular_z_values: list[float] = []
         self.action_first_x_values: list[float] = []
+        self.action_first_y_values: list[float] = []
         self.action_last_x_values: list[float] = []
+        self.action_chunk_age_values: list[float] = []
         self.action_negative_x_count = 0
         self.action_pose_count = 0
         self.max_abs_action_y = 0.0
@@ -173,6 +175,7 @@ class RolloutDiagnosticsNode(Node):
             "real_time_factor",
             "camera_stamp_s",
             "action_stamp_s",
+            "action_chunk_age_s",
             "odom_x",
             "odom_y",
             "odom_yaw",
@@ -271,12 +274,14 @@ class RolloutDiagnosticsNode(Node):
             ys = [float(pose.y) for pose in poses]
             thetas = [float(pose.theta) for pose in poses]
             self.action_first_x_values.append(xs[0])
+            self.action_first_y_values.append(ys[0])
             self.action_last_x_values.append(xs[-1])
             self.action_negative_x_count += sum(1 for value in xs if value < 0.0)
             self.action_pose_count += len(xs)
             self.max_abs_action_y = max(self.max_abs_action_y, max(abs(value) for value in ys))
             self.max_abs_action_theta = max(self.max_abs_action_theta, max(abs(value) for value in thetas))
             self.latest["action_chunk"] = {
+                "stamp_s": stamp_s if stamp_s > 0.0 else None,
                 "seq_num": int(msg.seq_num),
                 "first": [xs[0], ys[0], thetas[0]],
                 "last": [xs[-1], ys[-1], thetas[-1]],
@@ -330,14 +335,21 @@ class RolloutDiagnosticsNode(Node):
         expert = self.latest.get("expert_cmd_vel") or {}
         cmd = self.latest.get("cmd_vel") or {}
         frame = self.latest.get("frame_debug") or {}
+        camera_stamp_s = self.stamps["camera"][-1] if self.stamps["camera"] else None
+        action_stamp_s = action.get("stamp_s")
+        action_chunk_age_s = None
+        if camera_stamp_s is not None and action_stamp_s is not None:
+            action_chunk_age_s = float(camera_stamp_s) - float(action_stamp_s)
+            self.action_chunk_age_values.append(action_chunk_age_s)
         row = {
             "elapsed_s": wall_elapsed_s,
             "wall_elapsed_s": wall_elapsed_s,
             "odom_stamp_s": self.latest_odom_stamp_s,
             "sim_elapsed_s": sim_elapsed_s,
             "real_time_factor": real_time_factor,
-            "camera_stamp_s": self.stamps["camera"][-1] if self.stamps["camera"] else None,
-            "action_stamp_s": self.stamps["action_chunk"][-1] if self.stamps["action_chunk"] else None,
+            "camera_stamp_s": camera_stamp_s,
+            "action_stamp_s": action_stamp_s,
+            "action_chunk_age_s": finite(action_chunk_age_s),
             "odom_x": finite(odom.get("x")),
             "odom_y": finite(odom.get("y")),
             "odom_yaw": finite(odom.get("yaw")),
@@ -445,7 +457,12 @@ class RolloutDiagnosticsNode(Node):
             },
             "action_chunk": {
                 "first_x_mean": mean(self.action_first_x_values),
+                "first_y_mean": mean(self.action_first_y_values),
+                "mean_abs_first_y": mean([abs(value) for value in self.action_first_y_values]),
+                "max_abs_first_y": max([abs(value) for value in self.action_first_y_values], default=0.0),
                 "last_x_mean": mean(self.action_last_x_values),
+                "age_s_mean": mean(self.action_chunk_age_values),
+                "age_s_max": max(self.action_chunk_age_values, default=0.0),
                 "negative_x_fraction": action_negative_fraction,
                 "max_abs_y": self.max_abs_action_y,
                 "max_abs_theta": self.max_abs_action_theta,

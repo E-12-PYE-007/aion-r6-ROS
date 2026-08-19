@@ -160,8 +160,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("flip_scene_y", True)
         self.declare_parameter("flip_runtime_odom_y", False)
         self.declare_parameter("use_hybrid_astar", True)
-        self.declare_parameter("robot_radius_m", 0.35)
-        self.declare_parameter("obstacle_padding_m", 0.25)
+        self.declare_parameter("robot_radius_m", 0.32)
+        self.declare_parameter("obstacle_padding_m", 0.08)
         self.declare_parameter("grid_resolution_m", 0.25)
         self.declare_parameter("yaw_resolution_deg", 15.0)
         self.declare_parameter("subgoal_yaw_tolerance_deg", 180.0)
@@ -473,9 +473,9 @@ class ExpertPolicyNode(Node):
         planner = self.build_planner(collision_map)
         planned = self.plan_through_subgoals(planner, subgoals, collision_map)
         if planned is None:
-            self.get_logger().warn("Hybrid A* subgoal planning failed; falling back to geometric reference path")
-            self.trajectory = self.profile_path(self.path)
-            return
+            message = "Hybrid A* subgoal planning failed"
+            self.get_logger().error(f"{message}; strict collection mode is stopping the expert policy")
+            raise RuntimeError(message)
         planned = shortcut_smooth(planned, collision_map.is_collision)
         planned = resample_path(planned, max(self.waypoint_spacing_m * 0.5, 0.1))
         self.planned_path = planned

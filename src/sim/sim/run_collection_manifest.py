@@ -400,6 +400,9 @@ def run_claimed_row(
             min_motion_m=args.min_motion_m,
             min_action_chunk_fraction=float(args.min_action_chunk_fraction),
             min_cmd_vel_fraction=float(args.min_cmd_vel_fraction),
+            max_mean_abs_action_first_y_m=float(args.max_mean_abs_action_first_y_m),
+            max_abs_action_first_y_m=float(args.max_abs_action_first_y_m),
+            max_action_chunk_age_s=float(args.max_action_chunk_age_s),
             allow_stationary=bool(args.allow_stationary),
         )
         row["validation"] = {
@@ -469,6 +472,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-motion-m", type=float, default=None)
     parser.add_argument("--min-action-chunk-fraction", type=float, default=0.5)
     parser.add_argument("--min-cmd-vel-fraction", type=float, default=0.5)
+    parser.add_argument("--max-mean-abs-action-first-y-m", type=float, default=1.25)
+    parser.add_argument("--max-abs-action-first-y-m", type=float, default=3.0)
+    parser.add_argument("--max-action-chunk-age-s", type=float, default=1.0)
     parser.add_argument("--allow-stationary", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
