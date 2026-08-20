@@ -186,6 +186,42 @@ def midpoint(a: tuple[float, float], b: tuple[float, float]) -> list[float]:
     return [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, 0.0]
 
 
+def endpoint_key(point: list[float] | tuple[float, ...], precision: int = 3) -> tuple[float, float]:
+    x, y = xy(point)
+    return round(x, precision), round(y, precision)
+
+
+def is_closed_segment_sequence(segments: list[dict[str, Any]]) -> bool:
+    return len(segments) >= 3 and endpoint_key(segments[0]["start"]) == endpoint_key(segments[-1]["end"])
+
+
+def rotate_segments(segments: list[dict[str, Any]], start_index: int) -> list[dict[str, Any]]:
+    if not segments:
+        return []
+    start_index = int(start_index) % len(segments)
+    return segments[start_index:] + segments[:start_index]
+
+
+def reference_sequence_segments(
+    scene: dict[str, Any],
+    task: dict[str, Any],
+    flip_isaac_y: bool,
+) -> list[dict[str, Any]]:
+    fences = [fence_by_name(scene, name) for name in task["target_fences"]]
+    if not fences or not is_closed_segment_sequence(fences):
+        return fences
+    start_position, _ = scene_start_pose(scene, task, flip_isaac_y)
+    start_index, _ = min(
+        enumerate(fences),
+        key=lambda item: point_to_segment_distance(
+            start_position,
+            point2(item[1]["start"], flip_isaac_y),
+            point2(item[1]["end"], flip_isaac_y),
+        ),
+    )
+    return rotate_segments(fences, start_index)
+
+
 def get_start_poses(scene: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if isinstance(scene.get("rover_poses"), dict):
         return scene["rover_poses"]
@@ -598,7 +634,7 @@ def reference_path_for_task(
             path_side_for_task(task, flip_isaac_y),
         )
     if task_type == "follow_fence_sequence":
-        fences = [fence_by_name(scene, name) for name in task["target_fences"]]
+        fences = reference_sequence_segments(scene, task, flip_isaac_y)
         return offset_polyline(
             concat_segments(fences, flip_isaac_y),
             offset_m,

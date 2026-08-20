@@ -54,6 +54,8 @@ setup(
             'wait_for_task_success = sim.wait_for_task_success:main',
             'actuation_smoke_test = sim.actuation_smoke_test:main',
             'export_edge_training_manifest = sim.export_edge_training_manifest:main',
+            'prepare_sim_dataset_assets = sim.prepare_sim_dataset_assets:main',
+            'run_trajectory_qa_trials = sim.run_trajectory_qa_trials:main',
 
         ],
     },

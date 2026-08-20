@@ -261,10 +261,10 @@ DEFAULT_SPEED_PROFILE = {
 
 TERMINAL_TASK_TYPES = {"hold_position", "stop_at_gap", "stop_at_landmark"}
 AMBIGUOUS_TASK_TYPES = {"pass_through_gap", "switch_sides"}
-TURN_TASK_TYPES = {"follow_and_turn", "follow_fence_sequence"}
+EXCLUDED_TASK_TYPES = {"follow_and_turn"}
+TURN_TASK_TYPES = {"follow_fence_sequence"}
 FOLLOWING_TASK_TYPES = {
     "follow_fence",
-    "follow_and_turn",
     "follow_fence_sequence",
     "follow_road",
     "follow_shed_side",
@@ -620,6 +620,13 @@ def is_closed_chain(chain: list[dict[str, Any]]) -> bool:
     return len(chain) >= 3 and endpoint_key(chain[0]["start"]) == endpoint_key(chain[-1]["end"])
 
 
+def rotate_chain(chain: list[dict[str, Any]], start_index: int) -> list[dict[str, Any]]:
+    if not chain:
+        return []
+    start_index = int(start_index) % len(chain)
+    return chain[start_index:] + chain[:start_index]
+
+
 def start_region_label(start_name: str) -> str:
     name = start_name.lower()
     if "inside" in name:
@@ -639,25 +646,42 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
         return
     scene_is_closed = is_closed_chain(chain)
     task_kind = "perimeter" if scene_is_closed else "multi_turn"
-    target_names = [segment["name"] for segment in chain]
     for start_name in starts:
         start_pose = starts[start_name]
         start_point = xy(start_pose["position"])
-        if distance_to_segment(start_point, chain[0]) > 2.0:
+        start_index, start_distance = min(
+            enumerate(chain),
+            key=lambda item: distance_to_segment(start_point, item[1]),
+        )
+        if start_distance > 2.0:
             continue
-        path_side = side_of_segment(start_point, chain[0])
-        follow_side = robot_relative_side_to_segment(start_pose, chain[0])
-        primary = "Follow the fence around the enclosure." if scene_is_closed else "Follow the fence around the bends."
+        task_chain = rotate_chain(chain, start_index) if scene_is_closed else chain[start_index:]
+        if len(task_chain) < 3:
+            continue
+        target_names = [segment["name"] for segment in task_chain]
+        first_segment = task_chain[0]
+        path_side = side_of_segment(start_point, first_segment)
+        follow_side = robot_relative_side_to_segment(start_pose, first_segment)
+        if scene_is_closed:
+            primary = "Follow the fence perimeter around the enclosure."
+            variants = [
+                "Follow the boundary of the fenced area.",
+                "Continue around the fenceline perimeter.",
+                "Track the fence line around the enclosure.",
+            ]
+        else:
+            primary = "Follow the fenceline around the boundary."
+            variants = [
+                "Continue along the connected fence line.",
+                "Keep following the fenceline through the bends.",
+                "Track the fence around the next sides.",
+            ]
         tasks.append(make_task(
-            f"follow_{task_kind}_{chain[0]['name']}_to_{chain[-1]['name']}_from_{start_name}",
+            f"follow_{task_kind}_{task_chain[0]['name']}_to_{task_chain[-1]['name']}_from_{start_name}",
             "follow_fence_sequence",
             **instruction_pack(
                 primary,
-                [
-                    "Continue along the connected fence line.",
-                    "Keep following the fence through the corners.",
-                    "Track the fence around the next sides.",
-                ],
+                variants,
             ),
             start_pose=start_name,
             target_fences=target_names,
@@ -667,8 +691,11 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
             sequence_type=task_kind,
             success_condition={
                 "type": "reach_path_end",
-                "target_point": chain[-1]["end"],
-                "min_progress_m": max(3.0, sum(distance(xy(fence["start"]), xy(fence["end"])) for fence in chain) * 0.5),
+                "target_point": task_chain[-1]["end"],
+                "min_progress_m": max(
+                    3.0,
+                    sum(distance(xy(fence["start"]), xy(fence["end"])) for fence in task_chain) * 0.5,
+                ),
             },
             validation=validation(),
         ))
@@ -678,6 +705,8 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     fences = scene.get("fences") or []
     starts = get_start_poses(scene)
     tasks: list[dict[str, Any]] = []
+    chain = ordered_connected_chain(fences)
+    prefer_sequence_tasks = len(chain) >= 3
 
     add_sequence_tasks(tasks, fences, starts)
 
@@ -685,6 +714,8 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
         start_pose = starts[start_name]
         start_point = xy(start_pose["position"])
         for fence in fences:
+            if prefer_sequence_tasks:
+                continue
             if distance_to_segment(start_point, fence) > 2.0:
                 continue
             path_side = side_of_segment(start_point, fence)
@@ -1149,6 +1180,7 @@ def _disabled_obstacle_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def filter_tasks_for_family(tasks: list[dict[str, Any]], task_family: str) -> list[dict[str, Any]]:
+    tasks = [task for task in tasks if task.get("task_type") not in EXCLUDED_TASK_TYPES]
     if task_family == "all_supported":
         return tasks
     if task_family == "following_only":

@@ -106,14 +106,16 @@ def unique_tags(*tag_groups: list[Any] | tuple[Any, ...] | None) -> list[str]:
 
 FOLLOWING_TASK_TYPES = {
     "follow_fence",
-    "follow_and_turn",
     "follow_fence_sequence",
     "follow_road",
     "follow_shed_side",
 }
+EXCLUDED_TASK_TYPES = {"follow_and_turn"}
 
 
 def include_task_type(task_type: str | None, task_family: str) -> bool:
+    if task_type in EXCLUDED_TASK_TYPES:
+        return False
     if task_family == "all_supported":
         return True
     if task_family == "following_only":
