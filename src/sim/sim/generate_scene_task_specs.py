@@ -649,10 +649,11 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
     for start_name in starts:
         start_pose = starts[start_name]
         start_point = xy(start_pose["position"])
-        start_index, start_distance = min(
+        start_index, start_segment = min(
             enumerate(chain),
             key=lambda item: distance_to_segment(start_point, item[1]),
         )
+        start_distance = distance_to_segment(start_point, start_segment)
         if start_distance > 2.0:
             continue
         task_chain = rotate_chain(chain, start_index) if scene_is_closed else chain[start_index:]
