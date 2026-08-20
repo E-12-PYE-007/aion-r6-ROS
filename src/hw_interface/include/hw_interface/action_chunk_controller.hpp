@@ -309,9 +309,9 @@ class PurePursuitController: public ActionChunkController
     static constexpr double kRotateInPlaceHeadingError = 0.5; // [rad]
     static constexpr double kMinLookaheadDistanceSq = 1e-6;
     static constexpr double kMinForwardTargetX = 0.03; // [m]
-    static constexpr double kSlowdownHeadingError = 0.45; // [rad]
-    static constexpr double kStopForwardHeadingError = 1.35; // [rad]
-    static constexpr double kMinTrackingSpeed = 0.12; // [m/s]
+    static constexpr double kSlowdownHeadingError = 0.30; // [rad]
+    static constexpr double kStopForwardHeadingError = 1.00; // [rad]
+    static constexpr double kMinTrackingSpeed = 0.08; // [m/s]
 
     static double trackingSpeedForHeading(double heading_error, double target_x)
     {
@@ -333,7 +333,7 @@ class PurePursuitController: public ActionChunkController
       return kMaxV + t * (kMinTrackingSpeed - kMaxV);
     }
 
-    double _lookahead_distance = 0.4; // Lookahead distance in m
+    double _lookahead_distance = 0.45; // Lookahead distance in m
     std::vector<std::array<double, 2>> _waypoints; // Set of path waypoints generated from action chunk in x,y
     int _waypoint_idx = 0; // Index of current lookahead point
 
