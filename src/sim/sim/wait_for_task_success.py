@@ -16,12 +16,16 @@ from rclpy.node import Node
 
 from sim.expert_trajectory_utils import (
     find_task,
+    find_variant,
     get_start_pose,
     load_yaml,
     local_odom_to_world,
     odom_to_pose,
+    path_length,
     point2,
+    project_progress,
 )
+from sim.validate_scene_task_specs import reference_path_for_task
 
 
 def stamp_to_seconds(stamp) -> float:
@@ -43,6 +47,7 @@ class TaskSuccessWaiter(Node):
         super().__init__("wait_for_task_success")
         self.declare_parameter("task_spec", "")
         self.declare_parameter("task_id", "")
+        self.declare_parameter("variant_id", "nominal")
         self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("max_duration_s", 60.0)
         self.declare_parameter("fallback_duration_s", 20.0)
@@ -56,6 +61,7 @@ class TaskSuccessWaiter(Node):
 
         self.task_spec_path = Path(str(self.get_parameter("task_spec").value))
         self.task_id = str(self.get_parameter("task_id").value)
+        self.variant_id = str(self.get_parameter("variant_id").value)
         self.max_duration_s = float(self.get_parameter("max_duration_s").value)
         self.fallback_duration_s = float(self.get_parameter("fallback_duration_s").value)
         self.wall_timeout_s = float(self.get_parameter("wall_timeout_s").value)
@@ -73,7 +79,9 @@ class TaskSuccessWaiter(Node):
             self.target_position,
             self.world_start_position,
             self.world_start_yaw,
+            self.reference_path,
         ) = self.load_success_condition()
+        self.reference_path_length_m = path_length(self.reference_path) if self.reference_path is not None else None
         self.target_duration_s = self.max_duration_s if self.required_distance_m is not None else self.fallback_duration_s
 
         self.start_wall_s = time.monotonic()
@@ -83,6 +91,7 @@ class TaskSuccessWaiter(Node):
         self.latest_world_position: np.ndarray | None = None
         self.latest_target_distance_m: float | None = None
         self.distance_travelled_m = 0.0
+        self.path_progress_m = 0.0
         self.odom_messages = 0
         self.done = False
         self.success = False
@@ -106,30 +115,38 @@ class TaskSuccessWaiter(Node):
             if self.target_position is not None:
                 target_text = f", target_tolerance_m={self.target_tolerance_m:.2f}"
             self.get_logger().info(
-                f"Waiting for task {self.task_id!r}: distance_travelled_m >= "
+                f"Waiting for task {self.task_id!r}: path_progress_m >= "
                 f"{self.required_distance_m:.2f}m{target_text}, max_duration_s={self.max_duration_s:.1f}"
             )
 
     def load_success_condition(
         self,
-    ) -> tuple[float | None, str | None, np.ndarray | None, np.ndarray | None, float | None]:
+    ) -> tuple[float | None, str | None, np.ndarray | None, np.ndarray | None, float | None, list[np.ndarray] | None]:
         if not self.task_spec_path.exists() or not self.task_id:
-            return None, None, None, None, None
+            return None, None, None, None, None, None
         task_spec = load_yaml(self.task_spec_path)
         scene_path = Path(task_spec["scene"]["source_yaml"])
         scene = load_yaml(scene_path)
         task = find_task(task_spec, self.task_id)
+        variant = find_variant(task, self.variant_id)
         world_start_position, world_start_yaw = get_start_pose(scene, task, self.flip_scene_y)
+        reference_path = None
+        try:
+            reference_path = reference_path_for_task(scene, scene_path, task, variant, self.flip_scene_y)
+        except Exception as exc:
+            self.get_logger().warn(f"Could not resolve reference path for success progress: {exc}")
         success_condition = task.get("success_condition")
         if not isinstance(success_condition, dict):
-            return None, None, None, world_start_position, world_start_yaw
+            return None, None, None, world_start_position, world_start_yaw, reference_path
         success_type = str(success_condition.get("type", ""))
         if success_type in {"reach_path_end", "pass_point", "pass_point_and_continue"}:
             required = finite_float(success_condition.get("min_progress_m"), 0.0) - self.success_margin_m
             target_raw = success_condition.get("target_point")
             target_position = point2(target_raw, self.flip_scene_y) if isinstance(target_raw, (list, tuple)) else None
-            return max(required, 0.0), success_type, target_position, world_start_position, world_start_yaw
-        return None, success_type, None, world_start_position, world_start_yaw
+            if reference_path is not None:
+                required = min(required, max(path_length(reference_path) - 0.25, 0.0))
+            return max(required, 0.0), success_type, target_position, world_start_position, world_start_yaw, reference_path
+        return None, success_type, None, world_start_position, world_start_yaw, reference_path
 
     def odom_callback(self, msg: Odometry) -> None:
         stamp_s = stamp_to_seconds(msg.header.stamp)
@@ -156,13 +173,15 @@ class TaskSuccessWaiter(Node):
                 self.world_start_yaw,
             )
             self.latest_world_position = world_position
+            if self.reference_path is not None:
+                self.path_progress_m = max(self.path_progress_m, project_progress(self.reference_path, world_position))
             if self.target_position is not None:
                 self.latest_target_distance_m = float(np.linalg.norm(world_position - self.target_position))
 
         sim_elapsed_s = self.sim_elapsed_s()
         reached_required_distance = (
             self.required_distance_m is not None
-            and self.distance_travelled_m >= self.required_distance_m
+            and self.path_progress_m >= self.required_distance_m
         )
         reached_target = (
             self.target_position is None
@@ -197,6 +216,8 @@ class TaskSuccessWaiter(Node):
             "success_type": self.success_type,
             "required_distance_m": self.required_distance_m,
             "distance_travelled_m": self.distance_travelled_m,
+            "path_progress_m": self.path_progress_m,
+            "reference_path_length_m": self.reference_path_length_m,
             "target_tolerance_m": self.target_tolerance_m if self.target_position is not None else None,
             "target_distance_m": self.latest_target_distance_m,
             "target_position": self.target_position.tolist() if self.target_position is not None else None,
@@ -232,12 +253,14 @@ def main(args=None) -> int:
             node.get_logger().error(
                 f"Timed out after {node.wall_timeout_s:.1f}s wall time; "
                 f"observed {node.sim_elapsed_s():.2f}s sim time, "
-                f"distance={node.distance_travelled_m:.2f}m."
+                f"distance={node.distance_travelled_m:.2f}m, "
+                f"path_progress={node.path_progress_m:.2f}m."
             )
             return 1
         node.get_logger().info(
             f"Task wait complete: reason={summary['stop_reason']} success={node.success} "
-            f"sim_elapsed={node.sim_elapsed_s():.2f}s distance={node.distance_travelled_m:.2f}m."
+            f"sim_elapsed={node.sim_elapsed_s():.2f}s distance={node.distance_travelled_m:.2f}m "
+            f"path_progress={node.path_progress_m:.2f}m."
         )
         return 0
     finally:

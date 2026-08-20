@@ -142,6 +142,61 @@ def project_progress(polyline: list[np.ndarray], point: np.ndarray) -> float:
     return best_progress
 
 
+def crop_path_at_progress(polyline: list[np.ndarray], progress: float) -> list[np.ndarray]:
+    """Return the remaining portion of a polyline starting at a path-progress value."""
+    if len(polyline) < 2:
+        return list(polyline)
+    total = path_length(polyline)
+    progress = min(max(float(progress), 0.0), total)
+    start_position, _ = sample_path_pose(polyline, progress)
+
+    cropped = [start_position]
+    lengths = segment_lengths(polyline)
+    cumulative = 0.0
+    for index, length in enumerate(lengths):
+        next_cumulative = cumulative + float(length)
+        if next_cumulative > progress + 1e-9:
+            for point in polyline[index + 1:]:
+                if float(np.linalg.norm(point - cropped[-1])) > 1e-6:
+                    cropped.append(point)
+            break
+        cumulative = next_cumulative
+
+    if len(cropped) == 1 and float(np.linalg.norm(polyline[-1] - cropped[-1])) > 1e-6:
+        cropped.append(polyline[-1])
+    return cropped
+
+
+def orient_and_crop_path_from_start(
+    polyline: list[np.ndarray],
+    start_position: np.ndarray,
+    start_yaw: float,
+    *,
+    allow_reverse: bool = True,
+) -> list[np.ndarray]:
+    """Choose the path direction that agrees with the start heading and crop passed path."""
+    if len(polyline) < 2:
+        return list(polyline)
+
+    def score(candidate: list[np.ndarray]) -> tuple[float, float, float]:
+        progress = project_progress(candidate, start_position)
+        cropped = crop_path_at_progress(candidate, progress)
+        if len(cropped) < 2:
+            return (math.inf, math.inf, math.inf)
+        preview_progress = min(0.35, path_length(cropped))
+        _, path_yaw = sample_path_pose(cropped, preview_progress)
+        heading_error = abs(wrap_to_pi(path_yaw - start_yaw))
+        start_distance = float(np.linalg.norm(cropped[0] - start_position))
+        remaining = path_length(cropped)
+        return (heading_error, start_distance, -remaining)
+
+    candidates = [list(polyline)]
+    if allow_reverse:
+        candidates.append(list(reversed(polyline)))
+    best = min(candidates, key=score)
+    return crop_path_at_progress(best, project_progress(best, start_position))
+
+
 def sample_path_pose(polyline: list[np.ndarray], progress: float) -> tuple[np.ndarray, float]:
     lengths = segment_lengths(polyline)
     total = float(np.sum(lengths))
@@ -245,10 +300,23 @@ def build_timed_action_chunk(
     while len(offsets) < len(msg.relative_poses):
         offsets.append(offsets[-1] if offsets else 0.3)
 
+    total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+    min_forward_x_m = 0.03
+    search_step_m = 0.15
+    max_forward_search_m = 2.0
+
     for index in range(len(msg.relative_poses)):
         target_time = current_progress_time_s + float(offsets[index])
         target_position, target_yaw, _, _ = trajectory.sample(target_time)
         x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        if x <= min_forward_x_m and total_distance > 1e-6:
+            target_distance = float(np.interp(target_time, trajectory.times, trajectory.distances))
+            searched = 0.0
+            while x <= min_forward_x_m and searched < max_forward_search_m and target_distance < total_distance:
+                searched += search_step_m
+                target_distance = min(target_distance + search_step_m, total_distance)
+                target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
+                x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
         pose = Pose2D()
         pose.x = float(x)
         pose.y = float(y)

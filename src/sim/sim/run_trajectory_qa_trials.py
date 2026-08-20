@@ -42,13 +42,17 @@ def write_yaml(path: Path, data: dict[str, Any]) -> None:
         yaml.dump(data, f, Dumper=NoAliasDumper, sort_keys=False, default_flow_style=False)
 
 
-def run_command(command: list[str], label: str) -> None:
+def run_command(command: list[str], label: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
     print("\n" + "=" * 80, flush=True)
     print(f"Stage: {label}", flush=True)
     print("=" * 80, flush=True)
     print(" ".join(command), flush=True)
-    subprocess.run(command, check=True)
-    print(f"[OK] {label}", flush=True)
+    result = subprocess.run(command, check=check)
+    if result.returncode == 0:
+        print(f"[OK] {label}", flush=True)
+    else:
+        print(f"[WARN] {label} exited with code {result.returncode}", flush=True)
+    return result
 
 
 def clean_dir(path: Path) -> None:
@@ -199,7 +203,7 @@ def plot_rollouts(rollout_dir: Path, plots_dir: Path) -> int:
             print(f"Skipping plot for {rollout}: missing task spec or task id", flush=True)
             continue
         output = plots_dir / f"{rollout.name}.png"
-        run_command(
+        result = run_command(
             [
                 "ros2",
                 "run",
@@ -216,8 +220,10 @@ def plot_rollouts(rollout_dir: Path, plots_dir: Path) -> int:
                 output.as_posix(),
             ],
             label=f"Plot {rollout.name}",
+            check=False,
         )
-        plotted += 1
+        if result.returncode == 0:
+            plotted += 1
     return plotted
 
 
@@ -334,7 +340,7 @@ def main() -> int:
     if args.skip_run:
         return 0
 
-    run_command(
+    rollout_result = run_command(
         [
             "ros2",
             "run",
@@ -352,7 +358,13 @@ def main() -> int:
             *(["--dry-run"] if args.dry_run else []),
         ],
         label="Run QA manifest rollouts",
+        check=False,
     )
+    if rollout_result.returncode != 0:
+        print(
+            "QA rollout command reported one or more failed rollouts; continuing to plot collected outputs.",
+            flush=True,
+        )
 
     if not args.dry_run:
         plotted = plot_rollouts(rollouts_dir, plots_dir)

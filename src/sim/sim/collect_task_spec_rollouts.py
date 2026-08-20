@@ -252,6 +252,7 @@ def command_for_task_success_wait(
     params = {
         "task_spec": task_spec_path.as_posix(),
         "task_id": rollout.task["task_id"],
+        "variant_id": rollout.variant.get("variant_id", "nominal"),
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
         "max_duration_s": max_duration_s,
         "fallback_duration_s": max_duration_s,

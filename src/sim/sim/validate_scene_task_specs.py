@@ -17,6 +17,7 @@ from sim.expert_trajectory_utils import (
     fence_by_name,
     get_asset_bbox,
     offset_polyline,
+    orient_and_crop_path_from_start,
     path_length,
     point2,
     road_by_name,
@@ -258,6 +259,18 @@ def connected_segment_pair(
     return distance(xy(first["end"]), xy(second["start"])) <= max_endpoint_gap_m
 
 
+def sequenced_fence_pair(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    max_endpoint_gap_m: float = 0.05,
+    max_collinear_gap_m: float = 4.0,
+) -> bool:
+    if connected_segment_pair(first, second, max_endpoint_gap_m):
+        return True
+    is_gap, gap_distance, _ = detected_gap(first, second)
+    return is_gap and gap_distance <= max_collinear_gap_m
+
+
 def detected_gap(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -386,16 +399,16 @@ def validate_follow_fence_sequence(
     max_start_distance_m: float,
 ) -> list[str]:
     target_fences = task.get("target_fences")
-    if not isinstance(target_fences, list) or len(target_fences) < 3:
-        return ["follow_fence_sequence requires at least three target_fences"]
+    if not isinstance(target_fences, list) or len(target_fences) < 2:
+        return ["follow_fence_sequence requires at least two target_fences"]
     fences = scene.get("fences") or []
     resolved = [get_by_name(fences, name) for name in target_fences]
     if any(fence is None for fence in resolved):
         return [f"target_fences {target_fences!r} not found"]
     errors = []
     for first, second in zip(resolved, resolved[1:]):
-        if not connected_segment_pair(first, second, 0.05):
-            errors.append(f"target_fences {first['name']} and {second['name']} are not connected")
+        if not sequenced_fence_pair(first, second):
+            errors.append(f"target_fences {first['name']} and {second['name']} are not connected or separated by a valid gate gap")
     start = xy(starts[task["start_pose"]]["position"])
     start_distance = distance_to_segment(start, resolved[0])
     if start_distance > max_start_distance_m:
@@ -610,6 +623,89 @@ def shed_side_path(
     return [center + rotate(point, yaw) for point in local_segments[side]]
 
 
+def shed_perimeter_path(
+    scene: dict[str, Any],
+    scene_yaml: Path,
+    task: dict[str, Any],
+    offset_m: float,
+    flip_isaac_y: bool,
+) -> list[np.ndarray]:
+    bbox = get_asset_bbox(scene, "shed", "shed", scene_yaml)
+    if bbox is None:
+        raise ValueError("Could not resolve shed bbox_size from scene assets or asset library.")
+    half_x = float(bbox[0]) * 0.5 + offset_m
+    half_y = float(bbox[1]) * 0.5 + offset_m
+    center = shed_center(scene, flip_isaac_y)
+    yaw = shed_yaw(scene, flip_isaac_y)
+    start, start_yaw = scene_start_pose(scene, task, flip_isaac_y)
+    local_start = rotate(start - center, -yaw)
+
+    clockwise = [
+        np.asarray([half_x, half_y], dtype=np.float64),
+        np.asarray([half_x, -half_y], dtype=np.float64),
+        np.asarray([-half_x, -half_y], dtype=np.float64),
+        np.asarray([-half_x, half_y], dtype=np.float64),
+        np.asarray([half_x, half_y], dtype=np.float64),
+    ]
+    counterclockwise = list(reversed(clockwise))
+
+    def path_from_loop(loop: list[np.ndarray]) -> list[np.ndarray]:
+        best_i = 0
+        best_point = loop[0]
+        best_distance = math.inf
+        for i, (a, b) in enumerate(zip(loop, loop[1:])):
+            nearest, _ = nearest_point_on_segment((float(local_start[0]), float(local_start[1])), (float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
+            nearest_point = np.asarray(nearest, dtype=np.float64)
+            candidate_distance = float(np.linalg.norm(local_start - nearest_point))
+            if candidate_distance < best_distance:
+                best_i = i
+                best_point = nearest_point
+                best_distance = candidate_distance
+        local_path = [best_point]
+        local_path.extend(loop[best_i + 1:])
+        local_path.extend(loop[1:best_i + 1])
+        local_path.append(best_point)
+        world_path = [center + rotate(point, yaw) for point in local_path]
+        deduped = [world_path[0]]
+        for point in world_path[1:]:
+            if float(np.linalg.norm(point - deduped[-1])) > 1e-6:
+                deduped.append(point)
+        return deduped
+
+    candidates = [path_from_loop(clockwise), path_from_loop(counterclockwise)]
+
+    def heading_error(path: list[np.ndarray]) -> float:
+        if len(path) < 2:
+            return math.inf
+        delta = path[1] - path[0]
+        path_yaw = math.atan2(float(delta[1]), float(delta[0]))
+        return abs(wrap_to_pi(path_yaw - start_yaw))
+
+    return min(candidates, key=heading_error)
+
+
+def should_orient_reference_from_start(task: dict[str, Any]) -> bool:
+    return task.get("task_type") in {
+        "follow_fence",
+        "follow_fence_sequence",
+        "follow_road",
+        "follow_shed_side",
+        "stop_at_landmark",
+    }
+
+
+def finalize_reference_path(
+    scene: dict[str, Any],
+    task: dict[str, Any],
+    path: list[np.ndarray],
+    flip_isaac_y: bool,
+) -> list[np.ndarray]:
+    if not should_orient_reference_from_start(task):
+        return path
+    start, start_yaw = scene_start_pose(scene, task, flip_isaac_y)
+    return orient_and_crop_path_from_start(path, start, start_yaw, allow_reverse=True)
+
+
 def reference_path_for_task(
     scene: dict[str, Any],
     scene_yaml: Path,
@@ -621,11 +717,11 @@ def reference_path_for_task(
     offset_m = float(variant.get("preferred_offset_m", 0.8))
     if task_type == "follow_fence":
         fence = fence_by_name(scene, task["target_fence"])
-        return offset_polyline(
+        return finalize_reference_path(scene, task, offset_polyline(
             concat_segments([fence], flip_isaac_y),
             offset_m,
             path_side_for_task(task, flip_isaac_y),
-        )
+        ), flip_isaac_y)
     if task_type == "follow_and_turn" and "target_fences" in task:
         fences = [fence_by_name(scene, name) for name in task["target_fences"]]
         return offset_polyline(
@@ -635,11 +731,11 @@ def reference_path_for_task(
         )
     if task_type == "follow_fence_sequence":
         fences = reference_sequence_segments(scene, task, flip_isaac_y)
-        return offset_polyline(
+        return finalize_reference_path(scene, task, offset_polyline(
             concat_segments(fences, flip_isaac_y),
             offset_m,
             path_side_for_task(task, flip_isaac_y),
-        )
+        ), flip_isaac_y)
     if task_type == "follow_corridor":
         left, right = [fence_by_name(scene, name) for name in task["corridor_fences"]]
         left_path = concat_segments([left], flip_isaac_y)
@@ -670,25 +766,47 @@ def reference_path_for_task(
         return [before_path[0], gap_approach, point2(gap["approximate_center"], flip_isaac_y), gap_exit, after_path[-1]]
     if task_type == "stop_at_landmark" and "target_fence" in task:
         fence = fence_by_name(scene, task["target_fence"])
-        return offset_polyline(
+        return finalize_reference_path(scene, task, offset_polyline(
             concat_segments([fence], flip_isaac_y),
             offset_m,
             path_side_for_task(task, flip_isaac_y),
-        )
+        ), flip_isaac_y)
     if task_type == "follow_road":
-        return concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y)
+        return finalize_reference_path(
+            scene,
+            task,
+            concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y),
+            flip_isaac_y,
+        )
     if task_type == "follow_and_turn" and "target_roads" in task:
         return concat_segments([road_by_name(scene, name) for name in task["target_roads"]], flip_isaac_y)
     if task_type == "approach_target" and "target_point" in task:
         start, _ = scene_start_pose(scene, task, flip_isaac_y)
         return [start, point2(task["target_point"], flip_isaac_y)]
     if task_type == "stop_at_landmark" and "target_road" in task:
-        return concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y)
+        return finalize_reference_path(
+            scene,
+            task,
+            concat_segments([road_by_name(scene, task["target_road"])], flip_isaac_y),
+            flip_isaac_y,
+        )
     if task_type == "follow_shed_side":
-        return shed_side_path(scene, scene_yaml, task, offset_m, flip_isaac_y)
+        if task.get("shed_side") == "perimeter":
+            return finalize_reference_path(
+                scene,
+                task,
+                shed_perimeter_path(scene, scene_yaml, task, offset_m, flip_isaac_y),
+                flip_isaac_y,
+            )
+        return finalize_reference_path(
+            scene,
+            task,
+            shed_side_path(scene, scene_yaml, task, offset_m, flip_isaac_y),
+            flip_isaac_y,
+        )
     if task_type == "stop_at_landmark" and scene.get("shed"):
         path = shed_side_path(scene, scene_yaml, task, offset_m, flip_isaac_y)
-        return [path[0], path[len(path) // 2]]
+        return finalize_reference_path(scene, task, [path[0], path[len(path) // 2]], flip_isaac_y)
     if task_type == "hold_position":
         start, _ = scene_start_pose(scene, task, flip_isaac_y)
         return [start, start + np.asarray([0.001, 0.0], dtype=np.float64)]

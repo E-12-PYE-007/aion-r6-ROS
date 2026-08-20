@@ -170,6 +170,17 @@ def heading_of(segment: dict[str, Any]) -> float:
     return math.atan2(end[1] - start[1], end[0] - start[0])
 
 
+def remaining_segment_distance_from_start(start_pose: dict[str, Any], segment: dict[str, Any]) -> float:
+    start_point = xy(start_pose["position"])
+    _, t = nearest_point_on_segment(start_point, xy(segment["start"]), xy(segment["end"]))
+    length = distance(xy(segment["start"]), xy(segment["end"]))
+    forward_error = abs(wrap_to_pi(heading_of(segment) - yaw_of_pose(start_pose)))
+    reverse_error = abs(wrap_to_pi(heading_of(segment) + math.pi - yaw_of_pose(start_pose)))
+    if reverse_error + 1e-6 < forward_error:
+        return length * t
+    return length * (1.0 - t)
+
+
 def wrap_to_pi(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
@@ -597,23 +608,89 @@ def endpoint_key(point: list[float] | tuple[float, ...], precision: int = 3) -> 
     return round(x, precision), round(y, precision)
 
 
+def can_continue_fence_sequence(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    max_endpoint_gap_m: float = 0.05,
+    max_collinear_gap_m: float = 4.0,
+) -> bool:
+    first_end = xy(first["end"])
+    second_start = xy(second["start"])
+    gap_distance = distance(first_end, second_start)
+    if gap_distance <= max_endpoint_gap_m:
+        return True
+    if gap_distance < 0.4 or gap_distance > max_collinear_gap_m:
+        return False
+    heading_delta = abs(wrap_to_pi(heading_of(second) - heading_of(first)))
+    connection_heading = math.atan2(second_start[1] - first_end[1], second_start[0] - first_end[0])
+    connection_delta = abs(wrap_to_pi(connection_heading - heading_of(first)))
+    return heading_delta < 0.2 and connection_delta < 0.2
+
+
 def ordered_connected_chain(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not segments:
         return []
-    remaining = {segment["name"]: segment for segment in segments}
-    chain = [segments[0]]
-    remaining.pop(segments[0]["name"], None)
-    while remaining:
-        end_key = endpoint_key(chain[-1]["end"])
-        next_name = None
-        for name, segment in remaining.items():
-            if endpoint_key(segment["start"]) == end_key:
-                next_name = name
+    return max(ordered_connected_chains(segments), key=len, default=[])
+
+
+def ordered_connected_chains(segments: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if not segments:
+        return []
+    chains: list[list[dict[str, Any]]] = []
+    seen: set[tuple[str, ...]] = set()
+    for start_segment in segments:
+        remaining = {segment["name"]: segment for segment in segments}
+        chain = [start_segment]
+        remaining.pop(start_segment["name"], None)
+        while remaining:
+            next_name = None
+            for name, segment in remaining.items():
+                if endpoint_key(segment["start"]) == endpoint_key(chain[-1]["end"]):
+                    next_name = name
+                    break
+            if next_name is None:
+                for name, segment in remaining.items():
+                    if can_continue_fence_sequence(chain[-1], segment):
+                        next_name = name
+                        break
+            if next_name is None:
                 break
-        if next_name is None:
-            break
-        chain.append(remaining.pop(next_name))
-    return chain
+            chain.append(remaining.pop(next_name))
+        key = tuple(segment["name"] for segment in chain)
+        if key not in seen:
+            seen.add(key)
+            chains.append(chain)
+    return chains
+
+
+def nearest_segment_index_and_distance(
+    point: tuple[float, float],
+    chain: list[dict[str, Any]],
+) -> tuple[int, float]:
+    start_index, start_segment = min(
+        enumerate(chain),
+        key=lambda item: distance_to_segment(point, item[1]),
+    )
+    return start_index, distance_to_segment(point, start_segment)
+
+
+def best_sequence_chain_for_start(
+    chains: list[list[dict[str, Any]]],
+    start_point: tuple[float, float],
+) -> tuple[list[dict[str, Any]], int, float]:
+    candidates: list[tuple[float, int, list[dict[str, Any]], int]] = []
+    for chain in chains:
+        if len(chain) < 2:
+            continue
+        start_index, start_distance = nearest_segment_index_and_distance(start_point, chain)
+        suffix_len = len(chain) if is_closed_chain(chain) else len(chain) - start_index
+        if suffix_len < 2:
+            continue
+        candidates.append((start_distance, -suffix_len, chain, start_index))
+    if not candidates:
+        return [], 0, math.inf
+    start_distance, _, chain, start_index = min(candidates, key=lambda item: (item[0], item[1]))
+    return chain, start_index, start_distance
 
 
 def is_closed_chain(chain: list[dict[str, Any]]) -> bool:
@@ -641,23 +718,21 @@ def start_region_label(start_name: str) -> str:
 
 
 def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]], starts: dict[str, dict[str, Any]]) -> None:
-    chain = ordered_connected_chain(fences)
-    if len(chain) < 3:
+    chains = [chain for chain in ordered_connected_chains(fences) if len(chain) >= 2]
+    if not chains:
         return
-    scene_is_closed = is_closed_chain(chain)
-    task_kind = "perimeter" if scene_is_closed else "multi_turn"
     for start_name in starts:
         start_pose = starts[start_name]
         start_point = xy(start_pose["position"])
-        start_index, start_segment = min(
-            enumerate(chain),
-            key=lambda item: distance_to_segment(start_point, item[1]),
-        )
-        start_distance = distance_to_segment(start_point, start_segment)
+        chain, start_index, start_distance = best_sequence_chain_for_start(chains, start_point)
+        if not chain:
+            continue
+        scene_is_closed = is_closed_chain(chain)
+        task_kind = "perimeter" if scene_is_closed else "multi_turn"
         if start_distance > 2.0:
             continue
         task_chain = rotate_chain(chain, start_index) if scene_is_closed else chain[start_index:]
-        if len(task_chain) < 3:
+        if len(task_chain) < 2:
             continue
         target_names = [segment["name"] for segment in task_chain]
         first_segment = task_chain[0]
@@ -677,8 +752,15 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
                 "Keep following the fenceline through the bends.",
                 "Track the fence around the next sides.",
             ]
+        path_distance = sum(distance(xy(fence["start"]), xy(fence["end"])) for fence in task_chain)
+        required_progress = max(3.0, path_distance * (0.9 if scene_is_closed else 0.75))
+        task_id = (
+            f"follow_fence_perimeter_from_{start_name}"
+            if scene_is_closed
+            else f"follow_connected_fenceline_from_{start_name}"
+        )
         tasks.append(make_task(
-            f"follow_{task_kind}_{task_chain[0]['name']}_to_{task_chain[-1]['name']}_from_{start_name}",
+            task_id,
             "follow_fence_sequence",
             **instruction_pack(
                 primary,
@@ -693,12 +775,9 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
             success_condition={
                 "type": "reach_path_end",
                 "target_point": task_chain[-1]["end"],
-                "min_progress_m": max(
-                    3.0,
-                    sum(distance(xy(fence["start"]), xy(fence["end"])) for fence in task_chain) * 0.5,
-                ),
+                "min_progress_m": required_progress,
             },
-            validation=validation(),
+            validation=validation(min_progress_m=required_progress),
         ))
 
 
@@ -706,8 +785,7 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     fences = scene.get("fences") or []
     starts = get_start_poses(scene)
     tasks: list[dict[str, Any]] = []
-    chain = ordered_connected_chain(fences)
-    prefer_sequence_tasks = len(chain) >= 3
+    prefer_sequence_tasks = any(len(chain) >= 2 for chain in ordered_connected_chains(fences))
 
     add_sequence_tasks(tasks, fences, starts)
 
@@ -722,6 +800,8 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             path_side = side_of_segment(start_point, fence)
             inferred_side = robot_relative_side_to_segment(start_pose, fence)
             fence_name = fence["name"]
+            remaining_distance = remaining_segment_distance_from_start(start_pose, fence)
+            required_progress = max(1.0, remaining_distance - 0.5)
             tasks.append(make_task(
                 f"follow_{fence_name}_{inferred_side}_from_{start_name}",
                 "follow_fence",
@@ -740,9 +820,9 @@ def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 travel_direction="forward",
                 success_condition={
                     "type": "reach_path_end",
-                    "min_progress_m": max(1.0, distance(xy(fence["start"]), xy(fence["end"])) - 1.0),
+                    "min_progress_m": required_progress,
                 },
-                validation=validation(),
+                validation=validation(min_progress_m=required_progress),
             ))
 
             tasks.append(make_task(
@@ -939,6 +1019,8 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     for start_name in starts:
         for road in roads:
             road_name = road["name"]
+            remaining_distance = remaining_segment_distance_from_start(starts[start_name], road)
+            required_progress = max(1.0, remaining_distance - 0.5)
             tasks.append(make_task(
                 f"follow_{road_name}_from_{start_name}",
                 "follow_road",
@@ -956,9 +1038,9 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
                 success_condition={
                     "type": "reach_path_end",
                     "target_point": road["end"],
-                    "min_progress_m": max(1.0, distance(xy(road["start"]), xy(road["end"])) - 1.0),
+                    "min_progress_m": required_progress,
                 },
-                validation=validation(),
+                validation=validation(min_progress_m=required_progress),
             ))
             tasks.append(make_task(
                 f"approach_start_of_{road_name}_from_{start_name}",
@@ -1040,14 +1122,6 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     return add_domain_tags(tasks, "road")
 
 
-def shed_side_from_start(start_pose_name: str) -> str:
-    name = start_pose_name.lower()
-    for side in ["north", "south", "east", "west"]:
-        if side in name:
-            return side
-    return "nearest"
-
-
 def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     starts = get_start_poses(scene)
     shed = scene.get("shed") or {}
@@ -1055,23 +1129,22 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
 
     for start_name in starts:
-        side = shed_side_from_start(start_name)
         tasks.append(make_task(
-            f"follow_shed_{side}_side_from_{start_name}",
+            f"follow_shed_perimeter_from_{start_name}",
             "follow_shed_side",
             **instruction_pack(
-                f"Follow the {side} side of the shed." if side != "nearest" else "Follow the side of the shed.",
+                "Follow along the outside of the shed.",
                 [
-                    "Drive along the shed wall.",
-                    "Keep the shed beside you and continue forward.",
-                    "Track the side of the shed.",
+                    "Follow the shed perimeter.",
+                    "Drive around the outside boundary of the shed.",
+                    "Keep the shed beside you and follow its outside edge.",
                 ],
             ),
             start_pose=start_name,
             target_shed="shed",
-            shed_side=side,
+            shed_side="perimeter",
             travel_direction="forward",
-            success_condition={"type": "reach_path_end", "min_progress_m": 2.0},
+            success_condition={"type": "reach_path_end", "min_progress_m": 3.0},
             validation=validation(),
         ))
         tasks.append(make_task(
@@ -1104,7 +1177,7 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             ),
             start_pose=start_name,
             target_shed="shed",
-            landmark={"type": "shed_side", "side": side},
+            landmark={"type": "shed_side", "side": "perimeter"},
             success_condition={"type": "stop_near_shed", "max_speed_mps": 0.05},
             validation=validation(),
         ))

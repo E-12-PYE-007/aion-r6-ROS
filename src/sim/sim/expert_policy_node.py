@@ -26,6 +26,7 @@ from sim.expert_trajectory_utils import (
     local_odom_to_world,
     load_yaml,
     odom_to_pose,
+    orient_and_crop_path_from_start,
     path_length,
     point2,
     sample_path_pose,
@@ -216,7 +217,7 @@ class ExpertPolicyNode(Node):
             float(value)
             for value in self.get_parameter("future_time_offsets_s").value
         ]
-        self.path = self.resolve_path()
+        self.path = self.prepare_reference_path(self.resolve_path())
         if len(self.path) < 2 or path_length(self.path) < 1e-6:
             raise RuntimeError(f"Task {self.task_id} resolved to an empty path.")
         self.use_hybrid_astar = bool(self.get_parameter("use_hybrid_astar").value)
@@ -250,6 +251,22 @@ class ExpertPolicyNode(Node):
 
     def resolve_path(self) -> list[np.ndarray]:
         raise NotImplementedError
+
+    def prepare_reference_path(self, path: list[np.ndarray]) -> list[np.ndarray]:
+        if self.task.get("task_type") in {
+            "follow_fence",
+            "follow_fence_sequence",
+            "follow_road",
+            "follow_shed_side",
+            "stop_at_landmark",
+        }:
+            return orient_and_crop_path_from_start(
+                path,
+                self.world_start_position,
+                self.world_start_yaw,
+                allow_reverse=True,
+            )
+        return path
 
     def odom_callback(self, msg: Odometry) -> None:
         raw_x = float(msg.pose.pose.position.x)
