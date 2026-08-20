@@ -238,7 +238,11 @@ class PurePursuitController: public ActionChunkController
       const double heading_error =
         std::atan2(lookahead_vector[1], lookahead_vector[0]);
 
-      const double speed_target = trackingSpeedForHeading(heading_error, lookahead_vector[0]);
+      const double speed_target = trackingSpeedForTarget(
+        heading_error,
+        lookahead_vector[0],
+        lookahead_vector[1],
+        R);
       const double raw_yaw_rate = R * speed_target;
 
       VelocityCommand command = clampIndependent(speed_target, raw_yaw_rate);
@@ -309,31 +313,55 @@ class PurePursuitController: public ActionChunkController
     static constexpr double kRotateInPlaceHeadingError = 0.5; // [rad]
     static constexpr double kMinLookaheadDistanceSq = 1e-6;
     static constexpr double kMinForwardTargetX = 0.03; // [m]
-    static constexpr double kSlowdownHeadingError = 0.30; // [rad]
-    static constexpr double kStopForwardHeadingError = 1.00; // [rad]
-    static constexpr double kMinTrackingSpeed = 0.08; // [m/s]
+    static constexpr double kSlowdownHeadingError = 0.20; // [rad]
+    static constexpr double kStopForwardHeadingError = 0.85; // [rad]
+    static constexpr double kSlowdownLateralError = 0.12; // [m]
+    static constexpr double kStopForwardLateralError = 0.45; // [m]
+    static constexpr double kCurvatureSpeedScale = 0.18; // [m^2/s]
+    static constexpr double kMinTrackingSpeed = 0.06; // [m/s]
 
-    static double trackingSpeedForHeading(double heading_error, double target_x)
+    static double trackingSpeedForTarget(
+      double heading_error,
+      double target_x,
+      double target_y,
+      double curvature)
     {
       if (target_x <= kMinForwardTargetX) {
         return 0.0;
       }
 
       const double abs_heading_error = std::abs(heading_error);
-      if (abs_heading_error <= kSlowdownHeadingError) {
-        return kMaxV;
-      }
+      double heading_limited_speed = kMaxV;
       if (abs_heading_error >= kStopForwardHeadingError) {
-        return kMinTrackingSpeed;
+        heading_limited_speed = kMinTrackingSpeed;
+      } else if (abs_heading_error > kSlowdownHeadingError) {
+        const double t =
+          (abs_heading_error - kSlowdownHeadingError) /
+          (kStopForwardHeadingError - kSlowdownHeadingError);
+        heading_limited_speed = kMaxV + t * (kMinTrackingSpeed - kMaxV);
       }
 
-      const double t =
-        (abs_heading_error - kSlowdownHeadingError) /
-        (kStopForwardHeadingError - kSlowdownHeadingError);
-      return kMaxV + t * (kMinTrackingSpeed - kMaxV);
+      const double abs_lateral_error = std::abs(target_y);
+      double lateral_limited_speed = kMaxV;
+      if (abs_lateral_error >= kStopForwardLateralError) {
+        lateral_limited_speed = kMinTrackingSpeed;
+      } else if (abs_lateral_error > kSlowdownLateralError) {
+        const double lateral_t =
+          (abs_lateral_error - kSlowdownLateralError) /
+          (kStopForwardLateralError - kSlowdownLateralError);
+        lateral_limited_speed = kMaxV + lateral_t * (kMinTrackingSpeed - kMaxV);
+      }
+
+      double curvature_limited_speed = kMaxV;
+      const double abs_curvature = std::abs(curvature);
+      if (abs_curvature > 1e-6) {
+        curvature_limited_speed = clamp(kCurvatureSpeedScale / abs_curvature, kMinTrackingSpeed, kMaxV);
+      }
+
+      return std::min({heading_limited_speed, lateral_limited_speed, curvature_limited_speed});
     }
 
-    double _lookahead_distance = 0.45; // Lookahead distance in m
+    double _lookahead_distance = 0.35; // Lookahead distance in m
     std::vector<std::array<double, 2>> _waypoints; // Set of path waypoints generated from action chunk in x,y
     int _waypoint_idx = 0; // Index of current lookahead point
 
