@@ -189,6 +189,9 @@ class PurePursuitController: public ActionChunkController
       double euclid_dist = 0.0; // length of lookahead vector
 
       bool found_lookahead = false;
+      int best_forward_idx = -1;
+      std::array<double, 2> best_forward_vector{0.0, 0.0};
+      double best_forward_dist = 0.0;
       for(size_t i = _waypoint_idx; i<_waypoints.size();i++){
         std::array<double, 2> point = _waypoints[i];
 
@@ -197,6 +200,11 @@ class PurePursuitController: public ActionChunkController
           point[1]-relative_position[1]
         };
         euclid_dist = std::hypot(lookahead_vector[0], lookahead_vector[1]);
+        if (lookahead_vector[0] > kMinForwardTargetX && euclid_dist > best_forward_dist) {
+          best_forward_idx = static_cast<int>(i);
+          best_forward_vector = lookahead_vector;
+          best_forward_dist = euclid_dist;
+        }
         if (euclid_dist > _lookahead_distance){
           _waypoint_idx = i;
           found_lookahead = true;
@@ -205,9 +213,17 @@ class PurePursuitController: public ActionChunkController
       }
 
       if (!found_lookahead) {
-        // Ran off the end of the chunk without finding a point past the lookahead
-        // distance - stop rather than keep chasing the final waypoint.
-        return VelocityCommand{};
+        if (best_forward_idx < 0) {
+          // No usable forward target remains in the chunk.
+          return VelocityCommand{};
+        }
+
+        // Action chunks may be shorter than the nominal lookahead distance,
+        // especially after velocity profiling or near task completion. Keep
+        // tracking the farthest forward point instead of publishing zeros.
+        _waypoint_idx = best_forward_idx;
+        lookahead_vector = best_forward_vector;
+        euclid_dist = best_forward_dist;
       }
 
       // Rotate lookahead vector from the anchor frame into the robot's live body frame
@@ -222,9 +238,10 @@ class PurePursuitController: public ActionChunkController
       const double heading_error =
         std::atan2(lookahead_vector[1], lookahead_vector[0]);
 
-      const double raw_yaw_rate = R * kMaxV;
+      const double speed_target = trackingSpeedForHeading(heading_error, lookahead_vector[0]);
+      const double raw_yaw_rate = R * speed_target;
 
-      VelocityCommand command = clampIndependent(kMaxV, raw_yaw_rate);
+      VelocityCommand command = clampIndependent(speed_target, raw_yaw_rate);
 
       command.target_index = static_cast<int>(_waypoint_idx);
       command.target_x = static_cast<float>(lookahead_vector[0]);
@@ -291,8 +308,32 @@ class PurePursuitController: public ActionChunkController
     static constexpr double kHeadingGain = 1.2;
     static constexpr double kRotateInPlaceHeadingError = 0.5; // [rad]
     static constexpr double kMinLookaheadDistanceSq = 1e-6;
+    static constexpr double kMinForwardTargetX = 0.03; // [m]
+    static constexpr double kSlowdownHeadingError = 0.45; // [rad]
+    static constexpr double kStopForwardHeadingError = 1.35; // [rad]
+    static constexpr double kMinTrackingSpeed = 0.12; // [m/s]
 
-    double _lookahead_distance = 0.5; // Lookahead distance in m
+    static double trackingSpeedForHeading(double heading_error, double target_x)
+    {
+      if (target_x <= kMinForwardTargetX) {
+        return 0.0;
+      }
+
+      const double abs_heading_error = std::abs(heading_error);
+      if (abs_heading_error <= kSlowdownHeadingError) {
+        return kMaxV;
+      }
+      if (abs_heading_error >= kStopForwardHeadingError) {
+        return kMinTrackingSpeed;
+      }
+
+      const double t =
+        (abs_heading_error - kSlowdownHeadingError) /
+        (kStopForwardHeadingError - kSlowdownHeadingError);
+      return kMaxV + t * (kMinTrackingSpeed - kMaxV);
+    }
+
+    double _lookahead_distance = 0.4; // Lookahead distance in m
     std::vector<std::array<double, 2>> _waypoints; // Set of path waypoints generated from action chunk in x,y
     int _waypoint_idx = 0; // Index of current lookahead point
 
