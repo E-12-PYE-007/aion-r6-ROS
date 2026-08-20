@@ -2,3 +2,9 @@
 	path = src/px4_msgs
 	url = https://github.com/PX4/px4_msgs
 	branch = release/1.15
+[submodule "src/ORB_SLAM3"]
+	path = src/ORB_SLAM3
+	url = https://github.com/UZ-SLAMLab/ORB_SLAM3.git
+[submodule "src/OrbbecSDK_ROS2"]
+	path = src/OrbbecSDK_ROS2
+	url = https://github.com/orbbec/OrbbecSDK_ROS2.git
