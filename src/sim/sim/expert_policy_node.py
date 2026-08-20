@@ -184,7 +184,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
         self.declare_parameter("obstacle_clearance_cost_weight", 0.5)
         self.declare_parameter("obstacle_clearance_cost_distance_m", 0.4)
-        self.declare_parameter("max_speed_mps", 0.35)
+        self.declare_parameter("max_speed_mps", 0.3)
+        self.declare_parameter("expert_speed_limit_mps", 0.3)
         self.declare_parameter("max_yaw_rate_radps", 0.45)
         self.declare_parameter("max_accel_mps2", 0.25)
         self.declare_parameter("max_decel_mps2", 0.35)
@@ -290,9 +291,12 @@ class ExpertPolicyNode(Node):
 
     def profile_path(self, path: list[np.ndarray]) -> TimedTrajectory:
         speed_profile = self.variant.get("speed_profile", {})
+        requested_max_speed_mps = float(speed_profile.get("max_speed_mps", self.get_parameter("max_speed_mps").value))
+        expert_speed_limit_mps = float(self.get_parameter("expert_speed_limit_mps").value)
+        max_speed_mps = min(requested_max_speed_mps, expert_speed_limit_mps)
         return build_timed_trajectory(
             path,
-            max_speed_mps=float(speed_profile.get("max_speed_mps", self.get_parameter("max_speed_mps").value)),
+            max_speed_mps=max_speed_mps,
             max_yaw_rate_radps=float(speed_profile.get("max_yaw_rate_radps", self.get_parameter("max_yaw_rate_radps").value)),
             max_accel_mps2=float(speed_profile.get("max_accel_mps2", self.get_parameter("max_accel_mps2").value)),
             max_decel_mps2=float(speed_profile.get("max_decel_mps2", self.get_parameter("max_decel_mps2").value)),

@@ -345,6 +345,7 @@ def run_claimed_row(
             prepare_scene_command=args.prepare_scene_command,
             dry_run=bool(args.dry_run),
             bridge_prepare_command=bridge_prepare,
+            wait_for_task_success=not bool(args.fixed_duration_wait),
         )
     except Exception as exc:
         update_manifest_row_by_id(
@@ -462,6 +463,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-dir", type=Path, default=None)
     parser.add_argument("--dataset-name", default="sim_fenceline")
     parser.add_argument("--duration-s", type=float, default=None)
+    parser.add_argument("--fixed-duration-wait", action="store_true")
     parser.add_argument("--startup-wait-s", type=float, default=1.0)
     parser.add_argument("--stop-wait-s", type=float, default=5.0)
     parser.add_argument("--logs-dir", type=Path, default=None)

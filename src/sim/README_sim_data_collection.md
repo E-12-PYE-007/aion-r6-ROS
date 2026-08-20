@@ -431,7 +431,7 @@ The profile enforces limits for:
 Current default speed profile:
 
 ```text
-max_speed_mps: 0.35
+max_speed_mps: 0.3
 max_yaw_rate_radps: 0.45
 max_accel_mps2: 0.25
 max_decel_mps2: 0.35
@@ -739,7 +739,7 @@ This lets us collect multiple valid trajectories for one language instruction/ta
 ### Planner/vehicle limits
 
 - Minimum turn radius defaults to `0.75 m`.
-- Maximum speed defaults to `0.35 m/s`.
+- Maximum speed defaults to `0.3 m/s`.
 - Maximum yaw rate defaults to `0.45 rad/s`.
 - Acceleration/deceleration and angular acceleration are limited in the timed profile.
 - Reverse is disabled by default.

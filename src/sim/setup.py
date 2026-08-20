@@ -51,6 +51,7 @@ setup(
             'collect_task_spec_rollouts = sim.collect_task_spec_rollouts:main',
             'rollout_diagnostics = sim.rollout_diagnostics:main',
             'wait_for_sim_duration = sim.wait_for_sim_duration:main',
+            'wait_for_task_success = sim.wait_for_task_success:main',
             'actuation_smoke_test = sim.actuation_smoke_test:main',
             'export_edge_training_manifest = sim.export_edge_training_manifest:main',
 

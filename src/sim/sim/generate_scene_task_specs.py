@@ -250,7 +250,7 @@ DEFAULT_PLANNER_SETTINGS = {
 }
 
 DEFAULT_SPEED_PROFILE = {
-    "max_speed_mps": 0.35,
+    "max_speed_mps": 0.3,
     "max_yaw_rate_radps": 0.45,
     "max_accel_mps2": 0.25,
     "max_decel_mps2": 0.35,

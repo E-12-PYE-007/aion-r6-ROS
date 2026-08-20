@@ -241,6 +241,26 @@ def command_for_sim_duration_wait(
     return ["ros2", "run", "sim", "wait_for_sim_duration"] + ros_param_args(params)
 
 
+def command_for_task_success_wait(
+    task_spec_path: Path,
+    rollout: Rollout,
+    collection: dict[str, Any],
+    max_duration_s: float,
+    rollout_dir: Path,
+) -> list[str]:
+    wall_timeout_s = max(max_duration_s * 20.0, max_duration_s + 120.0)
+    params = {
+        "task_spec": task_spec_path.as_posix(),
+        "task_id": rollout.task["task_id"],
+        "odom_topic": collection.get("odom_topic", "/sim_odom"),
+        "max_duration_s": max_duration_s,
+        "fallback_duration_s": max_duration_s,
+        "wall_timeout_s": wall_timeout_s,
+        "summary_path": (rollout_dir / "task_success_wait_summary.json").as_posix(),
+    }
+    return ["ros2", "run", "sim", "wait_for_task_success"] + ros_param_args(params)
+
+
 def render_prepare_command(template: str, task_spec_path: Path, task_spec: dict[str, Any], rollout: Rollout) -> str:
     scene = task_spec.get("scene", {})
     return template.format(
@@ -337,6 +357,7 @@ def run_rollout(
     prepare_scene_command: str | None,
     dry_run: bool,
     bridge_prepare_command: list[str] | None,
+    wait_for_task_success: bool = True,
 ) -> bool:
     collection = task_spec.get("collection", {})
     rollout_dir = base_dir / rollout.trajectory_name
@@ -347,7 +368,11 @@ def run_rollout(
     commands.append(("expert", command_for_expert(task_spec_path, task_spec, rollout, collection)))
     commands.append(("diagnostics", command_for_diagnostics(rollout_dir, collection)))
     commands.append(("collector", command_for_collector(task_spec_path, rollout, collection, base_dir, dataset_name)))
-    sim_duration_wait_command = command_for_sim_duration_wait(collection, duration_s)
+    wait_command = (
+        command_for_task_success_wait(task_spec_path, rollout, collection, duration_s, rollout_dir)
+        if wait_for_task_success
+        else command_for_sim_duration_wait(collection, duration_s)
+    )
 
     print(f"\n=== {rollout.trajectory_name} ===")
     if prepare_scene_command:
@@ -357,8 +382,8 @@ def run_rollout(
         print(f"prepare: {' '.join(bridge_prepare_command)}")
     for name, command in commands:
         print(f"{name}: {' '.join(command)}")
-    print(f"duration_wait: {' '.join(sim_duration_wait_command)}")
-    print(f"duration_s: {duration_s:.1f}")
+    print(f"wait: {' '.join(wait_command)}")
+    print(f"max_duration_s: {duration_s:.1f}")
     if dry_run:
         return True
 
@@ -379,8 +404,8 @@ def run_rollout(
             time.sleep(startup_wait_s)
 
         wait_process = start_process(
-            sim_duration_wait_command,
-            logs_dir / rollout.trajectory_name / "duration_wait.log",
+            wait_command,
+            logs_dir / rollout.trajectory_name / "wait.log",
         )
         while wait_process.poll() is None:
             for name, process in running:
@@ -390,7 +415,7 @@ def run_rollout(
                     return False
             time.sleep(0.5)
         if wait_process.returncode != 0:
-            print(f"duration_wait exited with code {wait_process.returncode}")
+            print(f"wait exited with code {wait_process.returncode}")
             return False
         return True
     finally:
@@ -404,6 +429,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-dir", type=Path, default=None)
     parser.add_argument("--dataset-name", default="sim_fenceline")
     parser.add_argument("--duration-s", type=float, default=None)
+    parser.add_argument("--fixed-duration-wait", action="store_true")
     parser.add_argument("--startup-wait-s", type=float, default=1.0)
     parser.add_argument("--stop-wait-s", type=float, default=5.0)
     parser.add_argument("--logs-dir", type=Path, default=Path("logs/sim_rollouts"))
@@ -471,6 +497,7 @@ def main() -> int:
             prepare_scene_command=args.prepare_scene_command,
             dry_run=bool(args.dry_run),
             bridge_prepare_command=bridge_prepare_command,
+            wait_for_task_success=not bool(args.fixed_duration_wait),
         )
         if not ok:
             failures += 1

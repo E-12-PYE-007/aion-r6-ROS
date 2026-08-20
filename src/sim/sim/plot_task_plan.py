@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -124,11 +125,33 @@ def plot_polyline(ax, points: list[np.ndarray], *args, **kwargs) -> None:
     ax.plot(xy[:, 0], xy[:, 1], *args, **kwargs)
 
 
+def load_rollout_path(rollout_dir: Path | None) -> list[np.ndarray]:
+    if rollout_dir is None:
+        return []
+    poses_path = rollout_dir / "poses.jsonl"
+    if not poses_path.exists():
+        raise FileNotFoundError(f"{poses_path} does not exist")
+
+    points: list[np.ndarray] = []
+    with poses_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            pose = record.get("pose")
+            if not isinstance(pose, (list, tuple)) or len(pose) < 3:
+                continue
+            points.append(np.asarray([float(pose[1]), float(pose[2])], dtype=np.float64))
+    return points
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task_spec", type=Path)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--variant-id", default="nominal")
+    parser.add_argument("--rollout-dir", type=Path, default=None, help="Collected rollout directory containing poses.jsonl.")
     parser.add_argument("--output", type=Path, default=Path("task_plan.png"))
     parser.add_argument("--no-flip-isaac-y", action="store_true")
     return parser.parse_args()
@@ -168,6 +191,7 @@ def main() -> None:
         ),
     )
     planned_ok = planned_path is not None
+    rollout_path = load_rollout_path(args.rollout_dir)
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""
     print(f"collision_inflation_m={collision_map.inflation_m:.2f}")
     for obstacle in collision_map.obstacles:
@@ -228,6 +252,24 @@ def main() -> None:
     plot_polyline(ax, reference_path, "--", color="tab:blue", linewidth=2, label="reference")
     if planned_path:
         plot_polyline(ax, planned_path, "-", color="tab:green", linewidth=2, label="Hybrid A*")
+    if rollout_path:
+        plot_polyline(ax, rollout_path, "-", color="tab:red", linewidth=2.2, label="actual sim path")
+        ax.scatter(
+            [rollout_path[0][0]],
+            [rollout_path[0][1]],
+            marker="o",
+            color="tab:red",
+            s=45,
+            label="actual start",
+        )
+        ax.scatter(
+            [rollout_path[-1][0]],
+            [rollout_path[-1][1]],
+            marker="s",
+            color="tab:red",
+            s=45,
+            label="actual end",
+        )
     subgoal_points = np.asarray([position for position, _ in subgoals])
     if len(subgoal_points):
         ax.scatter(subgoal_points[:, 0], subgoal_points[:, 1], marker="x", color="tab:purple", s=60, label="subgoals")
@@ -257,7 +299,9 @@ def main() -> None:
     ax.text(
         0.01,
         0.01,
-        f"path_length={path_length(reference_path):.2f}m\nsource={scene_yaml}",
+        f"path_length={path_length(reference_path):.2f}m\n"
+        f"actual_samples={len(rollout_path)}\n"
+        f"source={scene_yaml}",
         transform=ax.transAxes,
         fontsize=8,
         va="bottom",
