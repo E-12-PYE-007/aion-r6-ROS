@@ -29,6 +29,7 @@ from sim.expert_trajectory_utils import (
     orient_and_crop_path_from_start,
     path_length,
     point2,
+    project_progress_near,
     sample_path_pose,
     world_to_robot,
     yaw_from_quaternion,
@@ -227,6 +228,7 @@ class ExpertPolicyNode(Node):
 
         self.current_position: Optional[np.ndarray] = None
         self.current_yaw: Optional[float] = None
+        self.path_progress_m = 0.0
         self.latest_odom_frame_debug: dict[str, object] = {}
         self.seq_num = 1
 
@@ -546,6 +548,7 @@ class ExpertPolicyNode(Node):
         planned = resample_path(planned, max(self.waypoint_spacing_m * 0.5, 0.1))
         self.planned_path = planned
         self.trajectory = self.profile_path(planned)
+        self.path_progress_m = 0.0
         self.get_logger().info(
             f"Hybrid A* planned {len(planned)} points via {len(subgoals)} subgoals "
             f"around {len(collision_map.obstacles)} obstacles, "
@@ -557,11 +560,17 @@ class ExpertPolicyNode(Node):
         return float(np.interp(progress_m, trajectory.distances, trajectory.times))
 
     def current_path_progress(self, path: list[np.ndarray]) -> float:
-        from sim.expert_trajectory_utils import project_progress
-
         if self.current_position is None:
             return 0.0
-        return project_progress(path, self.current_position)
+        progress = project_progress_near(
+            path,
+            self.current_position,
+            self.path_progress_m,
+            max_backward_m=0.5,
+            max_forward_m=2.0,
+        )
+        self.path_progress_m = max(self.path_progress_m, progress)
+        return self.path_progress_m
 
     def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, profile_time_s: float) -> None:
         if self.cmd_vel_publisher is None:

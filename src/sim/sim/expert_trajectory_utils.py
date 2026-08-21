@@ -142,6 +142,55 @@ def project_progress(polyline: list[np.ndarray], point: np.ndarray) -> float:
     return best_progress
 
 
+def project_progress_near(
+    polyline: list[np.ndarray],
+    point: np.ndarray,
+    previous_progress_m: float | None = None,
+    *,
+    max_backward_m: float = 0.5,
+    max_forward_m: float = 2.0,
+) -> float:
+    """Project onto a path near previous progress to avoid jumps on loops/detours."""
+    if previous_progress_m is None:
+        return project_progress(polyline, point)
+
+    lengths = segment_lengths(polyline)
+    if len(lengths) == 0:
+        return 0.0
+
+    total = path_length(polyline)
+    window_start = max(0.0, float(previous_progress_m) - max_backward_m)
+    window_end = min(total, float(previous_progress_m) + max_forward_m)
+    best_progress = window_start
+    best_distance = float("inf")
+    cumulative = 0.0
+
+    for i, length_value in enumerate(lengths):
+        length = float(length_value)
+        if length <= 1e-9:
+            continue
+        segment_start_progress = cumulative
+        segment_end_progress = cumulative + length
+        cumulative = segment_end_progress
+        if segment_end_progress < window_start or segment_start_progress > window_end:
+            continue
+
+        start = polyline[i]
+        end = polyline[i + 1]
+        direction = (end - start) / length
+        t = float(np.dot(point - start, direction))
+        unclamped_progress = segment_start_progress + t
+        progress = min(max(unclamped_progress, window_start), window_end)
+        local_t = min(max(progress - segment_start_progress, 0.0), length)
+        closest = start + local_t * direction
+        distance = float(np.linalg.norm(point - closest))
+        if distance < best_distance:
+            best_distance = distance
+            best_progress = progress
+
+    return best_progress
+
+
 def crop_path_at_progress(polyline: list[np.ndarray], progress: float) -> list[np.ndarray]:
     """Return the remaining portion of a polyline starting at a path-progress value."""
     if len(polyline) < 2:

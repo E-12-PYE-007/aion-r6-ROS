@@ -23,7 +23,7 @@ from sim.expert_trajectory_utils import (
     odom_to_pose,
     path_length,
     point2,
-    project_progress,
+    project_progress_near,
 )
 from sim.validate_scene_task_specs import reference_path_for_task
 
@@ -176,7 +176,14 @@ class TaskSuccessWaiter(Node):
             )
             self.latest_world_position = world_position
             if self.reference_path is not None:
-                self.path_progress_m = max(self.path_progress_m, project_progress(self.reference_path, world_position))
+                progress = project_progress_near(
+                    self.reference_path,
+                    world_position,
+                    self.path_progress_m,
+                    max_backward_m=0.5,
+                    max_forward_m=2.0,
+                )
+                self.path_progress_m = max(self.path_progress_m, progress)
             if self.target_position is not None:
                 self.latest_target_distance_m = float(np.linalg.norm(world_position - self.target_position))
 

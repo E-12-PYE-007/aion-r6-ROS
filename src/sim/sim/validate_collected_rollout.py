@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from sim.expert_trajectory_utils import find_task, find_variant, get_start_pose, load_yaml, path_length, project_progress
+from sim.expert_trajectory_utils import find_task, find_variant, get_start_pose, load_yaml, path_length, project_progress_near
 from sim.validate_scene_task_specs import reference_path_for_task
 
 
@@ -212,13 +212,21 @@ def reference_progress_metrics(
 
     progress_values: list[float] = []
     lateral_errors: list[float] = []
+    previous_progress = 0.0
     for record in records:
         point = pose_point(record)
         if point is None:
             continue
-        progress = project_progress(reference_path, point)
-        progress_values.append(progress)
-        lateral_errors.append(float(np.linalg.norm(point - closest_point_on_path(reference_path, progress))))
+        progress = project_progress_near(
+            reference_path,
+            point,
+            previous_progress,
+            max_backward_m=0.5,
+            max_forward_m=2.0,
+        )
+        previous_progress = max(previous_progress, progress)
+        progress_values.append(previous_progress)
+        lateral_errors.append(float(np.linalg.norm(point - closest_point_on_path(reference_path, previous_progress))))
 
     if not progress_values:
         return {}, "no usable poses for reference-path progress check"
