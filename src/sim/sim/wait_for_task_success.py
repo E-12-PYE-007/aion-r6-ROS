@@ -145,6 +145,8 @@ class TaskSuccessWaiter(Node):
             target_position = point2(target_raw, self.flip_scene_y) if isinstance(target_raw, (list, tuple)) else None
             if reference_path is not None:
                 required = min(required, max(path_length(reference_path) - 0.25, 0.0))
+                if success_type == "reach_path_end":
+                    target_position = reference_path[-1]
             return max(required, 0.0), success_type, target_position, world_start_position, world_start_yaw, reference_path
         return None, success_type, None, world_start_position, world_start_yaw, reference_path
 

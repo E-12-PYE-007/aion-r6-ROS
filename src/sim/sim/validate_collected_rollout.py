@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
+from sim.expert_trajectory_utils import find_task, find_variant, get_start_pose, load_yaml, path_length, project_progress
+from sim.validate_scene_task_specs import reference_path_for_task
+
 
 @dataclass
 class ValidationResult:
@@ -65,6 +70,13 @@ def path_distance(records: list[dict[str, Any]]) -> float:
             distance += math.hypot(current[0] - previous[0], current[1] - previous[1])
         previous = current
     return distance
+
+
+def pose_point(record: dict[str, Any]) -> np.ndarray | None:
+    point = pose_xy(record)
+    if point is None:
+        return None
+    return np.asarray([point[0], point[1]], dtype=np.float64)
 
 
 def displacement(records: list[dict[str, Any]]) -> float:
@@ -154,6 +166,94 @@ def load_diagnostics_summary(rollout_dir: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return load_json(path)
+
+
+def load_task_success_summary(rollout_dir: Path) -> dict[str, Any] | None:
+    path = rollout_dir / "task_success_wait_summary.json"
+    if not path.exists():
+        return None
+    return load_json(path)
+
+
+def resolve_existing_path(path_text: str, rollout_dir: Path) -> Path | None:
+    if not path_text:
+        return None
+    candidates = [Path(path_text)]
+    if not Path(path_text).is_absolute():
+        candidates.append(rollout_dir / path_text)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def reference_progress_metrics(
+    rollout_dir: Path,
+    metadata: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str | None]:
+    task_spec_path = resolve_existing_path(str(metadata.get("task_spec", "")), rollout_dir)
+    if task_spec_path is None:
+        return {}, "task spec is unavailable; reference-path progress could not be checked"
+
+    try:
+        task_spec = load_yaml(task_spec_path)
+        scene_path = Path(task_spec["scene"]["source_yaml"])
+        scene = load_yaml(scene_path)
+        task_id = str(metadata.get("task_id") or "")
+        variant_id = str(metadata.get("variant_id") or "nominal")
+        task = find_task(task_spec, task_id)
+        variant = find_variant(task, variant_id)
+        flip_scene_y = bool(metadata.get("flip_scene_y", True))
+        reference_path = reference_path_for_task(scene, scene_path, task, variant, flip_scene_y)
+        world_start_position, _ = get_start_pose(scene, task, flip_scene_y)
+    except Exception as exc:
+        return {}, f"reference-path progress could not be checked: {exc}"
+
+    progress_values: list[float] = []
+    lateral_errors: list[float] = []
+    for record in records:
+        point = pose_point(record)
+        if point is None:
+            continue
+        progress = project_progress(reference_path, point)
+        progress_values.append(progress)
+        lateral_errors.append(float(np.linalg.norm(point - closest_point_on_path(reference_path, progress))))
+
+    if not progress_values:
+        return {}, "no usable poses for reference-path progress check"
+
+    max_progress = max(progress_values)
+    final_progress = progress_values[-1]
+    return {
+        "reference_path_length_m": path_length(reference_path),
+        "path_progress_m": max_progress,
+        "final_path_progress_m": final_progress,
+        "start_reference_distance_m": float(np.linalg.norm(pose_point(records[0]) - world_start_position))
+        if pose_point(records[0]) is not None
+        else None,
+        "mean_reference_lateral_error_m": sum(lateral_errors) / len(lateral_errors),
+        "max_reference_lateral_error_m": max(lateral_errors, default=0.0),
+    }, None
+
+
+def closest_point_on_path(polyline: list[np.ndarray], progress: float) -> np.ndarray:
+    if not polyline:
+        return np.zeros(2, dtype=np.float64)
+    if len(polyline) == 1:
+        return polyline[0]
+    remaining = max(float(progress), 0.0)
+    for index in range(len(polyline) - 1):
+        start = polyline[index]
+        end = polyline[index + 1]
+        segment = end - start
+        length = float(np.linalg.norm(segment))
+        if length <= 1e-9:
+            continue
+        if remaining <= length:
+            return start + segment * (remaining / length)
+        remaining -= length
+    return polyline[-1]
 
 
 def nested_float(data: dict[str, Any], *keys: str, default: float = 0.0) -> float:
@@ -247,11 +347,35 @@ def validate_rollout_dir(
 
     image_count, missing_image_refs = validate_images(rollout_dir, records)
     diagnostics_summary = load_diagnostics_summary(rollout_dir)
+    task_success_summary = load_task_success_summary(rollout_dir)
     action_chunk_fraction = fraction_present(records, "action_chunk")
     cmd_vel_fraction = fraction_present(records, "cmd_vel")
     tracking_metrics = action_chunk_tracking_metrics(records)
     travelled_m = path_distance(records)
     displacement_m = displacement(records)
+    reference_metrics, reference_warning = reference_progress_metrics(rollout_dir, metadata, records)
+    if not reference_metrics and task_success_summary is not None:
+        summary_progress = finite_float(task_success_summary.get("path_progress_m"))
+        summary_length = finite_float(task_success_summary.get("reference_path_length_m"))
+        if summary_progress is not None:
+            reference_metrics["path_progress_m"] = summary_progress
+            reference_metrics["final_path_progress_m"] = summary_progress
+        if summary_length is not None:
+            reference_metrics["reference_path_length_m"] = summary_length
+
+    structured_task = metadata.get("structured_task") if isinstance(metadata.get("structured_task"), dict) else {}
+    success_condition = structured_task.get("success_condition") if isinstance(structured_task, dict) else {}
+    success_type = str(success_condition.get("type", "")) if isinstance(success_condition, dict) else ""
+    distance_success_types = {"reach_path_end", "pass_point", "pass_point_and_continue"}
+    use_reference_progress = (
+        success_type in distance_success_types
+        and not allow_stationary
+        and finite_float(reference_metrics.get("path_progress_m")) is not None
+    )
+    required_progress_m = float(min_motion_m)
+    reference_path_length_m = finite_float(reference_metrics.get("reference_path_length_m"))
+    if use_reference_progress and reference_path_length_m is not None:
+        required_progress_m = min(required_progress_m, max(reference_path_length_m - 0.25, 0.0))
 
     metrics.update(
         {
@@ -265,12 +389,19 @@ def validate_rollout_dir(
             "displacement_m": displacement_m,
             "min_samples": min_samples,
             "min_motion_m": min_motion_m,
+            "success_type": success_type,
+            "reference_progress": reference_metrics,
+            "required_progress_m": required_progress_m,
         }
     )
     if diagnostics_summary is not None:
         metrics["diagnostics"] = diagnostics_summary
     else:
         warnings.append("diagnostics_summary.json is missing")
+    if task_success_summary is not None:
+        metrics["task_success_wait_summary"] = task_success_summary
+    if reference_warning is not None:
+        warnings.append(reference_warning)
 
     if expected_task_id and metadata.get("task_id") != expected_task_id:
         errors.append(f"metadata task_id {metadata.get('task_id')!r} != expected {expected_task_id!r}")
@@ -322,7 +453,11 @@ def validate_rollout_dir(
         )
     if tracking_metrics["samples_with_action_chunk_age"] == 0 and action_chunk_fraction >= min_action_chunk_fraction:
         warnings.append("action_chunk_age_s is missing; freshness could not be checked for this rollout")
-    if travelled_m < float(min_motion_m):
+    if use_reference_progress:
+        progress_m = float(reference_metrics["path_progress_m"])
+        if progress_m < required_progress_m:
+            errors.append(f"path progress {progress_m:.3f}m < required {required_progress_m:.3f}m")
+    elif travelled_m < float(min_motion_m):
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
     if len(records) and image_count != len(records):
         warnings.append(f"image count {image_count} differs from sample count {len(records)}")
@@ -339,7 +474,12 @@ def validate_rollout_dir(
             )
         if nested_float(diagnostics_summary, "rates_hz", "cmd_vel") < 2.0:
             warnings.append(f"diagnostics: cmd_vel rate {nested_float(diagnostics_summary, 'rates_hz', 'cmd_vel'):.2f} Hz")
-        likely_failure = likely_failure_from_diagnostics(diagnostics_summary, travelled_m, float(min_motion_m))
+        failure_distance = (
+            float(reference_metrics["path_progress_m"])
+            if use_reference_progress and finite_float(reference_metrics.get("path_progress_m")) is not None
+            else travelled_m
+        )
+        likely_failure = likely_failure_from_diagnostics(diagnostics_summary, failure_distance, required_progress_m)
         if likely_failure is not None:
             warnings.append(f"likely failure stage: {likely_failure}")
 

@@ -192,6 +192,9 @@ class PurePursuitController: public ActionChunkController
       int best_forward_idx = -1;
       std::array<double, 2> best_forward_vector{0.0, 0.0};
       double best_forward_dist = 0.0;
+      int best_any_idx = -1;
+      std::array<double, 2> best_any_vector{0.0, 0.0};
+      double best_any_dist = 0.0;
       for(size_t i = _waypoint_idx; i<_waypoints.size();i++){
         std::array<double, 2> point = _waypoints[i];
 
@@ -200,22 +203,53 @@ class PurePursuitController: public ActionChunkController
           point[1]-relative_position[1]
         };
         euclid_dist = std::hypot(lookahead_vector[0], lookahead_vector[1]);
-        if (lookahead_vector[0] > kMinForwardTargetX && euclid_dist > best_forward_dist) {
-          best_forward_idx = static_cast<int>(i);
-          best_forward_vector = lookahead_vector;
-          best_forward_dist = euclid_dist;
+        if (euclid_dist > best_any_dist) {
+          best_any_idx = static_cast<int>(i);
+          best_any_vector = lookahead_vector;
+          best_any_dist = euclid_dist;
         }
-        if (euclid_dist > _lookahead_distance){
-          _waypoint_idx = i;
-          found_lookahead = true;
-          break;
+        if (lookahead_vector[0] > kMinForwardTargetX) {
+          if (euclid_dist > best_forward_dist) {
+            best_forward_idx = static_cast<int>(i);
+            best_forward_vector = lookahead_vector;
+            best_forward_dist = euclid_dist;
+          }
+          if (euclid_dist > _lookahead_distance){
+            _waypoint_idx = i;
+            found_lookahead = true;
+            break;
+          }
         }
       }
 
       if (!found_lookahead) {
         if (best_forward_idx < 0) {
-          // No usable forward target remains in the chunk.
-          return VelocityCommand{};
+          if (best_any_idx < 0 || best_any_dist <= kMinLookaheadDistanceSq) {
+            // No usable target remains in the chunk.
+            return VelocityCommand{};
+          }
+
+          // The current chunk has only side/behind targets. For a skid-steer rover,
+          // rotate toward the nearest remaining path direction instead of freezing.
+          _waypoint_idx = best_any_idx;
+          double x = best_any_vector[0];
+          double y = best_any_vector[1];
+          double delta_theta = current_pose.theta - _anchor_pose.theta;
+          std::array<double, 2> body_vector{
+            x*std::cos(delta_theta) + y*std::sin(delta_theta),
+            -x*std::sin(delta_theta) + y*std::cos(delta_theta)
+          };
+          const double heading_error = std::atan2(body_vector[1], body_vector[0]);
+          VelocityCommand command = clampIndependent(0.0, kHeadingGain * heading_error);
+          command.target_index = static_cast<int>(_waypoint_idx);
+          command.target_x = static_cast<float>(body_vector[0]);
+          command.target_y = static_cast<float>(body_vector[1]);
+          command.target_distance = static_cast<float>(best_any_dist);
+          command.heading_error = static_cast<float>(heading_error);
+          command.curvature = 0.0f;
+          command.raw_yaw_rate = static_cast<float>(kHeadingGain * heading_error);
+          command.target_found = true;
+          return command;
         }
 
         // Action chunks may be shorter than the nominal lookahead distance,
