@@ -147,8 +147,24 @@ class TaskSuccessWaiter(Node):
                 required = min(required, max(path_length(reference_path) - 0.25, 0.0))
                 if success_type == "reach_path_end":
                     target_position = reference_path[-1]
+            if success_type == "reach_path_end" and not self.requires_target_tolerance(task, success_condition):
+                target_position = None
             return max(required, 0.0), success_type, target_position, world_start_position, world_start_yaw, reference_path
         return None, success_type, None, world_start_position, world_start_yaw, reference_path
+
+    @staticmethod
+    def requires_target_tolerance(task: dict[str, Any], success_condition: dict[str, Any]) -> bool:
+        if bool(success_condition.get("require_target_tolerance", False)):
+            return True
+        task_type = str(task.get("task_type", ""))
+        data_category = str(task.get("data_category", ""))
+        scenario_tags = {str(tag) for tag in task.get("scenario_tags", []) if tag is not None}
+        return (
+            task_type.startswith("stop")
+            or task_type in {"stop_at_landmark", "stop_at_gap"}
+            or data_category == "terminal"
+            or "terminal" in scenario_tags
+        )
 
     def odom_callback(self, msg: Odometry) -> None:
         stamp_s = stamp_to_seconds(msg.header.stamp)
@@ -201,7 +217,7 @@ class TaskSuccessWaiter(Node):
         )
         if reached_required_distance and reached_target:
             self.success = True
-            self.stop_reason = "success_distance_and_target"
+            self.stop_reason = "success_distance_and_target" if self.target_position is not None else "success_progress"
             self.done = self.odom_messages >= self.min_odom_messages
         elif sim_elapsed_s >= self.target_duration_s and self.odom_messages >= self.min_odom_messages:
             self.stop_reason = "max_duration_reached"
