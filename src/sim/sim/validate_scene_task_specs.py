@@ -18,11 +18,13 @@ from sim.expert_trajectory_utils import (
     get_asset_bbox,
     offset_polyline,
     orient_and_crop_path_from_start,
+    orient_loop_path_from_start,
     path_length,
     point2,
     road_by_name,
     rotate,
     sample_path_pose,
+    world_to_robot,
 )
 from sim.hybrid_astar import HybridAStarPlanner, Pose
 
@@ -703,6 +705,8 @@ def finalize_reference_path(
     if not should_orient_reference_from_start(task):
         return path
     start, start_yaw = scene_start_pose(scene, task, flip_isaac_y)
+    if task.get("task_type") == "follow_fence_sequence" and task.get("sequence_type") == "perimeter":
+        return orient_loop_path_from_start(path, start, start_yaw, allow_reverse=True)
     return orient_and_crop_path_from_start(path, start, start_yaw, allow_reverse=True)
 
 
@@ -1130,6 +1134,33 @@ def fence_clearance_error(
     return None
 
 
+def initial_forward_preview_error(
+    reference_path: list[np.ndarray],
+    start_position: np.ndarray,
+    start_yaw: float,
+    settings: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    if len(reference_path) < 2 or path_length(reference_path) <= 1e-6:
+        return "reference path is empty", {}
+    preview_m = float(settings.get("quality_initial_preview_m", 0.25))
+    min_forward_x_m = float(settings.get("quality_min_initial_forward_x_m", 0.03))
+    preview_position, preview_yaw = sample_path_pose(reference_path, min(preview_m, path_length(reference_path)))
+    relative_x, relative_y, relative_theta = world_to_robot(start_position, start_yaw, preview_position, preview_yaw)
+    metrics = {
+        "initial_preview_m": preview_m,
+        "initial_relative_x_m": float(relative_x),
+        "initial_relative_y_m": float(relative_y),
+        "initial_relative_theta_rad": float(relative_theta),
+        "min_initial_forward_x_m": min_forward_x_m,
+    }
+    if relative_x <= min_forward_x_m:
+        return (
+            f"initial preview target is behind/too close: relative_x {relative_x:.3f}m "
+            f"<= {min_forward_x_m:.3f}m after path orientation repair"
+        ), metrics
+    return None, metrics
+
+
 def planner_accepts_variant(
     scene: dict[str, Any],
     scene_yaml: Path,
@@ -1144,6 +1175,14 @@ def planner_accepts_variant(
         reference_length = path_length(reference_path)
         start_position, start_yaw = shifted_start_pose(scene, task, variant, flip_isaac_y)
         settings = variant.get("planner_settings") or {}
+        initial_error, initial_metrics = initial_forward_preview_error(
+            reference_path,
+            start_position,
+            start_yaw,
+            settings,
+        )
+        if initial_error is not None:
+            return False, initial_error, initial_metrics
         required_clearance = float(settings.get("robot_radius_m", 0.32)) + float(settings.get("obstacle_padding_m", 0.08))
         clearance_error = fence_clearance_error(scene, start_position, required_clearance, flip_isaac_y)
         if clearance_error is not None:
@@ -1173,6 +1212,7 @@ def planner_accepts_variant(
             settings,
             side_constraint_segments_for_task(scene, task, flip_isaac_y),
         )
+        metrics.update(initial_metrics)
         metrics["reference_path_length_m"] = reference_length
         metrics["path_length_ratio"] = (
             float(metrics.get("planned_path_length_m", 0.0)) / max(reference_length, 1e-9)

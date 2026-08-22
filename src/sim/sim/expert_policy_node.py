@@ -27,10 +27,12 @@ from sim.expert_trajectory_utils import (
     load_yaml,
     odom_to_pose,
     orient_and_crop_path_from_start,
+    orient_loop_path_from_start,
     path_length,
     point2,
     project_progress_near,
     sample_path_pose,
+    sample_timed_action_target,
     world_to_robot,
     yaw_from_quaternion,
 )
@@ -255,6 +257,16 @@ class ExpertPolicyNode(Node):
         raise NotImplementedError
 
     def prepare_reference_path(self, path: list[np.ndarray]) -> list[np.ndarray]:
+        if (
+            self.task.get("task_type") == "follow_fence_sequence"
+            and self.task.get("sequence_type") == "perimeter"
+        ):
+            return orient_loop_path_from_start(
+                path,
+                self.world_start_position,
+                self.world_start_yaw,
+                allow_reverse=True,
+            )
         if self.task.get("task_type") in {
             "follow_fence",
             "follow_fence_sequence",
@@ -606,7 +618,13 @@ class ExpertPolicyNode(Node):
         if self.current_position is None or self.current_yaw is None:
             return
         first_offset_s = float(self.future_time_offsets_s[0]) if self.future_time_offsets_s else 0.3
-        target_position, target_yaw, _, _ = trajectory.sample(profile_time_s + first_offset_s)
+        target_position, target_yaw, _ = sample_timed_action_target(
+            trajectory,
+            self.current_position,
+            self.current_yaw,
+            profile_time_s,
+            first_offset_s,
+        )
         delta_world = target_position - self.current_position
         relative_x, relative_y, relative_theta = world_to_robot(
             self.current_position,

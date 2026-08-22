@@ -216,6 +216,34 @@ def crop_path_at_progress(polyline: list[np.ndarray], progress: float) -> list[n
     return cropped
 
 
+def crop_loop_path_at_progress(polyline: list[np.ndarray], progress: float) -> list[np.ndarray]:
+    """Return a full loop path starting near progress and wrapping back to start."""
+    if len(polyline) < 2:
+        return list(polyline)
+    total = path_length(polyline)
+    progress = min(max(float(progress), 0.0), total)
+    start_position, _ = sample_path_pose(polyline, progress)
+
+    lengths = segment_lengths(polyline)
+    segment_index = 0
+    cumulative = 0.0
+    for index, length in enumerate(lengths):
+        next_cumulative = cumulative + float(length)
+        if progress <= next_cumulative + 1e-9:
+            segment_index = index
+            break
+        cumulative = next_cumulative
+
+    loop = [start_position]
+    ordered_points = list(polyline[segment_index + 1 :]) + list(polyline[: segment_index + 1])
+    for point in ordered_points:
+        if float(np.linalg.norm(point - loop[-1])) > 1e-6:
+            loop.append(point)
+    if float(np.linalg.norm(start_position - loop[-1])) > 1e-6:
+        loop.append(start_position)
+    return loop
+
+
 def orient_and_crop_path_from_start(
     polyline: list[np.ndarray],
     start_position: np.ndarray,
@@ -244,6 +272,35 @@ def orient_and_crop_path_from_start(
         candidates.append(list(reversed(polyline)))
     best = min(candidates, key=score)
     return crop_path_at_progress(best, project_progress(best, start_position))
+
+
+def orient_loop_path_from_start(
+    polyline: list[np.ndarray],
+    start_position: np.ndarray,
+    start_yaw: float,
+    *,
+    allow_reverse: bool = True,
+) -> list[np.ndarray]:
+    """Choose loop direction from start and preserve the whole loop."""
+    if len(polyline) < 2:
+        return list(polyline)
+
+    def score(candidate: list[np.ndarray]) -> tuple[float, float, float]:
+        progress = project_progress(candidate, start_position)
+        loop = crop_loop_path_at_progress(candidate, progress)
+        if len(loop) < 2:
+            return (math.inf, math.inf, math.inf)
+        preview_progress = min(0.35, path_length(loop))
+        _, path_yaw = sample_path_pose(loop, preview_progress)
+        heading_error = abs(wrap_to_pi(path_yaw - start_yaw))
+        start_distance = float(np.linalg.norm(loop[0] - start_position))
+        return (heading_error, start_distance, -path_length(loop))
+
+    candidates = [list(polyline)]
+    if allow_reverse:
+        candidates.append(list(reversed(polyline)))
+    best = min(candidates, key=score)
+    return crop_loop_path_at_progress(best, project_progress(best, start_position))
 
 
 def sample_path_pose(polyline: list[np.ndarray], progress: float) -> tuple[np.ndarray, float]:
@@ -351,27 +408,66 @@ def build_timed_action_chunk(
 
     total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
     min_forward_x_m = 0.03
+    min_preview_distance_m = 0.25
+    min_preview_spacing_m = 0.12
     search_step_m = 0.15
     max_forward_search_m = 2.0
+    current_distance = float(np.interp(current_progress_time_s, trajectory.times, trajectory.distances))
 
     for index in range(len(msg.relative_poses)):
-        target_time = current_progress_time_s + float(offsets[index])
-        target_position, target_yaw, _, _ = trajectory.sample(target_time)
+        target_position, target_yaw, _ = sample_timed_action_target(
+            trajectory,
+            current_position,
+            current_yaw,
+            current_progress_time_s,
+            float(offsets[index]),
+            min_forward_x_m=min_forward_x_m,
+            min_preview_distance_m=min_preview_distance_m + index * min_preview_spacing_m,
+            max_forward_search_m=max_forward_search_m,
+            search_step_m=search_step_m,
+            current_distance=current_distance,
+        )
         x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
-        if x <= min_forward_x_m and total_distance > 1e-6:
-            target_distance = float(np.interp(target_time, trajectory.times, trajectory.distances))
-            searched = 0.0
-            while x <= min_forward_x_m and searched < max_forward_search_m and target_distance < total_distance:
-                searched += search_step_m
-                target_distance = min(target_distance + search_step_m, total_distance)
-                target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
-                x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
         pose = Pose2D()
         pose.x = float(x)
         pose.y = float(y)
         pose.theta = float(theta)
         msg.relative_poses[index] = pose
     return msg
+
+
+def sample_timed_action_target(
+    trajectory,
+    current_position: np.ndarray,
+    current_yaw: float,
+    current_progress_time_s: float,
+    future_offset_s: float,
+    *,
+    min_forward_x_m: float = 0.03,
+    min_preview_distance_m: float = 0.25,
+    max_forward_search_m: float = 2.0,
+    search_step_m: float = 0.15,
+    current_distance: float | None = None,
+) -> tuple[np.ndarray, float, float]:
+    """Sample a future target while avoiding tiny or behind-robot previews."""
+    total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+    target_time = current_progress_time_s + float(future_offset_s)
+    if current_distance is None:
+        current_distance = float(np.interp(current_progress_time_s, trajectory.times, trajectory.distances))
+    timed_distance = float(np.interp(target_time, trajectory.times, trajectory.distances))
+    target_distance = max(timed_distance, float(current_distance) + min_preview_distance_m)
+    target_distance = min(target_distance, total_distance)
+    target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
+    x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+
+    searched = 0.0
+    while x <= min_forward_x_m and searched < max_forward_search_m and target_distance < total_distance:
+        searched += search_step_m
+        target_distance = min(target_distance + search_step_m, total_distance)
+        target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
+        x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+
+    return target_position, target_yaw, target_distance
 
 
 def fence_by_name(scene: dict[str, Any], name: str) -> dict[str, Any]:

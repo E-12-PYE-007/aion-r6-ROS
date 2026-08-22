@@ -351,8 +351,8 @@ class PurePursuitController: public ActionChunkController
     static constexpr double kStopForwardHeadingError = 0.85; // [rad]
     static constexpr double kSlowdownLateralError = 0.12; // [m]
     static constexpr double kStopForwardLateralError = 0.45; // [m]
-    static constexpr double kCurvatureSpeedScale = 0.18; // [m^2/s]
-    static constexpr double kMinTrackingSpeed = 0.06; // [m/s]
+    static constexpr double kCurvatureSpeedScale = 0.24; // [m^2/s]
+    static constexpr double kMinTrackingSpeed = 0.10; // [m/s]
 
     static double trackingSpeedForTarget(
       double heading_error,
