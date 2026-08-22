@@ -154,6 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-dir", type=Path, default=None, help="Collected rollout directory containing poses.jsonl.")
     parser.add_argument("--output", type=Path, default=Path("task_plan.png"))
     parser.add_argument("--no-flip-isaac-y", action="store_true")
+    parser.add_argument("--skip-planner", action="store_true", help="Plot reference and rollout without running Hybrid A*.")
     return parser.parse_args()
 
 
@@ -178,18 +179,23 @@ def main() -> None:
         robot_radius_m=float(settings.get("robot_radius_m", 0.32)),
         obstacle_padding_m=float(settings.get("obstacle_padding_m", 0.08)),
     )
-    planned_path, selected_subgoals, nudged_count = plan_path(
-        collision_map,
-        settings,
-        start_position,
-        start_yaw,
-        subgoals,
-        side_constraint_segments_for_task(scene, task, flip_isaac_y),
-        combined_point_cost_fn(
-            fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y),
-            obstacle_clearance_cost_for_map(collision_map, settings),
-        ),
-    )
+    selected_subgoals = subgoals
+    nudged_count = 0
+    if args.skip_planner:
+        planned_path = None
+    else:
+        planned_path, selected_subgoals, nudged_count = plan_path(
+            collision_map,
+            settings,
+            start_position,
+            start_yaw,
+            subgoals,
+            side_constraint_segments_for_task(scene, task, flip_isaac_y),
+            combined_point_cost_fn(
+                fence_offset_cost_for_task(scene, task, variant, settings, flip_isaac_y),
+                obstacle_clearance_cost_for_map(collision_map, settings),
+            ),
+        )
     planned_ok = planned_path is not None
     rollout_path = load_rollout_path(args.rollout_dir)
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""

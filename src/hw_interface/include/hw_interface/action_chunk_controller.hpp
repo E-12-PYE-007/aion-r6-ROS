@@ -298,46 +298,28 @@ class PurePursuitController: public ActionChunkController
   
   private:
 
-  /**
-   * Interpolate curve between waypoints to allow consideration of specified theta,
-   * using hemite curves
-   */
+    /// Interpolate directly between action-chunk waypoint positions.
+    /// Heading values in generated chunks describe path tangent, but using them as
+    /// Hermite tangents can create loops/curls at corners and make Pure Pursuit
+    /// chase artificial points behind the rover.
     std::vector<std::array<double, 2>> generateWaypoints(
       const std::array<geometry_msgs::msg::Pose2D, 8> & waypoints)
     {
       std::vector<std::array<double, 2>> result;
       
       for (size_t i =0; i < waypoints.size()-1; ++i){
-        // Start and end points
         double x0 = waypoints[i].x, y0 = waypoints[i].y;
         double x1 = waypoints[i+1].x, y1 = waypoints[i+1].y;
-        
-        // Scale factor based on distance between points to define curve shape
-        double scale = std::hypot(x1-x0, y1-y0);
 
-        // Scaled tangent vectors at start and end, derived from heading
-        double m0x = scale * std::cos(waypoints[i].theta);
-        double m0y = scale * std::sin(waypoints[i].theta);
-        double m1x = scale * std::cos(waypoints[i+1].theta);
-        double m1y = scale * std::sin(waypoints[i+1].theta);
-
-        // Sample segment 10 times and store points
         for (int j = 0; j < 10; ++j) {
-            double t = static_cast<double>(j) / 10;
-            double t2 = t*t, t3 = t2*t;
-
-            // Hermite basis polynomials
-            double h00 =  2*t3 - 3*t2 + 1;  // 1 at t=0, 0 at t=1
-            double h10 =    t3 - 2*t2 + t;  // tangent influence at t=0
-            double h01 = -2*t3 + 3*t2;      // 0 at t=0, 1 at t=1
-            double h11 =    t3 -   t2;      // tangent influence at t=1
-
+            double t = static_cast<double>(j) / 10.0;
             result.push_back({
-                h00*x0 + h10*m0x + h01*x1 + h11*m1x,
-                h00*y0 + h10*m0y + h01*y1 + h11*m1y
+                x0 + t * (x1 - x0),
+                y0 + t * (y1 - y0)
             });
         }
       }
+      result.push_back({waypoints.back().x, waypoints.back().y});
 
       return result;
 

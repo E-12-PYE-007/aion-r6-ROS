@@ -18,6 +18,7 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 
 from sim.expert_trajectory_utils import (
+    build_distance_action_chunk,
     build_timed_action_chunk,
     fence_by_name,
     find_variant,
@@ -32,6 +33,7 @@ from sim.expert_trajectory_utils import (
     point2,
     project_progress_near,
     sample_path_pose,
+    sample_distance_action_target,
     sample_timed_action_target,
     world_to_robot,
     yaw_from_quaternion,
@@ -159,6 +161,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("waypoint_spacing_m", 0.18)
+        self.declare_parameter("first_preview_m", 0.35)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", True)
@@ -216,6 +219,7 @@ class ExpertPolicyNode(Node):
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
         self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_scene_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
+        self.first_preview_m = float(self.get_parameter("first_preview_m").value)
         self.future_time_offsets_s = [
             float(value)
             for value in self.get_parameter("future_time_offsets_s").value
@@ -599,31 +603,39 @@ class ExpertPolicyNode(Node):
             return
         self.maybe_plan_path()
         trajectory = self.active_trajectory()
-        profile_time_s = self.current_profile_time(trajectory)
-        self.publish_frame_debug(trajectory, profile_time_s)
-        msg = build_timed_action_chunk(
+        progress_m = self.current_path_progress(trajectory.path)
+        profile_time_s = float(np.interp(progress_m, trajectory.distances, trajectory.times))
+        self.publish_frame_debug(trajectory, progress_m)
+        msg = build_distance_action_chunk(
             self,
             trajectory,
             self.current_position,
             self.current_yaw,
-            profile_time_s,
-            self.future_time_offsets_s,
+            progress_m,
             self.seq_num,
+            first_preview_m=self.first_preview_m,
+            waypoint_spacing_m=self.waypoint_spacing_m,
         )
+        first_pose = msg.relative_poses[0]
+        if first_pose.x < 0.08:
+            self.get_logger().warn(
+                f"ActionChunk first waypoint is still too close/behind: "
+                f"x={first_pose.x:.3f} y={first_pose.y:.3f} theta={first_pose.theta:.3f} "
+                f"progress_m={progress_m:.3f}/{path_length(trajectory.path):.3f}"
+            )
         self.publisher.publish(msg)
         self.publish_expert_cmd_vel(trajectory, profile_time_s)
         self.seq_num += 1
 
-    def publish_frame_debug(self, trajectory: TimedTrajectory, profile_time_s: float) -> None:
+    def publish_frame_debug(self, trajectory: TimedTrajectory, progress_m: float) -> None:
         if self.current_position is None or self.current_yaw is None:
             return
-        first_offset_s = float(self.future_time_offsets_s[0]) if self.future_time_offsets_s else 0.3
-        target_position, target_yaw, _ = sample_timed_action_target(
+        target_position, target_yaw, target_distance = sample_distance_action_target(
             trajectory,
             self.current_position,
             self.current_yaw,
-            profile_time_s,
-            first_offset_s,
+            progress_m,
+            self.first_preview_m,
         )
         delta_world = target_position - self.current_position
         relative_x, relative_y, relative_theta = world_to_robot(
@@ -640,6 +652,8 @@ class ExpertPolicyNode(Node):
             "target_world_x": float(target_position[0]),
             "target_world_y": float(target_position[1]),
             "target_world_yaw": float(target_yaw),
+            "target_path_distance_m": float(target_distance),
+            "current_path_progress_m": float(progress_m),
             "delta_world_x": float(delta_world[0]),
             "delta_world_y": float(delta_world[1]),
             "relative_x": float(relative_x),

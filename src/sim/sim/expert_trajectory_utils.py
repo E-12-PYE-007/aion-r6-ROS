@@ -436,6 +436,79 @@ def build_timed_action_chunk(
     return msg
 
 
+def build_distance_action_chunk(
+    node,
+    trajectory,
+    current_position: np.ndarray,
+    current_yaw: float,
+    current_progress_m: float,
+    seq_num: int,
+    frame_id: str = "base_link",
+    first_preview_m: float = 0.35,
+    waypoint_spacing_m: float = 0.18,
+) -> object:
+    from aion_msgs.msg import ActionChunk
+    from geometry_msgs.msg import Pose2D
+
+    msg = ActionChunk()
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.header.frame_id = frame_id
+    msg.seq_num = seq_num
+
+    total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+    min_forward_x_m = 0.08
+    search_step_m = 0.15
+    max_forward_search_m = 3.0
+
+    for index in range(len(msg.relative_poses)):
+        preview_m = first_preview_m + index * waypoint_spacing_m
+        target_position, target_yaw, _ = sample_distance_action_target(
+            trajectory,
+            current_position,
+            current_yaw,
+            current_progress_m,
+            preview_m,
+            min_forward_x_m=min_forward_x_m,
+            max_forward_search_m=max_forward_search_m,
+            search_step_m=search_step_m,
+        )
+        x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        pose = Pose2D()
+        pose.x = float(x)
+        pose.y = float(y)
+        pose.theta = float(theta)
+        msg.relative_poses[index] = pose
+    return msg
+
+
+def sample_distance_action_target(
+    trajectory,
+    current_position: np.ndarray,
+    current_yaw: float,
+    current_progress_m: float,
+    preview_m: float,
+    *,
+    min_forward_x_m: float = 0.08,
+    max_forward_search_m: float = 3.0,
+    search_step_m: float = 0.15,
+) -> tuple[np.ndarray, float, float]:
+    """Sample by path distance ahead of current progress, forcing a usable forward target."""
+    total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+    current_progress_m = min(max(float(current_progress_m), 0.0), total_distance)
+    target_distance = min(current_progress_m + max(float(preview_m), 0.0), total_distance)
+    target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
+    x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+
+    searched = 0.0
+    while x <= min_forward_x_m and searched < max_forward_search_m and target_distance < total_distance:
+        searched += search_step_m
+        target_distance = min(target_distance + search_step_m, total_distance)
+        target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
+        x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+
+    return target_position, target_yaw, target_distance
+
+
 def sample_timed_action_target(
     trajectory,
     current_position: np.ndarray,
