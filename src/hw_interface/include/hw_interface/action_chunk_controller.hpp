@@ -339,13 +339,13 @@ class PurePursuitController: public ActionChunkController
     }
 
     static constexpr double kHeadingGain = 1.2;
-    static constexpr double kRotateInPlaceHeadingError = 1.45; // [rad]
+    static constexpr double kRotateInPlaceHeadingError = 2.20; // [rad]
     static constexpr double kMinLookaheadDistanceSq = 1e-6;
     static constexpr double kMinForwardTargetX = 0.03; // [m]
     static constexpr double kSlowdownHeadingError = 0.35; // [rad]
-    static constexpr double kStopForwardHeadingError = 1.35; // [rad]
+    static constexpr double kStopForwardHeadingError = 1.75; // [rad]
     static constexpr double kSlowdownLateralError = 0.25; // [m]
-    static constexpr double kStopForwardLateralError = 0.85; // [m]
+    static constexpr double kStopForwardLateralError = 1.20; // [m]
     static constexpr double kCurvatureSpeedScale = 0.45; // [m^2/s]
     static constexpr double kMinTrackingSpeed = 0.20; // [m/s]
 
