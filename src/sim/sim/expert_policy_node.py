@@ -264,6 +264,9 @@ class ExpertPolicyNode(Node):
         if (
             self.task.get("task_type") == "follow_fence_sequence"
             and self.task.get("sequence_type") == "perimeter"
+        ) or (
+            self.task.get("task_type") == "follow_shed_side"
+            and self.task.get("shed_side") == "perimeter"
         ):
             return orient_loop_path_from_start(
                 path,
@@ -560,8 +563,18 @@ class ExpertPolicyNode(Node):
             message = "Hybrid A* subgoal planning failed"
             self.get_logger().error(f"{message}; strict collection mode is stopping the expert policy")
             raise RuntimeError(message)
-        planned = shortcut_smooth(planned, collision_map.is_collision)
+        if not self.disable_shortcut_smoothing_for_task():
+            planned = shortcut_smooth(planned, collision_map.is_collision)
         planned = resample_path(planned, max(self.waypoint_spacing_m * 0.5, 0.1))
+        planned_length = path_length(planned)
+        reference_length = path_length(self.path)
+        if self.requires_full_reference_progress() and planned_length < 0.75 * reference_length:
+            message = (
+                f"Hybrid A* runtime path is too short for ordered task: "
+                f"planned_length={planned_length:.2f}m reference_length={reference_length:.2f}m"
+            )
+            self.get_logger().error(message)
+            raise RuntimeError(message)
         self.planned_path = planned
         self.trajectory = self.profile_path(planned)
         self.path_progress_m = 0.0
@@ -570,6 +583,24 @@ class ExpertPolicyNode(Node):
             f"around {len(collision_map.obstacles)} obstacles, "
             f"path_length={path_length(planned):.2f}m duration={self.trajectory.duration():.2f}s"
         )
+
+    def requires_full_reference_progress(self) -> bool:
+        task_type = self.task.get("task_type")
+        if task_type == "follow_fence_sequence":
+            return True
+        if task_type == "follow_shed_side" and self.task.get("shed_side") == "perimeter":
+            return True
+        return False
+
+    def disable_shortcut_smoothing_for_task(self) -> bool:
+        task_type = self.task.get("task_type")
+        if task_type == "follow_fence_sequence":
+            return True
+        if task_type == "follow_shed_side" and self.task.get("shed_side") == "perimeter":
+            return True
+        if task_type in {"pass_through_gap", "switch_sides"}:
+            return True
+        return False
 
     def current_profile_time(self, trajectory: TimedTrajectory) -> float:
         progress_m = self.current_path_progress(trajectory.path)

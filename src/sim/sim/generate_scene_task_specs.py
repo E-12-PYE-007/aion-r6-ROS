@@ -1124,8 +1124,6 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
 
 def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     starts = get_start_poses(scene)
-    shed = scene.get("shed") or {}
-    shed_position = shed.get("position", [0.0, 0.0, 0.0])
     tasks: list[dict[str, Any]] = []
 
     for start_name in starts:
@@ -1144,50 +1142,8 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             target_shed="shed",
             shed_side="perimeter",
             travel_direction="forward",
-            success_condition={"type": "reach_path_end", "min_progress_m": 3.0},
+            success_condition={"type": "reach_path_end", "min_progress_m": 5.0},
             validation=validation(),
-        ))
-        tasks.append(make_task(
-            f"approach_shed_from_{start_name}",
-            "approach_target",
-            **instruction_pack(
-                "Drive toward the shed.",
-                [
-                    "Approach the shed.",
-                    "Move closer to the shed.",
-                    "Drive up to the shed.",
-                ],
-            ),
-            start_pose=start_name,
-            target_shed="shed",
-            target_point=shed_position,
-            success_condition={"type": "reach_point", "target_point": shed_position, "tolerance_m": 0.75},
-            validation=validation(),
-        ))
-        tasks.append(make_task(
-            f"stop_beside_shed_from_{start_name}",
-            "stop_at_landmark",
-            **instruction_pack(
-                "Stop beside the shed.",
-                [
-                    "Drive along the shed and stop beside it.",
-                    "Stop next to the shed wall.",
-                    "Hold position beside the shed.",
-                ],
-            ),
-            start_pose=start_name,
-            target_shed="shed",
-            landmark={"type": "shed_side", "side": "perimeter"},
-            success_condition={"type": "stop_near_shed", "max_speed_mps": 0.05},
-            validation=validation(),
-        ))
-        tasks.append(make_task(
-            f"hold_position_from_{start_name}",
-            "hold_position",
-            **instruction_pack("Hold position.", ["Stop here.", "Wait in place.", "Stay where you are."]),
-            start_pose=start_name,
-            success_condition={"type": "remain_near_start", "tolerance_m": 0.25, "max_speed_mps": 0.05},
-            validation=validation(min_progress_m=0.0, min_samples=5),
         ))
 
     return add_domain_tags(tasks, "shedline")

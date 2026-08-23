@@ -705,7 +705,13 @@ def finalize_reference_path(
     if not should_orient_reference_from_start(task):
         return path
     start, start_yaw = scene_start_pose(scene, task, flip_isaac_y)
-    if task.get("task_type") == "follow_fence_sequence" and task.get("sequence_type") == "perimeter":
+    if (
+        task.get("task_type") == "follow_fence_sequence"
+        and task.get("sequence_type") == "perimeter"
+    ) or (
+        task.get("task_type") == "follow_shed_side"
+        and task.get("shed_side") == "perimeter"
+    ):
         return orient_loop_path_from_start(path, start, start_yaw, allow_reverse=True)
     return orient_and_crop_path_from_start(path, start, start_yaw, allow_reverse=True)
 

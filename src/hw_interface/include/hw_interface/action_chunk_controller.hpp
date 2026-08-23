@@ -46,7 +46,7 @@ class ActionChunkController
 
   protected:
     static constexpr double kMaxV = 0.3; // [m/s] Shared rover speed limit across controllers
-    static constexpr double kMaxW = 0.3; // [rad/s] Shared rover yaw rate limit across controllers
+    static constexpr double kMaxW = 0.45; // [rad/s] Shared rover yaw rate limit across controllers
 
     static double sign(double value)
     {
