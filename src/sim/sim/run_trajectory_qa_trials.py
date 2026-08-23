@@ -91,9 +91,14 @@ def layout_sort_key(layout_path: Path) -> tuple[int, str]:
     return rank, name
 
 
-def select_layouts(layout_dir: Path, exclude_regex: str | None, limit: int | None) -> list[Path]:
+def select_layouts(
+    layout_dir: Path,
+    exclude_regex: str | None,
+    limit: int | None,
+    one_per_family: bool,
+) -> list[Path]:
     pattern = re.compile(exclude_regex) if exclude_regex else None
-    grouped: dict[str, list[Path]] = {}
+    eligible: list[Path] = []
     for path in sorted([*layout_dir.rglob("*.yaml"), *layout_dir.rglob("*.yml")]):
         if not path.is_file():
             continue
@@ -103,8 +108,16 @@ def select_layouts(layout_dir: Path, exclude_regex: str | None, limit: int | Non
         config_type = infer_config_type(path)
         if config_type not in {"fenceline", "road", "shedline"}:
             continue
+        eligible.append(path.resolve())
+
+    if not one_per_family:
+        selected = sorted(eligible, key=layout_sort_key)
+        return selected[:limit] if limit is not None else selected
+
+    grouped: dict[str, list[Path]] = {}
+    for path in eligible:
         family = layout_family(layout_dir, path)
-        grouped.setdefault(family, []).append(path.resolve())
+        grouped.setdefault(family, []).append(path)
 
     selected = []
     for family in sorted(grouped):
@@ -243,6 +256,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-visuals-per-task-variant", type=int, default=1)
     parser.add_argument("--visual-sample-seed", type=int, default=23)
     parser.add_argument("--duration-s", type=float, default=60.0)
+    parser.add_argument("--prepare-timeout-s", type=float, default=90.0)
+    parser.add_argument(
+        "--all-layouts",
+        action="store_true",
+        help="Run every eligible layout in --layout-dir instead of selecting one representative per layout family.",
+    )
     parser.add_argument("--clean", action="store_true", default=True)
     parser.add_argument("--no-clean", action="store_false", dest="clean")
     parser.add_argument("--dry-run", action="store_true", help="Prepare specs/manifest/plots setup but do not run Isaac rollouts.")
@@ -268,7 +287,12 @@ def main() -> int:
     for path in (selected_layout_dir, specs_dir, valid_specs_dir, rollouts_dir, plots_dir):
         path.mkdir(parents=True, exist_ok=True)
 
-    selected = select_layouts(layout_dir, args.exclude_layout_regex, args.limit_layouts)
+    selected = select_layouts(
+        layout_dir,
+        args.exclude_layout_regex,
+        args.limit_layouts,
+        one_per_family=not bool(args.all_layouts),
+    )
     if not selected:
         raise SystemExit(f"No generated layout YAMLs selected from {layout_dir}")
     copy_selected_layouts(selected, selected_layout_dir)
@@ -355,6 +379,8 @@ def main() -> int:
             rollouts_dir.as_posix(),
             "--duration-s",
             str(args.duration_s),
+            "--prepare-timeout-s",
+            str(args.prepare_timeout_s),
             *(["--dry-run"] if args.dry_run else []),
         ],
         label="Run QA manifest rollouts",
