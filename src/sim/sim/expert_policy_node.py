@@ -161,7 +161,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("waypoint_spacing_m", 0.18)
-        self.declare_parameter("first_preview_m", 0.55)
+        self.declare_parameter("first_preview_m", 0.9)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", True)
