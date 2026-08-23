@@ -272,6 +272,19 @@ class PurePursuitController: public ActionChunkController
       const double heading_error =
         std::atan2(lookahead_vector[1], lookahead_vector[0]);
 
+      if (std::abs(heading_error) >= kRotateInPlaceHeadingError) {
+        VelocityCommand command = clampIndependent(0.0, kHeadingGain * heading_error);
+        command.target_index = static_cast<int>(_waypoint_idx);
+        command.target_x = static_cast<float>(lookahead_vector[0]);
+        command.target_y = static_cast<float>(lookahead_vector[1]);
+        command.target_distance = static_cast<float>(euclid_dist);
+        command.heading_error = static_cast<float>(heading_error);
+        command.curvature = static_cast<float>(R);
+        command.raw_yaw_rate = static_cast<float>(kHeadingGain * heading_error);
+        command.target_found = true;
+        return command;
+      }
+
       const double speed_target = trackingSpeedForTarget(
         heading_error,
         lookahead_vector[0],

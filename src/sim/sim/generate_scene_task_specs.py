@@ -535,6 +535,14 @@ def trajectory_variants_for_task(
             scenario_tags=unique_tags(base_tags, ["recovery", "bad_approach", "wrong_heading"]),
         ),
     ])
+    if task_type == "follow_fence_sequence":
+        for variant in variants:
+            variant["planner_settings"].update({
+                "planner_subgoal_spacing_m": 4.0,
+                "planner_subgoal_longitudinal_search_m": 2.5,
+                "min_turn_radius_m": max(float(variant["planner_settings"].get("min_turn_radius_m", 0.75)), 1.0),
+                "obstacle_clearance_cost_distance_m": 0.55,
+            })
     if task_type in {"pass_through_gap", "switch_sides"}:
         for variant in variants:
             variant["planner_settings"].update({
