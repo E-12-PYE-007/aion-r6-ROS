@@ -683,7 +683,7 @@ def shed_perimeter_path(
         path_yaw = math.atan2(float(delta[1]), float(delta[0]))
         return abs(wrap_to_pi(path_yaw - start_yaw))
 
-    direction = str(task.get("perimeter_direction", "counterclockwise"))
+    direction = str(task.get("perimeter_direction", "auto"))
     if direction == "clockwise":
         return path_from_loop(clockwise)
     if direction == "counterclockwise":
