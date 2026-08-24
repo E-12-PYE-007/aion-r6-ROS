@@ -146,6 +146,24 @@ def side_constraint_segments_for_task(
     for name in fence_names:
         fence = fence_by_name(scene, name)
         segments.append((point2(fence["start"], flip_isaac_y), point2(fence["end"], flip_isaac_y)))
+    if task_type == "follow_fence_sequence":
+        fences = [fence_by_name(scene, str(name)) for name in task.get("target_fences", [])]
+        for before, after in zip(fences[:-1], fences[1:]):
+            before_start = point2(before["start"], flip_isaac_y)
+            before_end = point2(before["end"], flip_isaac_y)
+            after_start = point2(after["start"], flip_isaac_y)
+            after_end = point2(after["end"], flip_isaac_y)
+            gap_distance = float(np.linalg.norm(after_start - before_end))
+            if gap_distance < 0.4:
+                continue
+            before_heading = math.atan2(float(before_end[1] - before_start[1]), float(before_end[0] - before_start[0]))
+            after_heading = math.atan2(float(after_end[1] - after_start[1]), float(after_end[0] - after_start[0]))
+            gap_heading = math.atan2(float(after_start[1] - before_end[1]), float(after_start[0] - before_end[0]))
+            if (
+                abs(math.atan2(math.sin(after_heading - before_heading), math.cos(after_heading - before_heading))) <= 0.2
+                and abs(math.atan2(math.sin(gap_heading - before_heading), math.cos(gap_heading - before_heading))) <= 0.2
+            ):
+                segments.append((before_end, after_start))
     return segments
 
 

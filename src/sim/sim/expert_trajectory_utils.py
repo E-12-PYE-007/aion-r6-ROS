@@ -573,6 +573,21 @@ def concat_segments(segments: list[dict[str, Any]], flip_isaac_y: bool) -> list[
     return points
 
 
+def densify_polyline(polyline: list[np.ndarray], max_segment_length_m: float) -> list[np.ndarray]:
+    if len(polyline) < 2 or max_segment_length_m <= 0.0:
+        return list(polyline)
+    dense = [polyline[0]]
+    for start, end in zip(polyline[:-1], polyline[1:]):
+        segment = end - start
+        length = float(np.linalg.norm(segment))
+        steps = max(1, int(math.ceil(length / max_segment_length_m)))
+        for step in range(1, steps + 1):
+            point = start + segment * (float(step) / float(steps))
+            if float(np.linalg.norm(point - dense[-1])) > 1e-6:
+                dense.append(point)
+    return dense
+
+
 def line_path_from_points(points: list[list[float]], flip_isaac_y: bool) -> list[np.ndarray]:
     return [point2(point, flip_isaac_y) for point in points]
 

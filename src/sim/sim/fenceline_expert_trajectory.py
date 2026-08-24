@@ -9,6 +9,7 @@ import rclpy
 from sim.expert_policy_node import ExpertPolicyNode
 from sim.expert_trajectory_utils import (
     concat_segments,
+    densify_polyline,
     fence_by_name,
     line_path_from_points,
     offset_polyline,
@@ -82,10 +83,13 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
         if task_type == "follow_fence_sequence":
             fences = [fence_by_name(self.scene, name) for name in self.task["target_fences"]]
             base_path = concat_segments(fences, self.flip_isaac_y)
-            return offset_polyline(
-                base_path,
-                self.preferred_offset_m,
-                path_side_for_task(self.task, self.flip_isaac_y),
+            return densify_polyline(
+                offset_polyline(
+                    base_path,
+                    self.preferred_offset_m,
+                    path_side_for_task(self.task, self.flip_isaac_y),
+                ),
+                max_segment_length_m=1.0,
             )
 
         if task_type == "follow_corridor":

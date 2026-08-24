@@ -230,6 +230,26 @@ def validation(min_progress_m: float = 2.0, min_samples: int = 30) -> dict[str, 
     }
 
 
+def shed_bbox_size(scene: dict[str, Any]) -> list[float] | None:
+    assets = scene.get("assets")
+    if not isinstance(assets, dict):
+        return None
+    shed_asset = assets.get("shed")
+    if isinstance(shed_asset, dict) and isinstance(shed_asset.get("bbox_size"), list):
+        return shed_asset["bbox_size"]
+    return None
+
+
+def shed_perimeter_progress_m(scene: dict[str, Any], offset_m: float) -> float:
+    bbox = shed_bbox_size(scene)
+    if bbox is None or len(bbox) < 2:
+        return 5.0
+    width_m = float(bbox[0]) + 2.0 * offset_m
+    depth_m = float(bbox[1]) + 2.0 * offset_m
+    perimeter_m = 2.0 * (width_m + depth_m)
+    return max(5.0, 0.9 * perimeter_m)
+
+
 DEFAULT_PLANNER_SETTINGS = {
     "robot_radius_m": 0.32,
     "obstacle_padding_m": 0.08,
@@ -538,10 +558,23 @@ def trajectory_variants_for_task(
     if task_type == "follow_fence_sequence":
         for variant in variants:
             variant["planner_settings"].update({
-                "planner_subgoal_spacing_m": 4.0,
+                "planner_subgoal_spacing_m": 2.0,
                 "planner_subgoal_longitudinal_search_m": 2.5,
-                "min_turn_radius_m": max(float(variant["planner_settings"].get("min_turn_radius_m", 0.75)), 1.0),
-                "obstacle_clearance_cost_distance_m": 0.55,
+                "min_turn_radius_m": max(float(variant["planner_settings"].get("min_turn_radius_m", 0.75)), 1.2),
+                "obstacle_padding_m": max(float(variant["planner_settings"].get("obstacle_padding_m", 0.08)), 0.12),
+                "planner_subgoal_min_clearance_m": max(
+                    float(variant["planner_settings"].get("planner_subgoal_min_clearance_m", 0.15)),
+                    0.25,
+                ),
+                "obstacle_clearance_cost_distance_m": 0.75,
+                "obstacle_clearance_cost_weight": max(
+                    float(variant["planner_settings"].get("obstacle_clearance_cost_weight", 0.5)),
+                    0.8,
+                ),
+                "fence_offset_cost_weight": max(
+                    float(variant["planner_settings"].get("fence_offset_cost_weight", 0.6)),
+                    1.0,
+                ),
             })
     if task_type in {"pass_through_gap", "switch_sides"}:
         for variant in variants:
@@ -1133,6 +1166,7 @@ def generate_road_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
 def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
     starts = get_start_poses(scene)
     tasks: list[dict[str, Any]] = []
+    required_progress = shed_perimeter_progress_m(scene, float(DEFAULT_EXPERT["preferred_offset_m"]))
 
     for start_name in starts:
         tasks.append(make_task(
@@ -1150,8 +1184,8 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             target_shed="shed",
             shed_side="perimeter",
             travel_direction="forward",
-            success_condition={"type": "reach_path_end", "min_progress_m": 5.0},
-            validation=validation(),
+            success_condition={"type": "reach_path_end", "min_progress_m": required_progress},
+            validation=validation(min_progress_m=required_progress),
         ))
 
     return add_domain_tags(tasks, "shedline")

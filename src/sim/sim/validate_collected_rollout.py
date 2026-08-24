@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from dataclasses import dataclass
@@ -47,6 +48,13 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number} did not contain a JSON object.")
             records.append(record)
     return records
+
+
+def load_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
 
 
 def pose_xy(record: dict[str, Any]) -> tuple[float, float] | None:
@@ -100,6 +108,169 @@ def finite_float(value: Any) -> float | None:
     if not math.isfinite(result):
         return None
     return result
+
+
+def row_float(row: dict[str, str], key: str) -> float | None:
+    return finite_float(row.get(key))
+
+
+def diagnostic_spin_stall_metrics(rows: list[dict[str, str]]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "samples": 0,
+            "spin_stall_samples": 0,
+            "spin_stall_fraction": 0.0,
+            "max_contiguous_spin_stall_s": 0.0,
+        }
+
+    spin_samples = 0
+    valid_samples = 0
+    max_run_s = 0.0
+    run_start: float | None = None
+    run_end: float | None = None
+
+    for row in rows:
+        sim_t = row_float(row, "sim_elapsed_s")
+        cmd_w = row_float(row, "cmd_angular_z")
+        odom_w = row_float(row, "odom_yaw_rate")
+        odom_v = row_float(row, "odom_linear_x")
+        if cmd_w is None or odom_w is None or odom_v is None:
+            continue
+        valid_samples += 1
+        is_spin_stall = abs(cmd_w) > 0.35 and abs(odom_w) > 0.15 and abs(odom_v) < 0.06
+        if is_spin_stall:
+            spin_samples += 1
+            if sim_t is not None:
+                if run_start is None:
+                    run_start = sim_t
+                run_end = sim_t
+        else:
+            if run_start is not None and run_end is not None:
+                max_run_s = max(max_run_s, run_end - run_start)
+            run_start = None
+            run_end = None
+    if run_start is not None and run_end is not None:
+        max_run_s = max(max_run_s, run_end - run_start)
+
+    return {
+        "samples": valid_samples,
+        "spin_stall_samples": spin_samples,
+        "spin_stall_fraction": spin_samples / valid_samples if valid_samples else 0.0,
+        "max_contiguous_spin_stall_s": max_run_s,
+    }
+
+
+def transformed_xy(point: list[float] | tuple[float, ...], flip_y: bool) -> np.ndarray:
+    x = float(point[0])
+    y = float(point[1])
+    return np.asarray([x, -y if flip_y else y], dtype=np.float64)
+
+
+def signed_side(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    rel = point - start
+    length = float(np.linalg.norm(segment))
+    if length <= 1e-9:
+        return 0.0
+    return float((segment[0] * rel[1] - segment[1] * rel[0]) / length)
+
+
+def distance_to_segment_points(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> tuple[float, float]:
+    segment = end - start
+    length_sq = float(np.dot(segment, segment))
+    if length_sq <= 1e-9:
+        return float(np.linalg.norm(point - start)), 0.0
+    t = float(np.dot(point - start, segment) / length_sq)
+    t_clamped = min(1.0, max(0.0, t))
+    nearest = start + segment * t_clamped
+    return float(np.linalg.norm(point - nearest)), t_clamped
+
+
+def fence_follow_geometry_metrics(
+    rollout_dir: Path,
+    metadata: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str | None]:
+    structured_task = metadata.get("structured_task") if isinstance(metadata.get("structured_task"), dict) else {}
+    task_type = str(structured_task.get("task_type", ""))
+    if task_type not in {"follow_fence", "follow_fence_sequence"}:
+        return {}, None
+
+    task_spec_path = resolve_existing_path(str(metadata.get("task_spec", "")), rollout_dir)
+    if task_spec_path is None:
+        return {}, "fence geometry could not be checked because task spec is unavailable"
+
+    try:
+        task_spec = load_yaml(task_spec_path)
+        scene_path = Path(task_spec["scene"]["source_yaml"])
+        scene = load_yaml(scene_path)
+    except Exception as exc:
+        return {}, f"fence geometry could not be checked: {exc}"
+
+    target_names = structured_task.get("target_fences")
+    if not isinstance(target_names, list) or not target_names:
+        target_fence = structured_task.get("target_fence")
+        target_names = [target_fence] if isinstance(target_fence, str) else []
+    fences = [fence for fence in scene.get("fences", []) if fence.get("name") in set(target_names)]
+    if not fences:
+        return {}, None
+
+    flip_scene_y = bool(metadata.get("flip_scene_y", True))
+    expected_path_side = str(structured_task.get("path_side", ""))
+    expected_sign = 1.0 if expected_path_side == "left" else -1.0 if expected_path_side == "right" else 0.0
+    segments = [
+        (transformed_xy(fence["start"], flip_scene_y), transformed_xy(fence["end"], flip_scene_y))
+        for fence in fences
+    ]
+
+    distances: list[float] = []
+    signed_distances: list[float] = []
+    side_violations = 0
+    side_checked = 0
+    near_fence_samples = 0
+    min_distance = math.inf
+    min_signed_distance: float | None = None
+
+    for record in records:
+        point = pose_point(record)
+        if point is None:
+            continue
+        nearest_distance = math.inf
+        nearest_signed = 0.0
+        for start, end in segments:
+            distance_m, _ = distance_to_segment_points(point, start, end)
+            side_m = signed_side(point, start, end)
+            if distance_m < nearest_distance:
+                nearest_distance = distance_m
+                nearest_signed = side_m
+        if not math.isfinite(nearest_distance):
+            continue
+        distances.append(nearest_distance)
+        signed_distances.append(nearest_signed)
+        if nearest_distance < min_distance:
+            min_distance = nearest_distance
+            min_signed_distance = nearest_signed
+        if nearest_distance < 1.8:
+            near_fence_samples += 1
+            if expected_sign:
+                side_checked += 1
+                if nearest_signed * expected_sign < 0.15:
+                    side_violations += 1
+
+    if not distances:
+        return {}, None
+
+    return {
+        "sample_count": len(distances),
+        "near_fence_samples": near_fence_samples,
+        "min_center_distance_to_target_fence_m": min_distance,
+        "min_signed_side_distance_m": min_signed_distance,
+        "mean_center_distance_to_target_fence_m": sum(distances) / len(distances),
+        "side_violation_count": side_violations,
+        "side_checked_samples": side_checked,
+        "side_violation_fraction": side_violations / side_checked if side_checked else 0.0,
+        "expected_path_side": expected_path_side,
+    }, None
 
 
 def action_chunk_tracking_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -355,6 +526,7 @@ def validate_rollout_dir(
 
     image_count, missing_image_refs = validate_images(rollout_dir, records)
     diagnostics_summary = load_diagnostics_summary(rollout_dir)
+    diagnostics_rows = load_csv_rows(rollout_dir / "diagnostics.csv")
     task_success_summary = load_task_success_summary(rollout_dir)
     action_chunk_fraction = fraction_present(records, "action_chunk")
     cmd_vel_fraction = fraction_present(records, "cmd_vel")
@@ -362,6 +534,8 @@ def validate_rollout_dir(
     travelled_m = path_distance(records)
     displacement_m = displacement(records)
     reference_metrics, reference_warning = reference_progress_metrics(rollout_dir, metadata, records)
+    spin_stall_metrics = diagnostic_spin_stall_metrics(diagnostics_rows)
+    fence_geometry_metrics, fence_geometry_warning = fence_follow_geometry_metrics(rollout_dir, metadata, records)
     if not reference_metrics and task_success_summary is not None:
         summary_progress = finite_float(task_success_summary.get("path_progress_m"))
         summary_length = finite_float(task_success_summary.get("reference_path_length_m"))
@@ -400,6 +574,8 @@ def validate_rollout_dir(
             "success_type": success_type,
             "reference_progress": reference_metrics,
             "required_progress_m": required_progress_m,
+            "spin_stall": spin_stall_metrics,
+            "fence_geometry": fence_geometry_metrics,
         }
     )
     if diagnostics_summary is not None:
@@ -410,6 +586,8 @@ def validate_rollout_dir(
         metrics["task_success_wait_summary"] = task_success_summary
     if reference_warning is not None:
         warnings.append(reference_warning)
+    if fence_geometry_warning is not None:
+        warnings.append(fence_geometry_warning)
 
     if expected_task_id and metadata.get("task_id") != expected_task_id:
         errors.append(f"metadata task_id {metadata.get('task_id')!r} != expected {expected_task_id!r}")
@@ -467,6 +645,29 @@ def validate_rollout_dir(
             errors.append(f"path progress {progress_m:.3f}m < required {required_progress_m:.3f}m")
     elif travelled_m < float(min_motion_m):
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
+    if (
+        spin_stall_metrics["samples"] > 0
+        and (
+            spin_stall_metrics["spin_stall_fraction"] > 0.12
+            or spin_stall_metrics["max_contiguous_spin_stall_s"] > 4.0
+        )
+    ):
+        errors.append(
+            "spin/stall detected: "
+            f"{spin_stall_metrics['spin_stall_fraction']:.2%} of diagnostics samples, "
+            f"max continuous {spin_stall_metrics['max_contiguous_spin_stall_s']:.2f}s"
+        )
+    if fence_geometry_metrics:
+        min_fence_distance = finite_float(fence_geometry_metrics.get("min_center_distance_to_target_fence_m"))
+        side_fraction = finite_float(fence_geometry_metrics.get("side_violation_fraction"))
+        if min_fence_distance is not None and min_fence_distance < 0.9:
+            errors.append(
+                f"target-fence clearance too small: center distance {min_fence_distance:.3f}m < required 0.900m"
+            )
+        if side_fraction is not None and side_fraction > 0.02:
+            errors.append(
+                f"target-fence side violation: {side_fraction:.2%} of near-fence samples crossed/entered wrong side"
+            )
     if len(records) and image_count != len(records):
         warnings.append(f"image count {image_count} differs from sample count {len(records)}")
     if diagnostics_summary is not None:

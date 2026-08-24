@@ -14,6 +14,7 @@ import yaml
 from sim.collision_map import CollisionMap
 from sim.expert_trajectory_utils import (
     concat_segments,
+    densify_polyline,
     fence_by_name,
     get_asset_bbox,
     offset_polyline,
@@ -741,11 +742,19 @@ def reference_path_for_task(
         )
     if task_type == "follow_fence_sequence":
         fences = reference_sequence_segments(scene, task, flip_isaac_y)
-        return finalize_reference_path(scene, task, offset_polyline(
-            concat_segments(fences, flip_isaac_y),
-            offset_m,
-            path_side_for_task(task, flip_isaac_y),
-        ), flip_isaac_y)
+        return finalize_reference_path(
+            scene,
+            task,
+            densify_polyline(
+                offset_polyline(
+                    concat_segments(fences, flip_isaac_y),
+                    offset_m,
+                    path_side_for_task(task, flip_isaac_y),
+                ),
+                max_segment_length_m=1.0,
+            ),
+            flip_isaac_y,
+        )
     if task_type == "follow_corridor":
         left, right = [fence_by_name(scene, name) for name in task["corridor_fences"]]
         left_path = concat_segments([left], flip_isaac_y)
@@ -918,6 +927,12 @@ def side_constraint_segments_for_task(
     for name in fence_names:
         fence = fence_by_name(scene, name)
         segments.append((point2(fence["start"], flip_isaac_y), point2(fence["end"], flip_isaac_y)))
+    if task_type == "follow_fence_sequence":
+        fences = [fence_by_name(scene, str(name)) for name in task.get("target_fences", [])]
+        for before, after in zip(fences[:-1], fences[1:]):
+            is_gap, _, _ = detected_gap(before, after)
+            if is_gap:
+                segments.append((point2(before["end"], flip_isaac_y), point2(after["start"], flip_isaac_y)))
     return segments
 
 
