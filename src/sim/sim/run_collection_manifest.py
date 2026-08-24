@@ -404,6 +404,10 @@ def run_claimed_row(
             max_mean_abs_action_first_y_m=float(args.max_mean_abs_action_first_y_m),
             max_abs_action_first_y_m=float(args.max_abs_action_first_y_m),
             max_action_chunk_age_s=float(args.max_action_chunk_age_s),
+            max_mean_reference_lateral_error_m=float(args.max_mean_reference_lateral_error_m),
+            max_reference_lateral_error_m=float(args.max_reference_lateral_error_m),
+            max_final_target_distance_m=float(args.max_final_target_distance_m),
+            max_black_image_fraction=float(args.max_black_image_fraction),
             allow_stationary=bool(args.allow_stationary),
         )
         row["validation"] = {
@@ -477,6 +481,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mean-abs-action-first-y-m", type=float, default=1.25)
     parser.add_argument("--max-abs-action-first-y-m", type=float, default=3.0)
     parser.add_argument("--max-action-chunk-age-s", type=float, default=1.0)
+    parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=2.0)
+    parser.add_argument("--max-reference-lateral-error-m", type=float, default=4.0)
+    parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--allow-stationary", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()

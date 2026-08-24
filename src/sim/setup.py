@@ -56,6 +56,7 @@ setup(
             'export_edge_training_manifest = sim.export_edge_training_manifest:main',
             'prepare_sim_dataset_assets = sim.prepare_sim_dataset_assets:main',
             'run_trajectory_qa_trials = sim.run_trajectory_qa_trials:main',
+            'run_first_fenceline_collection = sim.run_first_fenceline_collection:main',
 
         ],
     },

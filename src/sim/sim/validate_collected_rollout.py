@@ -325,6 +325,57 @@ def validate_images(rollout_dir: Path, records: list[dict[str, Any]]) -> tuple[i
     return len(image_files), missing_refs
 
 
+def image_quality_metrics(rollout_dir: Path, max_checked: int = 30) -> tuple[dict[str, Any], str | None]:
+    image_dir = rollout_dir / "img"
+    image_files = sorted(image_dir.glob("*.jpg")) if image_dir.exists() else []
+    if not image_files:
+        return {
+            "checked_images": 0,
+            "black_images": 0,
+            "black_image_fraction": 0.0,
+            "mean_pixel_value": None,
+        }, None
+
+    try:
+        from PIL import Image, ImageStat
+    except Exception as exc:
+        return {}, f"image pixel quality could not be checked because Pillow is unavailable: {exc}"
+
+    if len(image_files) > max_checked:
+        step = max((len(image_files) - 1) / max(max_checked - 1, 1), 1.0)
+        indices = sorted({int(round(i * step)) for i in range(max_checked)})
+        sampled_files = [image_files[min(index, len(image_files) - 1)] for index in indices]
+    else:
+        sampled_files = image_files
+
+    black_images = 0
+    means: list[float] = []
+    extrema_maxes: list[float] = []
+    for image_path in sampled_files:
+        try:
+            with Image.open(image_path) as image:
+                image = image.convert("RGB")
+                stat = ImageStat.Stat(image)
+                channel_mean = sum(float(value) for value in stat.mean) / len(stat.mean)
+                extrema_max = max(float(high) for _, high in image.getextrema())
+        except Exception:
+            continue
+        means.append(channel_mean)
+        extrema_maxes.append(extrema_max)
+        if channel_mean <= 2.0 and extrema_max <= 8.0:
+            black_images += 1
+
+    checked = len(means)
+    return {
+        "checked_images": checked,
+        "black_images": black_images,
+        "black_image_fraction": black_images / checked if checked else 0.0,
+        "mean_pixel_value": sum(means) / checked if checked else None,
+        "min_mean_pixel_value": min(means) if means else None,
+        "max_pixel_value": max(extrema_maxes) if extrema_maxes else None,
+    }, None
+
+
 def task_validation_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     structured_task = metadata.get("structured_task")
     if isinstance(structured_task, dict) and isinstance(structured_task.get("validation"), dict):
@@ -497,6 +548,10 @@ def validate_rollout_dir(
     max_mean_abs_action_first_y_m: float | None = 1.25,
     max_abs_action_first_y_m: float | None = 3.0,
     max_action_chunk_age_s: float | None = 1.0,
+    max_mean_reference_lateral_error_m: float | None = 2.0,
+    max_reference_lateral_error_m: float | None = 4.0,
+    max_final_target_distance_m: float | None = 2.0,
+    max_black_image_fraction: float | None = 0.05,
     allow_stationary: bool = False,
 ) -> ValidationResult:
     errors: list[str] = []
@@ -525,6 +580,7 @@ def validate_rollout_dir(
         min_motion_m = 0.0
 
     image_count, missing_image_refs = validate_images(rollout_dir, records)
+    image_quality, image_quality_warning = image_quality_metrics(rollout_dir)
     diagnostics_summary = load_diagnostics_summary(rollout_dir)
     diagnostics_rows = load_csv_rows(rollout_dir / "diagnostics.csv")
     task_success_summary = load_task_success_summary(rollout_dir)
@@ -564,6 +620,7 @@ def validate_rollout_dir(
             "sample_count": len(records),
             "image_count": image_count,
             "missing_image_refs": missing_image_refs,
+            "image_quality": image_quality,
             "action_chunk_fraction": action_chunk_fraction,
             "cmd_vel_fraction": cmd_vel_fraction,
             "tracking": tracking_metrics,
@@ -588,6 +645,8 @@ def validate_rollout_dir(
         warnings.append(reference_warning)
     if fence_geometry_warning is not None:
         warnings.append(fence_geometry_warning)
+    if image_quality_warning is not None:
+        warnings.append(image_quality_warning)
 
     if expected_task_id and metadata.get("task_id") != expected_task_id:
         errors.append(f"metadata task_id {metadata.get('task_id')!r} != expected {expected_task_id!r}")
@@ -599,6 +658,18 @@ def validate_rollout_dir(
         errors.append("no JPEG images were saved")
     if missing_image_refs:
         errors.append(f"{missing_image_refs} poses.jsonl image references are missing files")
+    black_fraction = finite_float(image_quality.get("black_image_fraction")) if image_quality else None
+    checked_images = int(image_quality.get("checked_images", 0)) if image_quality else 0
+    if (
+        max_black_image_fraction is not None
+        and checked_images > 0
+        and black_fraction is not None
+        and black_fraction > float(max_black_image_fraction)
+    ):
+        errors.append(
+            f"black image fraction {black_fraction:.2%} > allowed {float(max_black_image_fraction):.2%} "
+            f"({image_quality.get('black_images', 0)}/{checked_images} checked images)"
+        )
     if action_chunk_fraction < min_action_chunk_fraction:
         errors.append(
             f"action_chunk present in {action_chunk_fraction:.2%} of samples, "
@@ -645,6 +716,43 @@ def validate_rollout_dir(
             errors.append(f"path progress {progress_m:.3f}m < required {required_progress_m:.3f}m")
     elif travelled_m < float(min_motion_m):
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
+    mean_reference_error = finite_float(reference_metrics.get("mean_reference_lateral_error_m"))
+    max_reference_error = finite_float(reference_metrics.get("max_reference_lateral_error_m"))
+    if (
+        max_mean_reference_lateral_error_m is not None
+        and mean_reference_error is not None
+        and mean_reference_error > float(max_mean_reference_lateral_error_m)
+    ):
+        errors.append(
+            f"mean reference tracking error {mean_reference_error:.3f}m > allowed "
+            f"{float(max_mean_reference_lateral_error_m):.3f}m"
+        )
+    if (
+        max_reference_lateral_error_m is not None
+        and max_reference_error is not None
+        and max_reference_error > float(max_reference_lateral_error_m)
+    ):
+        errors.append(
+            f"max reference tracking error {max_reference_error:.3f}m > allowed "
+            f"{float(max_reference_lateral_error_m):.3f}m"
+        )
+    final_target_distance = (
+        finite_float(task_success_summary.get("target_distance_m"))
+        if isinstance(task_success_summary, dict)
+        else None
+    )
+    progress_m = finite_float(reference_metrics.get("path_progress_m"))
+    if (
+        max_final_target_distance_m is not None
+        and final_target_distance is not None
+        and progress_m is not None
+        and progress_m < required_progress_m
+        and final_target_distance > float(max_final_target_distance_m)
+    ):
+        errors.append(
+            f"final target distance {final_target_distance:.3f}m > allowed "
+            f"{float(max_final_target_distance_m):.3f}m before required progress was met"
+        )
     if (
         spin_stall_metrics["samples"] > 0
         and (
@@ -707,6 +815,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mean-abs-action-first-y-m", type=float, default=1.25)
     parser.add_argument("--max-abs-action-first-y-m", type=float, default=3.0)
     parser.add_argument("--max-action-chunk-age-s", type=float, default=1.0)
+    parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=2.0)
+    parser.add_argument("--max-reference-lateral-error-m", type=float, default=4.0)
+    parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--allow-stationary", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
@@ -725,6 +837,10 @@ def main() -> int:
         max_mean_abs_action_first_y_m=args.max_mean_abs_action_first_y_m,
         max_abs_action_first_y_m=args.max_abs_action_first_y_m,
         max_action_chunk_age_s=args.max_action_chunk_age_s,
+        max_mean_reference_lateral_error_m=args.max_mean_reference_lateral_error_m,
+        max_reference_lateral_error_m=args.max_reference_lateral_error_m,
+        max_final_target_distance_m=args.max_final_target_distance_m,
+        max_black_image_fraction=args.max_black_image_fraction,
         allow_stationary=bool(args.allow_stationary),
     )
     payload = {
