@@ -124,6 +124,18 @@ def candidate_preserves_side(
     return original_side * candidate_side > 0.0
 
 
+def distance_to_nearest_segment(point: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not segments:
+        return math.inf
+    return min(point_to_segment_distance(point, start, end) for start, end in segments)
+
+
+def path_min_distance_to_segments(path: list[np.ndarray], segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not path or not segments:
+        return math.inf
+    return min(distance_to_nearest_segment(point, segments) for point in path)
+
+
 def side_constraint_segments_for_task(
     scene: dict,
     task: dict,
@@ -180,6 +192,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
+        self.declare_parameter("path_progress_motion_slack_m", 0.6)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", True)
@@ -200,6 +213,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("planner_subgoal_search_step_m", 0.5)
         self.declare_parameter("planner_subgoal_max_candidates", 48)
         self.declare_parameter("planner_subgoal_min_clearance_m", 0.15)
+        self.declare_parameter("planner_fence_min_clearance_m", 0.85)
         self.declare_parameter("planner_subgoal_vertex_margin_m", 0.5)
         self.declare_parameter("planner_subgoal_endpoint_margin_m", 0.5)
         self.declare_parameter("hybrid_astar_max_iterations", 20000)
@@ -207,6 +221,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("fence_offset_cost_weight", 0.6)
         self.declare_parameter("fence_offset_cost_deadband_m", 0.15)
         self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
+        self.declare_parameter("fence_min_clearance_cost_weight", 50.0)
         self.declare_parameter("obstacle_clearance_cost_weight", 0.5)
         self.declare_parameter("obstacle_clearance_cost_distance_m", 0.4)
         self.declare_parameter("max_speed_mps", 0.3)
@@ -253,6 +268,12 @@ class ExpertPolicyNode(Node):
         self.current_position: Optional[np.ndarray] = None
         self.current_yaw: Optional[float] = None
         self.path_progress_m = 0.0
+        self.path_progress_motion_slack_m = max(
+            0.0,
+            float(self.get_parameter("path_progress_motion_slack_m").value),
+        )
+        self.path_progress_anchor_position: Optional[np.ndarray] = None
+        self.path_progress_distance_budget_m = 0.0
         self.latest_odom_frame_debug: dict[str, object] = {}
         self.seq_num = 1
 
@@ -282,7 +303,14 @@ class ExpertPolicyNode(Node):
         if (
             self.task.get("task_type") == "follow_fence_sequence"
             and self.task.get("sequence_type") == "perimeter"
-        ) or (
+        ):
+            return orient_loop_path_from_start(
+                path,
+                self.world_start_position,
+                self.world_start_yaw,
+                allow_reverse=True,
+            )
+        if (
             self.task.get("task_type") == "follow_shed_side"
             and self.task.get("shed_side") == "perimeter"
         ):
@@ -290,7 +318,7 @@ class ExpertPolicyNode(Node):
                 path,
                 self.world_start_position,
                 self.world_start_yaw,
-                allow_reverse=True,
+                allow_reverse=False,
             )
         if self.task.get("task_type") in {
             "follow_fence",
@@ -434,13 +462,18 @@ class ExpertPolicyNode(Node):
 
     def fence_offset_cost_fn(self) -> Callable[[np.ndarray], float] | None:
         weight = float(self.planner_setting("fence_offset_cost_weight", "fence_offset_cost_weight"))
-        if weight <= 0.0:
-            return None
+        danger_weight = float(
+            self.planner_setting("fence_min_clearance_cost_weight", "fence_min_clearance_cost_weight")
+        )
         segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
         if not segments:
             return None
 
         preferred_offset_m = float(self.variant.get("preferred_offset_m", 0.8))
+        min_clearance_m = max(
+            0.0,
+            float(self.planner_setting("planner_fence_min_clearance_m", "planner_fence_min_clearance_m")),
+        )
         deadband_m = max(0.0, float(self.planner_setting("fence_offset_cost_deadband_m", "fence_offset_cost_deadband_m")))
         max_error_m = max(
             deadband_m,
@@ -448,11 +481,16 @@ class ExpertPolicyNode(Node):
         )
 
         def point_cost(point: np.ndarray) -> float:
-            distance_to_fence = min(point_to_segment_distance(point, start, end) for start, end in segments)
+            distance_to_fence = distance_to_nearest_segment(point, segments)
+            danger_cost = 0.0
+            if min_clearance_m > 0.0 and distance_to_fence < min_clearance_m:
+                danger_cost = danger_weight * (min_clearance_m - distance_to_fence + 1.0)
+            if weight <= 0.0:
+                return danger_cost
             offset_error = abs(distance_to_fence - preferred_offset_m)
             if offset_error <= deadband_m:
-                return 0.0
-            return weight * min(offset_error - deadband_m, max_error_m)
+                return danger_cost
+            return danger_cost + weight * min(offset_error - deadband_m, max_error_m)
 
         return point_cost
 
@@ -494,6 +532,9 @@ class ExpertPolicyNode(Node):
         min_clearance_m = float(
             self.planner_setting("planner_subgoal_min_clearance_m", "planner_subgoal_min_clearance_m")
         )
+        min_fence_clearance_m = float(
+            self.planner_setting("planner_fence_min_clearance_m", "planner_fence_min_clearance_m")
+        )
         nudged_count = 0
         side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
 
@@ -516,6 +557,13 @@ class ExpertPolicyNode(Node):
                     collision_candidates += 1
                     continue
                 if collision_map.obstacle_clearance(candidate, include_fences=False) < min_clearance_m:
+                    low_clearance_candidates += 1
+                    continue
+                if (
+                    min_fence_clearance_m > 0.0
+                    and side_constraint_segments
+                    and distance_to_nearest_segment(candidate, side_constraint_segments) < min_fence_clearance_m
+                ):
                     low_clearance_candidates += 1
                     continue
                 if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
@@ -586,6 +634,20 @@ class ExpertPolicyNode(Node):
         planned = resample_path(planned, max(self.waypoint_spacing_m * 0.5, 0.1))
         planned_length = path_length(planned)
         reference_length = path_length(self.path)
+        side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
+        min_fence_clearance_m = float(
+            self.planner_setting("planner_fence_min_clearance_m", "planner_fence_min_clearance_m")
+        )
+        if min_fence_clearance_m > 0.0 and side_constraint_segments:
+            planned_min_fence_distance = path_min_distance_to_segments(planned, side_constraint_segments)
+            if planned_min_fence_distance < min_fence_clearance_m:
+                message = (
+                    f"Hybrid A* runtime path is too close to target fence: "
+                    f"min_distance={planned_min_fence_distance:.2f}m "
+                    f"required={min_fence_clearance_m:.2f}m"
+                )
+                self.get_logger().error(message)
+                raise RuntimeError(message)
         if self.requires_full_reference_progress() and planned_length < 0.75 * reference_length:
             message = (
                 f"Hybrid A* runtime path is too short for ordered task: "
@@ -596,6 +658,8 @@ class ExpertPolicyNode(Node):
         self.planned_path = planned
         self.trajectory = self.profile_path(planned)
         self.path_progress_m = 0.0
+        self.path_progress_anchor_position = None
+        self.path_progress_distance_budget_m = 0.0
         self.get_logger().info(
             f"Hybrid A* planned {len(planned)} points via {len(subgoals)} subgoals "
             f"around {len(collision_map.obstacles)} obstacles, "
@@ -627,13 +691,25 @@ class ExpertPolicyNode(Node):
     def current_path_progress(self, path: list[np.ndarray]) -> float:
         if self.current_position is None:
             return 0.0
-        progress = project_progress_near(
+        projected_progress = project_progress_near(
             path,
             self.current_position,
             self.path_progress_m,
             max_backward_m=0.5,
             max_forward_m=2.0,
         )
+        if self.path_progress_anchor_position is None:
+            self.path_progress_anchor_position = self.current_position.copy()
+        else:
+            moved_m = float(np.linalg.norm(self.current_position - self.path_progress_anchor_position))
+            if math.isfinite(moved_m):
+                self.path_progress_distance_budget_m += moved_m
+            self.path_progress_anchor_position = self.current_position.copy()
+
+        max_motion_consistent_progress = (
+            self.path_progress_distance_budget_m + self.path_progress_motion_slack_m
+        )
+        progress = min(projected_progress, max_motion_consistent_progress)
         self.path_progress_m = max(self.path_progress_m, progress)
         return self.path_progress_m
 

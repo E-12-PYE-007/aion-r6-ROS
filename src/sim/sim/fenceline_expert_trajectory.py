@@ -13,6 +13,7 @@ from sim.expert_trajectory_utils import (
     fence_by_name,
     line_path_from_points,
     offset_polyline,
+    offset_segment_sequence,
     point2,
 )
 
@@ -82,14 +83,14 @@ class FencelineExpertTrajectoryNode(ExpertPolicyNode):
 
         if task_type == "follow_fence_sequence":
             fences = [fence_by_name(self.scene, name) for name in self.task["target_fences"]]
-            base_path = concat_segments(fences, self.flip_isaac_y)
             return densify_polyline(
-                offset_polyline(
-                    base_path,
+                offset_segment_sequence(
+                    fences,
+                    self.flip_isaac_y,
                     self.preferred_offset_m,
                     path_side_for_task(self.task, self.flip_isaac_y),
                 ),
-                max_segment_length_m=1.0,
+                max_segment_length_m=0.5,
             )
 
         if task_type == "follow_corridor":

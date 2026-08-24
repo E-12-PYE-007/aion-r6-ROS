@@ -265,6 +265,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_search_step_m": 0.5,
     "planner_subgoal_max_candidates": 48,
     "planner_subgoal_min_clearance_m": 0.15,
+    "planner_fence_min_clearance_m": 0.85,
     "planner_subgoal_vertex_margin_m": 0.5,
     "planner_subgoal_endpoint_margin_m": 0.5,
     "hybrid_astar_max_iterations": 20000,
@@ -272,6 +273,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "fence_offset_cost_weight": 0.6,
     "fence_offset_cost_deadband_m": 0.15,
     "fence_offset_cost_max_error_m": 2.0,
+    "fence_min_clearance_cost_weight": 50.0,
     "obstacle_clearance_cost_weight": 0.5,
     "obstacle_clearance_cost_distance_m": 0.4,
     "quality_max_nudged_subgoals": 8,
@@ -557,6 +559,7 @@ def trajectory_variants_for_task(
     ])
     if task_type == "follow_fence_sequence":
         for variant in variants:
+            variant["preferred_offset_m"] = max(float(variant.get("preferred_offset_m", 0.8)), 1.0)
             variant["planner_settings"].update({
                 "planner_subgoal_spacing_m": 2.0,
                 "planner_subgoal_longitudinal_search_m": 2.5,
@@ -566,6 +569,10 @@ def trajectory_variants_for_task(
                     float(variant["planner_settings"].get("planner_subgoal_min_clearance_m", 0.15)),
                     0.25,
                 ),
+                "planner_fence_min_clearance_m": max(
+                    float(variant["planner_settings"].get("planner_fence_min_clearance_m", 0.85)),
+                    0.85,
+                ),
                 "obstacle_clearance_cost_distance_m": 0.75,
                 "obstacle_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("obstacle_clearance_cost_weight", 0.5)),
@@ -573,7 +580,11 @@ def trajectory_variants_for_task(
                 ),
                 "fence_offset_cost_weight": max(
                     float(variant["planner_settings"].get("fence_offset_cost_weight", 0.6)),
-                    1.0,
+                    1.5,
+                ),
+                "fence_min_clearance_cost_weight": max(
+                    float(variant["planner_settings"].get("fence_min_clearance_cost_weight", 50.0)),
+                    75.0,
                 ),
             })
     if task_type in {"pass_through_gap", "switch_sides"}:
@@ -1183,6 +1194,7 @@ def generate_shedline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
             start_pose=start_name,
             target_shed="shed",
             shed_side="perimeter",
+            perimeter_direction="counterclockwise",
             travel_direction="forward",
             success_condition={"type": "reach_path_end", "min_progress_m": required_progress},
             validation=validation(min_progress_m=required_progress),

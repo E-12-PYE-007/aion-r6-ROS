@@ -573,6 +573,28 @@ def concat_segments(segments: list[dict[str, Any]], flip_isaac_y: bool) -> list[
     return points
 
 
+def offset_segment_sequence(
+    segments: list[dict[str, Any]],
+    flip_isaac_y: bool,
+    offset_m: float,
+    side: str,
+) -> list[np.ndarray]:
+    """Offset each segment independently, then bridge between offset endpoints."""
+    points: list[np.ndarray] = []
+    for segment in segments:
+        segment_path = offset_polyline(segment_polyline(segment, flip_isaac_y), offset_m, side)
+        if not segment_path:
+            continue
+        if not points:
+            points.extend(segment_path)
+            continue
+        if float(np.linalg.norm(points[-1] - segment_path[0])) > 1e-6:
+            points.append(segment_path[0])
+        if float(np.linalg.norm(points[-1] - segment_path[-1])) > 1e-6:
+            points.append(segment_path[-1])
+    return points
+
+
 def densify_polyline(polyline: list[np.ndarray], max_segment_length_m: float) -> list[np.ndarray]:
     if len(polyline) < 2 or max_segment_length_m <= 0.0:
         return list(polyline)

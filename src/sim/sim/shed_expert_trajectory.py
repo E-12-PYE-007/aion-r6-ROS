@@ -135,6 +135,12 @@ class ShedExpertTrajectoryNode(ExpertPolicyNode):
             path_yaw = math.atan2(float(delta[1]), float(delta[0]))
             return abs(math.atan2(math.sin(path_yaw - self.world_start_yaw), math.cos(path_yaw - self.world_start_yaw)))
 
+        direction = str(self.task.get("perimeter_direction", "counterclockwise"))
+        if direction == "clockwise":
+            return path_from_loop(clockwise)
+        if direction == "counterclockwise":
+            return path_from_loop(counterclockwise)
+
         candidates = [path_from_loop(clockwise), path_from_loop(counterclockwise)]
         return min(candidates, key=heading_error)
 

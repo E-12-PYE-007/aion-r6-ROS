@@ -18,6 +18,7 @@ from sim.expert_trajectory_utils import (
     fence_by_name,
     get_asset_bbox,
     offset_polyline,
+    offset_segment_sequence,
     orient_and_crop_path_from_start,
     orient_loop_path_from_start,
     path_length,
@@ -675,8 +676,6 @@ def shed_perimeter_path(
                 deduped.append(point)
         return deduped
 
-    candidates = [path_from_loop(clockwise), path_from_loop(counterclockwise)]
-
     def heading_error(path: list[np.ndarray]) -> float:
         if len(path) < 2:
             return math.inf
@@ -684,6 +683,13 @@ def shed_perimeter_path(
         path_yaw = math.atan2(float(delta[1]), float(delta[0]))
         return abs(wrap_to_pi(path_yaw - start_yaw))
 
+    direction = str(task.get("perimeter_direction", "counterclockwise"))
+    if direction == "clockwise":
+        return path_from_loop(clockwise)
+    if direction == "counterclockwise":
+        return path_from_loop(counterclockwise)
+
+    candidates = [path_from_loop(clockwise), path_from_loop(counterclockwise)]
     return min(candidates, key=heading_error)
 
 
@@ -746,12 +752,13 @@ def reference_path_for_task(
             scene,
             task,
             densify_polyline(
-                offset_polyline(
-                    concat_segments(fences, flip_isaac_y),
+                offset_segment_sequence(
+                    fences,
+                    flip_isaac_y,
                     offset_m,
                     path_side_for_task(task, flip_isaac_y),
                 ),
-                max_segment_length_m=1.0,
+                max_segment_length_m=0.5,
             ),
             flip_isaac_y,
         )
@@ -905,6 +912,18 @@ def candidate_preserves_side(
     return original_side * candidate_side > 0.0
 
 
+def distance_to_nearest_segment(point: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not segments:
+        return math.inf
+    return min(point_to_segment_distance(point, start, end) for start, end in segments)
+
+
+def path_min_distance_to_segments(path: list[np.ndarray], segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not path or not segments:
+        return math.inf
+    return min(distance_to_nearest_segment(point, segments) for point in path)
+
+
 def side_constraint_segments_for_task(
     scene: dict[str, Any],
     task: dict[str, Any],
@@ -944,22 +963,27 @@ def fence_offset_cost_for_task(
     flip_isaac_y: bool,
 ) -> Callable[[np.ndarray], float] | None:
     weight = float(settings.get("fence_offset_cost_weight", 0.6))
-    if weight <= 0.0:
-        return None
+    danger_weight = float(settings.get("fence_min_clearance_cost_weight", 50.0))
     segments = side_constraint_segments_for_task(scene, task, flip_isaac_y)
     if not segments:
         return None
 
     preferred_offset_m = float(variant.get("preferred_offset_m", 0.8))
+    min_clearance_m = max(0.0, float(settings.get("planner_fence_min_clearance_m", 0.85)))
     deadband_m = max(0.0, float(settings.get("fence_offset_cost_deadband_m", 0.15)))
     max_error_m = max(deadband_m, float(settings.get("fence_offset_cost_max_error_m", 2.0)))
 
     def point_cost(point: np.ndarray) -> float:
-        distance_to_fence = min(point_to_segment_distance(point, start, end) for start, end in segments)
+        distance_to_fence = distance_to_nearest_segment(point, segments)
+        danger_cost = 0.0
+        if min_clearance_m > 0.0 and distance_to_fence < min_clearance_m:
+            danger_cost = danger_weight * (min_clearance_m - distance_to_fence + 1.0)
+        if weight <= 0.0:
+            return danger_cost
         offset_error = abs(distance_to_fence - preferred_offset_m)
         if offset_error <= deadband_m:
-            return 0.0
-        return weight * min(offset_error - deadband_m, max_error_m)
+            return danger_cost
+        return danger_cost + weight * min(offset_error - deadband_m, max_error_m)
 
     return point_cost
 
@@ -1014,6 +1038,7 @@ def plan_through_subgoals(
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
     max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
     min_clearance_m = float(settings.get("planner_subgoal_min_clearance_m", 0.15))
+    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.85))
     side_constraint_segments = side_constraint_segments or []
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
@@ -1034,6 +1059,13 @@ def plan_through_subgoals(
                 collision_candidates += 1
                 continue
             if collision_map.obstacle_clearance(candidate, include_fences=False) < min_clearance_m:
+                low_clearance_candidates += 1
+                continue
+            if (
+                min_fence_clearance_m > 0.0
+                and side_constraint_segments
+                and distance_to_nearest_segment(candidate, side_constraint_segments) < min_fence_clearance_m
+            ):
                 low_clearance_candidates += 1
                 continue
             if not candidate_preserves_side(goal_position, candidate, side_constraint_segments):
@@ -1077,6 +1109,11 @@ def plan_through_subgoals(
         "planned_path_length_m": path_length(planned_path),
         "planned_point_count": len(planned_path),
     }
+    if side_constraint_segments:
+        metrics["planned_min_target_fence_distance_m"] = path_min_distance_to_segments(
+            planned_path,
+            side_constraint_segments,
+        )
     if nudged_count:
         return True, f"nudged {nudged_count} reference subgoals to nearby reachable points", metrics
     return True, None, metrics
@@ -1088,6 +1125,7 @@ def trajectory_quality_errors(metrics: dict[str, Any], settings: dict[str, Any])
     max_nudge_m = float(settings.get("quality_max_nudge_m", 2.0))
     max_mean_nudge_m = float(settings.get("quality_max_mean_nudge_m", 1.25))
     max_length_ratio = float(settings.get("quality_max_path_length_ratio", 4.0))
+    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.85))
 
     if int(metrics.get("nudged_subgoals", 0)) > max_nudged:
         errors.append(f"nudged_subgoals {metrics.get('nudged_subgoals')} > {max_nudged}")
@@ -1098,6 +1136,11 @@ def trajectory_quality_errors(metrics: dict[str, Any], settings: dict[str, Any])
     if float(metrics.get("path_length_ratio", 1.0)) > max_length_ratio:
         errors.append(
             f"path_length_ratio {float(metrics.get('path_length_ratio', 1.0)):.2f} > {max_length_ratio:.2f}"
+        )
+    min_fence_distance = metrics.get("planned_min_target_fence_distance_m")
+    if min_fence_distance is not None and float(min_fence_distance) < min_fence_clearance_m:
+        errors.append(
+            f"planned_min_target_fence_distance_m {float(min_fence_distance):.2f} < {min_fence_clearance_m:.2f}"
         )
     return errors
 
