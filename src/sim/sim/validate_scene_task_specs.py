@@ -963,13 +963,13 @@ def fence_offset_cost_for_task(
     flip_isaac_y: bool,
 ) -> Callable[[np.ndarray], float] | None:
     weight = float(settings.get("fence_offset_cost_weight", 0.6))
-    danger_weight = float(settings.get("fence_min_clearance_cost_weight", 50.0))
+    danger_weight = float(settings.get("fence_min_clearance_cost_weight", 35.0))
     segments = side_constraint_segments_for_task(scene, task, flip_isaac_y)
     if not segments:
         return None
 
     preferred_offset_m = float(variant.get("preferred_offset_m", 0.8))
-    min_clearance_m = max(0.0, float(settings.get("planner_fence_min_clearance_m", 0.85)))
+    min_clearance_m = max(0.0, float(settings.get("planner_fence_min_clearance_m", 0.65)))
     deadband_m = max(0.0, float(settings.get("fence_offset_cost_deadband_m", 0.15)))
     max_error_m = max(deadband_m, float(settings.get("fence_offset_cost_max_error_m", 2.0)))
 
@@ -1038,7 +1038,7 @@ def plan_through_subgoals(
     search_step_m = float(settings.get("planner_subgoal_search_step_m", 0.5))
     max_candidates = int(settings.get("planner_subgoal_max_candidates", 48))
     min_clearance_m = float(settings.get("planner_subgoal_min_clearance_m", 0.15))
-    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.85))
+    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.65))
     side_constraint_segments = side_constraint_segments or []
     for index, (goal_position, goal_yaw) in enumerate(subgoals):
         selected_position = None
@@ -1125,7 +1125,7 @@ def trajectory_quality_errors(metrics: dict[str, Any], settings: dict[str, Any])
     max_nudge_m = float(settings.get("quality_max_nudge_m", 2.0))
     max_mean_nudge_m = float(settings.get("quality_max_mean_nudge_m", 1.25))
     max_length_ratio = float(settings.get("quality_max_path_length_ratio", 4.0))
-    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.85))
+    min_fence_clearance_m = float(settings.get("planner_fence_min_clearance_m", 0.65))
 
     if int(metrics.get("nudged_subgoals", 0)) > max_nudged:
         errors.append(f"nudged_subgoals {metrics.get('nudged_subgoals')} > {max_nudged}")

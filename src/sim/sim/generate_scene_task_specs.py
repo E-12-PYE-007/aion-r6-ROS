@@ -265,7 +265,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_search_step_m": 0.5,
     "planner_subgoal_max_candidates": 48,
     "planner_subgoal_min_clearance_m": 0.15,
-    "planner_fence_min_clearance_m": 0.85,
+    "planner_fence_min_clearance_m": 0.65,
     "planner_subgoal_vertex_margin_m": 0.5,
     "planner_subgoal_endpoint_margin_m": 0.5,
     "hybrid_astar_max_iterations": 20000,
@@ -273,7 +273,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "fence_offset_cost_weight": 0.6,
     "fence_offset_cost_deadband_m": 0.15,
     "fence_offset_cost_max_error_m": 2.0,
-    "fence_min_clearance_cost_weight": 50.0,
+    "fence_min_clearance_cost_weight": 35.0,
     "obstacle_clearance_cost_weight": 0.5,
     "obstacle_clearance_cost_distance_m": 0.4,
     "quality_max_nudged_subgoals": 8,
@@ -559,20 +559,53 @@ def trajectory_variants_for_task(
     ])
     if task_type == "follow_fence_sequence":
         for variant in variants:
-            variant["preferred_offset_m"] = max(float(variant.get("preferred_offset_m", 0.8)), 1.0)
+            variant_id = str(variant.get("variant_id", ""))
+            variant_type = str(variant.get("variant_type", ""))
+            is_nominal = variant_id == "nominal"
+            is_tight = variant_id == "normal_tight_clearance"
+            is_wide = variant_id == "cautious_wide_clearance"
+            if is_wide:
+                target_offset_m = 1.0
+                min_fence_clearance_m = 0.85
+                fence_cost_weight = 75.0
+                offset_cost_weight = 1.5
+            elif is_tight:
+                target_offset_m = 0.65
+                min_fence_clearance_m = 0.55
+                fence_cost_weight = 30.0
+                offset_cost_weight = 0.8
+            elif is_nominal:
+                target_offset_m = 0.8
+                min_fence_clearance_m = 0.65
+                fence_cost_weight = 35.0
+                offset_cost_weight = 1.0
+            elif variant_type == "recovery":
+                target_offset_m = max(float(variant.get("preferred_offset_m", 0.8)), 0.9)
+                min_fence_clearance_m = 0.75
+                fence_cost_weight = 60.0
+                offset_cost_weight = 1.25
+            else:
+                target_offset_m = max(float(variant.get("preferred_offset_m", 0.8)), 0.8)
+                min_fence_clearance_m = 0.65
+                fence_cost_weight = 35.0
+                offset_cost_weight = 1.0
+            variant["preferred_offset_m"] = target_offset_m
             variant["planner_settings"].update({
                 "planner_subgoal_spacing_m": 2.0,
                 "planner_subgoal_longitudinal_search_m": 2.5,
-                "min_turn_radius_m": max(float(variant["planner_settings"].get("min_turn_radius_m", 0.75)), 1.2),
-                "obstacle_padding_m": max(float(variant["planner_settings"].get("obstacle_padding_m", 0.08)), 0.12),
+                "min_turn_radius_m": max(
+                    float(variant["planner_settings"].get("min_turn_radius_m", 0.75)),
+                    1.0 if is_nominal or is_tight else 1.2,
+                ),
+                "obstacle_padding_m": max(
+                    float(variant["planner_settings"].get("obstacle_padding_m", 0.08)),
+                    0.10 if is_nominal or is_tight else 0.12,
+                ),
                 "planner_subgoal_min_clearance_m": max(
                     float(variant["planner_settings"].get("planner_subgoal_min_clearance_m", 0.15)),
-                    0.25,
+                    0.20 if is_nominal or is_tight else 0.25,
                 ),
-                "planner_fence_min_clearance_m": max(
-                    float(variant["planner_settings"].get("planner_fence_min_clearance_m", 0.85)),
-                    0.85,
-                ),
+                "planner_fence_min_clearance_m": min_fence_clearance_m,
                 "obstacle_clearance_cost_distance_m": 0.75,
                 "obstacle_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("obstacle_clearance_cost_weight", 0.5)),
@@ -580,11 +613,11 @@ def trajectory_variants_for_task(
                 ),
                 "fence_offset_cost_weight": max(
                     float(variant["planner_settings"].get("fence_offset_cost_weight", 0.6)),
-                    1.5,
+                    offset_cost_weight,
                 ),
                 "fence_min_clearance_cost_weight": max(
-                    float(variant["planner_settings"].get("fence_min_clearance_cost_weight", 50.0)),
-                    75.0,
+                    float(variant["planner_settings"].get("fence_min_clearance_cost_weight", 35.0)),
+                    fence_cost_weight,
                 ),
             })
     if task_type in {"pass_through_gap", "switch_sides"}:

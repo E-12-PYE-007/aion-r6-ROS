@@ -552,6 +552,7 @@ def validate_rollout_dir(
     max_reference_lateral_error_m: float | None = 4.0,
     max_final_target_distance_m: float | None = 2.0,
     max_black_image_fraction: float | None = 0.05,
+    min_target_fence_clearance_m: float | None = 0.65,
     allow_stationary: bool = False,
 ) -> ValidationResult:
     errors: list[str] = []
@@ -768,9 +769,14 @@ def validate_rollout_dir(
     if fence_geometry_metrics:
         min_fence_distance = finite_float(fence_geometry_metrics.get("min_center_distance_to_target_fence_m"))
         side_fraction = finite_float(fence_geometry_metrics.get("side_violation_fraction"))
-        if min_fence_distance is not None and min_fence_distance < 0.9:
+        if (
+            min_target_fence_clearance_m is not None
+            and min_fence_distance is not None
+            and min_fence_distance < float(min_target_fence_clearance_m)
+        ):
             errors.append(
-                f"target-fence clearance too small: center distance {min_fence_distance:.3f}m < required 0.900m"
+                f"target-fence clearance too small: center distance {min_fence_distance:.3f}m < "
+                f"required {float(min_target_fence_clearance_m):.3f}m"
             )
         if side_fraction is not None and side_fraction > 0.02:
             errors.append(
@@ -819,6 +825,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-reference-lateral-error-m", type=float, default=4.0)
     parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
     parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
+    parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
     parser.add_argument("--allow-stationary", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
@@ -841,6 +848,7 @@ def main() -> int:
         max_reference_lateral_error_m=args.max_reference_lateral_error_m,
         max_final_target_distance_m=args.max_final_target_distance_m,
         max_black_image_fraction=args.max_black_image_fraction,
+        min_target_fence_clearance_m=args.min_target_fence_clearance_m,
         allow_stationary=bool(args.allow_stationary),
     )
     payload = {
