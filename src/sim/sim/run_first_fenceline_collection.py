@@ -184,7 +184,7 @@ def build_selection(valid_specs_dir: Path, sample_seed: int) -> dict[str, dict[s
     for spec_path in spec_paths(valid_specs_dir):
         spec = load_yaml(spec_path)
         scene = spec.get("scene") if isinstance(spec.get("scene"), dict) else {}
-        scene_id = str(spec.get("suite_id") or scene.get("scene_id") or spec_path.stem)
+        scene_id = str(scene.get("scene_id") or spec.get("suite_id") or spec_path.stem)
         task = choose_follow_task(spec)
         if task is None:
             print(f"[SKIP] No valid fenceline follow task in {spec_path}", flush=True)
