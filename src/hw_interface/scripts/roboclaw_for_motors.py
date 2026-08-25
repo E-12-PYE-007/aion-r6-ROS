@@ -21,6 +21,7 @@ RIGHT_MOTOR_MULTIPLIER = 1.0  # Sign/scale for right duty command + encoder.
 
 ENCODER_PERIOD_SEC = 1.0 / 30.0  # Encoder read rate.
 MAX_DUTY_CYCLE = 100.0  # Max commanded duty cycle percentage.
+MAX_VELOCITY_QPPS = 3000.0  # NEEDS VERIFICATION: coarse safety cap on commanded velocity (encoder counts/sec), not a tuned limit.
 
 DRY_RUN = False  # True = skip serial connection and motor commands.
 
@@ -31,6 +32,7 @@ class RoboclawForMotorsNode(Node):
 
         self.address = ADDRESS
         self.max_duty_cycle = MAX_DUTY_CYCLE
+        self.max_velocity_qpps = MAX_VELOCITY_QPPS
         self.left_multiplier = LEFT_MOTOR_MULTIPLIER
         self.right_multiplier = RIGHT_MOTOR_MULTIPLIER
         self.prev_left_encoder = None
@@ -59,6 +61,17 @@ class RoboclawForMotorsNode(Node):
         self.encoder_publisher = self.create_publisher(
             LeftRightInt32,
             "encoder_counts",
+            10,
+        )
+        self.create_subscription(
+            LeftRightFloat32,
+            "set_motor_velocity",
+            self.drive_motors_velocity_callback,
+            1,
+        )
+        self.current_velocity_publisher = self.create_publisher(
+            LeftRightFloat32,
+            "current_motor_velocity",
             10,
         )
         self.encoder_timer = self.create_timer(ENCODER_PERIOD_SEC, self.publish_encoder_delta)
@@ -100,6 +113,26 @@ class RoboclawForMotorsNode(Node):
         out.right = float(duty_right)
         out.seq_num = self.seq_num
         self.current_duty_publisher.publish(out)
+        self.seq_num += 1
+
+    def drive_motors_velocity_callback(self, msg):
+        """Apply sign multipliers, command Roboclaw velocity (QPPS via onboard PID), and report actual velocity sent."""
+        velocity_left = self.clamp(
+            float(msg.left) * self.left_multiplier, -self.max_velocity_qpps, self.max_velocity_qpps
+        )
+        velocity_right = self.clamp(
+            float(msg.right) * self.right_multiplier, -self.max_velocity_qpps, self.max_velocity_qpps
+        )
+
+        if self.connected:
+            if not self.roboclaw.SpeedM1M2(self.address, int(velocity_left), int(velocity_right)):
+                self.get_logger().warn("Roboclaw did not acknowledge SpeedM1M2 command")
+
+        out = LeftRightFloat32()
+        out.left = float(velocity_left)
+        out.right = float(velocity_right)
+        out.seq_num = self.seq_num
+        self.current_velocity_publisher.publish(out)
         self.seq_num += 1
 
     def read_encoder_pair(self):
@@ -154,6 +187,7 @@ class RoboclawForMotorsNode(Node):
         if self.connected:
             try:
                 self.roboclaw.DutyM1M2(self.address, 0, 0)
+                self.roboclaw.SpeedM1M2(self.address, 0, 0)
                 if hasattr(self.roboclaw, "close"):
                     self.roboclaw.close()
             except Exception:

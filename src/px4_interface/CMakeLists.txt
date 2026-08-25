@@ -68,6 +68,34 @@ install(PROGRAMS
   RENAME roboclaw_motion_demo
 )
 
+# Wheel-revolution calibration test -- checks ENCODER_COUNTS_PER_WHEEL_REV.
+install(PROGRAMS
+  scripts/roboclaw_wheel_rev_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_wheel_rev_test
+)
+
+# Same forward/backward/spin test as roboclaw_motion_demo, but via SpeedM1M2 (onboard PID).
+install(PROGRAMS
+  scripts/roboclaw_velocity_motion_demo.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_velocity_motion_demo
+)
+
+# Straight-line forward distance calibration test.
+install(PROGRAMS
+  scripts/roboclaw_forward_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_forward_test
+)
+
+# In-place spin angle calibration test.
+install(PROGRAMS
+  scripts/roboclaw_spin_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_spin_test
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
