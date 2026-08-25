@@ -61,6 +61,13 @@ install(PROGRAMS
   RENAME roboclaw_for_motors
 )
 
+# Motion demo/test node -- drives forward/backward/spin using the topics above.
+install(PROGRAMS
+  scripts/roboclaw_motion_demo.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME roboclaw_motion_demo
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights

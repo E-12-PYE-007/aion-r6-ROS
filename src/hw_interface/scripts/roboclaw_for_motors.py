@@ -1,63 +1,28 @@
 #!/usr/bin/env python3
 """Roboclaw motor driver node for the Aion R6.
 
-This node is intentionally the only node that touches the motor controller.
-Everything upstream publishes normalized duty-cycle messages; everything
-downstream consumes raw encoder-count deltas. Ported from ASClinic's
-asc/roboclaw_for_motors.py (async-asc repo) -- see that package for the
-inner-loop PID/feedforward controller this was originally paired with,
-not yet ported here.
+This is the only node that touches the motor controller. Upstream publishes
+normalized duty-cycle messages; downstream consumes raw encoder-count deltas.
 
-Constants below are grouped into two blocks: values confirmed against the
-Aion R1's ArduPilot reference configuration or the Roboclaw/Basicmicro
-protocol defaults, and values that are wiring/hardware-specific and CANNOT
-be known without checking the actual R6 -- see the NEEDS VERIFICATION
-block and pid_tuning_guide.pdf (system identification section) before
-trusting them.
+Must have basicmicro installed via pip-install basicmicro
 """
 
 import rclpy
 from aion_msgs.msg import LeftRightFloat32, LeftRightInt32
 from rclpy.node import Node
 
-# --- Roboclaw/Basicmicro protocol constants (not platform-specific) ---
 PERCENT_TO_ROBOCLAW = 327.67  # = 32767 / 100; int16 duty range per percent.
+ADDRESS = 128     # Roboclaw serial address.
+BAUDRATE = 38400  # Roboclaw serial baud rate.
+USB_PORT = "/dev/serial/by-id/usb-Basicmicro_Inc._USB_Roboclaw_2x45A-if00"  # Stable by-id path, confirmed on robot.
 
-# --- Confirmed against the Aion R1 ArduPilot reference config ---
-# (AION_R1_Rover.param, Rover V4.5.0 -- see pid_tuning_guide.pdf for the
-# full derivation). The R1 does not use Roboclaw packet-serial at all
-# (it drives via RC/PWM, SERVO1/3_FUNCTION), so this only confirms the
-# Roboclaw's own factory-default address/baud, not anything R1-specific.
-ADDRESS = 128    # Roboclaw factory default.
-BAUDRATE = 38400  # Roboclaw factory default.
+LEFT_MOTOR_MULTIPLIER = 1.0   # Sign/scale for left duty command + encoder.
+RIGHT_MOTOR_MULTIPLIER = 1.0  # Sign/scale for right duty command + encoder.
 
-# --- NEEDS VERIFICATION on the actual R6 -- do not trust these blindly ---
-# USB_PORT: device path depends on what's plugged into the R6's companion
-# computer; confirm once wired up.
-USB_PORT = "/dev/ttyACM0"
-# LEFT/RIGHT_MOTOR_MULTIPLIER: sign depends on physical motor wiring/mount,
-# which is unknown for this chassis. Verify via the Motion Studio "PWM
-# Settings" slider test (move each motor's slider up, confirm it turns the
-# expected direction and the encoder count moves the matching way) before
-# trusting these signs or disabling DRY_RUN. ASClinic's R6 used -1.0/+1.0
-# (left motor reversed) -- that was specific to their build's wiring, do
-# not copy it without checking this chassis independently.
-LEFT_MOTOR_MULTIPLIER = 1.0
-RIGHT_MOTOR_MULTIPLIER = 1.0
+ENCODER_PERIOD_SEC = 1.0 / 30.0  # Encoder read rate.
+MAX_DUTY_CYCLE = 100.0  # Max commanded duty cycle percentage.
 
-# ENCODER_PERIOD_SEC: 10 Hz starting point for reading raw counts. Once a
-# velocity control loop is built on top of this node, re-check this against
-# the identified motor time constant (pid_tuning_guide.pdf, Section 2 --
-# Discretization Check) before trusting it as a control-loop rate rather
-# than just a read rate.
-ENCODER_PERIOD_SEC = 0.1
-MAX_DUTY_CYCLE = 100.0  # Safety cap on commanded duty cycle percentage.
-
-# Set to True to test the whole ROS stack without opening the serial port or
-# sending commands to physical motors. Defaults True here (unlike the
-# ASClinic original) because the wiring/port constants above are unverified
-# on this platform -- flip to False only after confirming them on the bench.
-DRY_RUN = True
+DRY_RUN = False  # True = skip serial connection and motor commands.
 
 
 class RoboclawForMotorsNode(Node):
