@@ -791,6 +791,9 @@ def validate_rollout_dir(
             warnings.append("diagnostics: no /cmd_vel messages observed")
         if nested_int(diagnostics_summary, "messages", "frame_debug") == 0:
             warnings.append("diagnostics: no /expert/frame_debug messages observed")
+        isaac_pose_messages = nested_int(diagnostics_summary, "messages", "isaac_pose_debug")
+        if isaac_pose_messages == 0:
+            warnings.append("diagnostics: no /isaac/scene_pose_debug messages observed")
         if nested_float(diagnostics_summary, "rates_hz", "action_chunk") < 2.0:
             warnings.append(
                 f"diagnostics: action_chunk rate {nested_float(diagnostics_summary, 'rates_hz', 'action_chunk'):.2f} Hz"

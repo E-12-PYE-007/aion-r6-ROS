@@ -217,6 +217,7 @@ def command_for_diagnostics(
         "expert_cmd_vel_topic": collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
+        "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
         "sample_frequency_hz": max(float(collection.get("sample_frequency_hz", 3.0)), 5.0),
     }
     return ["ros2", "run", "sim", "rollout_diagnostics"] + ros_param_args(params)

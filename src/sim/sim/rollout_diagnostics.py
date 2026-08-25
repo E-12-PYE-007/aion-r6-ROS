@@ -69,6 +69,7 @@ class RolloutDiagnosticsNode(Node):
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
+        self.declare_parameter("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
         self.declare_parameter("sample_frequency_hz", 5.0)
 
         output_dir = str(self.get_parameter("output_dir").value)
@@ -91,6 +92,7 @@ class RolloutDiagnosticsNode(Node):
             "expert_cmd_vel": [],
             "cmd_vel": [],
             "frame_debug": [],
+            "isaac_pose_debug": [],
         }
         self.stamps: dict[str, list[float]] = {
             "odom": [],
@@ -103,6 +105,7 @@ class RolloutDiagnosticsNode(Node):
             "expert_cmd_vel": {},
             "cmd_vel": {},
             "frame_debug": {},
+            "isaac_pose_debug": {},
         }
         self.odom_distance_m = 0.0
         self.previous_odom_xy: tuple[float, float] | None = None
@@ -118,6 +121,8 @@ class RolloutDiagnosticsNode(Node):
         self.action_pose_count = 0
         self.max_abs_action_y = 0.0
         self.max_abs_action_theta = 0.0
+        self.isaac_min_fence_distance_m: float | None = None
+        self.max_odom_isaac_position_error_m = 0.0
 
         self.csv_file = self.csv_path.open("w", newline="", encoding="utf-8")
         self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=self.csv_fields())
@@ -157,6 +162,12 @@ class RolloutDiagnosticsNode(Node):
             String,
             str(self.get_parameter("frame_debug_topic").value),
             self.frame_debug_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("isaac_pose_debug_topic").value),
+            self.isaac_pose_debug_callback,
             10,
         )
 
@@ -222,12 +233,26 @@ class RolloutDiagnosticsNode(Node):
             "relative_x",
             "relative_y",
             "relative_theta",
+            "isaac_rover_x",
+            "isaac_rover_y",
+            "isaac_rover_z",
+            "isaac_rover_yaw",
+            "isaac_planner_x",
+            "isaac_planner_y",
+            "isaac_planner_yaw",
+            "isaac_camera_x",
+            "isaac_camera_y",
+            "isaac_camera_z",
+            "isaac_camera_yaw",
+            "isaac_rover_min_fence_distance_m",
+            "odom_isaac_position_error_m",
             "odom_messages",
             "camera_messages",
             "action_chunk_messages",
             "expert_cmd_messages",
             "cmd_vel_messages",
             "frame_debug_messages",
+            "isaac_pose_debug_messages",
         ]
 
     def now(self) -> float:
@@ -318,6 +343,25 @@ class RolloutDiagnosticsNode(Node):
         if isinstance(data, dict):
             self.latest["frame_debug"] = data
 
+    def isaac_pose_debug_callback(self, msg: String) -> None:
+        self.times["isaac_pose_debug"].append(self.now())
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed /isaac/scene_pose_debug JSON")
+            return
+        if not isinstance(data, dict):
+            return
+        self.latest["isaac_pose_debug"] = data
+        fence_distance = data.get("rover_min_fence_distance_m")
+        if isinstance(fence_distance, (float, int)) and math.isfinite(float(fence_distance)):
+            value = float(fence_distance)
+            self.isaac_min_fence_distance_m = (
+                value
+                if self.isaac_min_fence_distance_m is None
+                else min(self.isaac_min_fence_distance_m, value)
+            )
+
     def write_row(self) -> None:
         wall_elapsed_s = self.now() - self.start_time
         sim_elapsed_s = None
@@ -335,6 +379,26 @@ class RolloutDiagnosticsNode(Node):
         expert = self.latest.get("expert_cmd_vel") or {}
         cmd = self.latest.get("cmd_vel") or {}
         frame = self.latest.get("frame_debug") or {}
+        isaac_debug = self.latest.get("isaac_pose_debug") or {}
+        isaac_rover = isaac_debug.get("rover_world_pose") or {}
+        isaac_planner = isaac_debug.get("rover_planner_pose_flip_y") or {}
+        isaac_camera = isaac_debug.get("camera_world_pose") or {}
+        odom_isaac_position_error_m = None
+        if (
+            isinstance(isaac_planner, dict)
+            and frame.get("world_x") is not None
+            and frame.get("world_y") is not None
+            and isaac_planner.get("x") is not None
+            and isaac_planner.get("y") is not None
+        ):
+            odom_isaac_position_error_m = math.hypot(
+                float(frame["world_x"]) - float(isaac_planner["x"]),
+                float(frame["world_y"]) - float(isaac_planner["y"]),
+            )
+            self.max_odom_isaac_position_error_m = max(
+                self.max_odom_isaac_position_error_m,
+                odom_isaac_position_error_m,
+            )
         camera_stamp_s = self.stamps["camera"][-1] if self.stamps["camera"] else None
         action_stamp_s = action.get("stamp_s")
         action_chunk_age_s = None
@@ -396,12 +460,26 @@ class RolloutDiagnosticsNode(Node):
             "relative_x": finite(frame.get("relative_x")),
             "relative_y": finite(frame.get("relative_y")),
             "relative_theta": finite(frame.get("relative_theta")),
+            "isaac_rover_x": finite(isaac_rover.get("x") if isinstance(isaac_rover, dict) else None),
+            "isaac_rover_y": finite(isaac_rover.get("y") if isinstance(isaac_rover, dict) else None),
+            "isaac_rover_z": finite(isaac_rover.get("z") if isinstance(isaac_rover, dict) else None),
+            "isaac_rover_yaw": finite(isaac_rover.get("yaw") if isinstance(isaac_rover, dict) else None),
+            "isaac_planner_x": finite(isaac_planner.get("x") if isinstance(isaac_planner, dict) else None),
+            "isaac_planner_y": finite(isaac_planner.get("y") if isinstance(isaac_planner, dict) else None),
+            "isaac_planner_yaw": finite(isaac_planner.get("yaw") if isinstance(isaac_planner, dict) else None),
+            "isaac_camera_x": finite(isaac_camera.get("x") if isinstance(isaac_camera, dict) else None),
+            "isaac_camera_y": finite(isaac_camera.get("y") if isinstance(isaac_camera, dict) else None),
+            "isaac_camera_z": finite(isaac_camera.get("z") if isinstance(isaac_camera, dict) else None),
+            "isaac_camera_yaw": finite(isaac_camera.get("yaw") if isinstance(isaac_camera, dict) else None),
+            "isaac_rover_min_fence_distance_m": finite(isaac_debug.get("rover_min_fence_distance_m")),
+            "odom_isaac_position_error_m": finite(odom_isaac_position_error_m),
             "odom_messages": len(self.times["odom"]),
             "camera_messages": len(self.times["camera"]),
             "action_chunk_messages": len(self.times["action_chunk"]),
             "expert_cmd_messages": len(self.times["expert_cmd_vel"]),
             "cmd_vel_messages": len(self.times["cmd_vel"]),
             "frame_debug_messages": len(self.times["frame_debug"]),
+            "isaac_pose_debug_messages": len(self.times["isaac_pose_debug"]),
         }
         self.csv_writer.writerow(row)
         self.csv_file.flush()
@@ -427,6 +505,7 @@ class RolloutDiagnosticsNode(Node):
                 "expert_cmd_vel": len(self.times["expert_cmd_vel"]),
                 "cmd_vel": len(self.times["cmd_vel"]),
                 "frame_debug": len(self.times["frame_debug"]),
+                "isaac_pose_debug": len(self.times["isaac_pose_debug"]),
             },
             "rates_hz": {
                 "odom": rate_hz(self.times["odom"]),
@@ -435,6 +514,7 @@ class RolloutDiagnosticsNode(Node):
                 "expert_cmd_vel": rate_hz(self.times["expert_cmd_vel"]),
                 "cmd_vel": rate_hz(self.times["cmd_vel"]),
                 "frame_debug": rate_hz(self.times["frame_debug"]),
+                "isaac_pose_debug": rate_hz(self.times["isaac_pose_debug"]),
             },
             "sim_time_rates_hz": {
                 "odom": rate_hz(self.stamps["odom"]),
@@ -469,6 +549,11 @@ class RolloutDiagnosticsNode(Node):
                 **(self.latest.get("action_chunk") or {}),
             },
             "frame_debug": self.latest.get("frame_debug") or {},
+            "isaac_pose_debug": {
+                "min_rover_fence_distance_m": self.isaac_min_fence_distance_m,
+                "max_odom_isaac_position_error_m": self.max_odom_isaac_position_error_m,
+                **(self.latest.get("isaac_pose_debug") or {}),
+            },
         }
 
     def finalize(self) -> None:
