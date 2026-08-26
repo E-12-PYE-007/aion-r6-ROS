@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'matplotlib'],
     zip_safe=True,
     maintainer='dstrahan',
     maintainer_email='dan.strahan08@gmail.com',
@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'simulate_action_chunk = debug.simulate_action_chunk:main',
+            'roboclaw_tests = debug.roboclaw_tests:main',
         ],
     },
 )
