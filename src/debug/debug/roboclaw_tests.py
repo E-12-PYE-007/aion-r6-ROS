@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Consolidated Roboclaw calibration/demo test nodes for the Aion R6.
 
-These were originally five standalone scripts under hw_interface/scripts/;
-they're merged here into one file so the debug package has a single place
-for roboclaw test/calibration logic. Each mode still runs as its own ROS
-node (own node name, own control loop) -- pick one with a required `mode`
-argument:
+Each mode runs as its own ROS node (own node name, own control loop) --
+pick one with a required `mode` argument:
 
     ros2 run debug roboclaw_tests <mode>
 
@@ -42,7 +39,7 @@ Modes:
 
 All modes publish to set_motor_duty_cycle or set_motor_velocity
 (LeftRightFloat32) and subscribe to encoder_counts (LeftRightInt32) --
-must match roboclaw_for_motors.py in hw_interface.
+must match roboclaw_for_motors.py.
 """
 
 import argparse
