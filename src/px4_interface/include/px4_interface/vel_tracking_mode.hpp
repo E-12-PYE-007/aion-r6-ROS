@@ -12,7 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose2_d.hpp>
 
-#include "hw_interface/action_chunk_controller.hpp"
+#include "px4_interface/action_chunk_controller.hpp"
 
 static const std::string kName = "Rover Velocity Rate Mode";
 
@@ -25,7 +25,7 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
     _action_chunk_subscription = node.create_subscription<aion_msgs::msg::ActionChunk>(
       "/vla/action_chunk", 10, std::bind(&RoverVelRateMode::action_callback, this, std::placeholders::_1)
     );
-    _controller = std::make_unique<hw_interface::AsyncFeedForwardController>();
+    _controller = std::make_unique<px4_interface::AsyncFeedForwardController>();
   }
 
   void onActivate() override {}
@@ -49,15 +49,15 @@ class RoverVelRateMode : public px4_ros2::ModeBase {
   rclcpp::Subscription<aion_msgs::msg::ActionChunk>::SharedPtr _action_chunk_subscription;
 
   std::optional<aion_msgs::msg::ActionChunk> _current_action_chunk;
-  std::unique_ptr<hw_interface::ActionChunkController> _controller;
+  std::unique_ptr<px4_interface::ActionChunkController> _controller;
 
-  hw_interface::VelocityCommand vel_targets;
+  px4_interface::VelocityCommand vel_targets;
 
-  void trackActionChunk(hw_interface::VelocityCommand& v)
+  void trackActionChunk(px4_interface::VelocityCommand& v)
   {
     if (!_current_action_chunk.has_value()) {
       RCLCPP_WARN(node().get_logger(), "No action chunk received yet, commanding zero velocity");
-      v = hw_interface::VelocityCommand{};
+      v = px4_interface::VelocityCommand{};
       return;
     }
 

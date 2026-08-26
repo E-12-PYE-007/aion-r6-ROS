@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'sim'
+package_name = 'data_collection'
 
 setup(
     name=package_name,
@@ -24,8 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'chunk_data_collector = sim.chunk_data_collector:main',
-            'stream_data_collector = sim.stream_data_collector:main',
+            'chunk_data_collector = data_collection.chunk_data_collector:main',
+            'stream_data_collector = data_collection.stream_data_collector:main',
 
         ],
     },

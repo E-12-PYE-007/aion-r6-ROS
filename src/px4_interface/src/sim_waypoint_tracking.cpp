@@ -4,7 +4,7 @@
  */
 
 
-#include <hw_interface/action_chunk_controller.hpp>
+#include <px4_interface/action_chunk_controller.hpp>
 #include "rclcpp/rclcpp.hpp"
 #include <memory>
 #include <geometry_msgs/msg/twist.hpp>
@@ -33,7 +33,7 @@ class SimWaypointTracker : public rclcpp::Node
 
         publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
 
-        _controller = std::make_unique<hw_interface::AsyncFeedForwardController>();
+        _controller = std::make_unique<px4_interface::AsyncFeedForwardController>();
 
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(1000/CONTROL_RATE),
@@ -45,10 +45,10 @@ class SimWaypointTracker : public rclcpp::Node
         rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr _odom_subscription;
         rclcpp::Subscription<aion_msgs::msg::ActionChunk>::SharedPtr _action_chunk_subscription;
         std::optional<aion_msgs::msg::ActionChunk> _current_action_chunk;
-        std::unique_ptr<hw_interface::ActionChunkController> _controller;
+        std::unique_ptr<px4_interface::ActionChunkController> _controller;
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
         std::optional<geometry_msgs::msg::Pose2D> _current_pose;
-        hw_interface::VelocityCommand vel_targets;
+        px4_interface::VelocityCommand vel_targets;
 
 
         void odom_callback(const std::shared_ptr<nav_msgs::msg::Odometry> msg){

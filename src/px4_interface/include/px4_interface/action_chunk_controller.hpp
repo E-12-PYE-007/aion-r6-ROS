@@ -10,7 +10,7 @@
 #include <geometry_msgs/msg/pose2_d.hpp>
 #include <aion_msgs/msg/action_chunk.hpp>
 
-namespace hw_interface
+namespace px4_interface
 {
 
 /// Body-frame velocity command produced by an ActionChunkController for one control tick.
@@ -253,4 +253,4 @@ class PurePursuitController: public ActionChunkController
     geometry_msgs::msg::Pose2D _anchor_pose; // current_pose captured when _last_chunk_id was set
 };
 
-} // namespace hw_interface
+} // namespace px4_interface

@@ -18,6 +18,6 @@ target_include_directories(action_chunk_controller_py PRIVATE
   ${geometry_msgs_INCLUDE_DIRS}
   ${std_msgs_INCLUDE_DIRS}
   ${aion_msgs_INCLUDE_DIRS}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/hw_interface/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/px4_interface/include
 )
 target_compile_features(action_chunk_controller_py PRIVATE cxx_std_17)

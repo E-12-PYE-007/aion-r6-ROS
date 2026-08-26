@@ -4,7 +4,7 @@
  */
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <hw_interface/action_chunk_controller.hpp>
+#include <px4_interface/action_chunk_controller.hpp>
 #include <aion_msgs/msg/action_chunk.hpp>
 
 namespace py = pybind11;
@@ -42,9 +42,9 @@ geometry_msgs::msg::Pose2D toPose(const std::array<double, 3> & p)
 
 PYBIND11_MODULE(action_chunk_controller_py, m)
 {
-  py::class_<hw_interface::AsyncFeedForwardController>(m, "AsyncFeedForwardController")
+  py::class_<px4_interface::AsyncFeedForwardController>(m, "AsyncFeedForwardController")
     .def(py::init<>())
-    .def("compute_command", [](hw_interface::AsyncFeedForwardController & self,
+    .def("compute_command", [](px4_interface::AsyncFeedForwardController & self,
                                 const std::vector<std::array<double,3>> & chunk,
                                 const std::array<double,3> & pose) {
       // seq_num is irrelevant here - AsyncFeedForwardController is memoryless and
@@ -53,9 +53,9 @@ PYBIND11_MODULE(action_chunk_controller_py, m)
       return std::make_pair(cmd.speed_body_x, cmd.yaw_rate);
     });
 
-  py::class_<hw_interface::PurePursuitController>(m, "PurePursuitController")
+  py::class_<px4_interface::PurePursuitController>(m, "PurePursuitController")
     .def(py::init<>())
-    .def("compute_command", [](hw_interface::PurePursuitController & self,
+    .def("compute_command", [](px4_interface::PurePursuitController & self,
                                 const std::vector<std::array<double,3>> & chunk,
                                 uint32_t seq_num,
                                 const std::array<double,3> & pose) {

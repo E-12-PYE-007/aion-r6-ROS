@@ -1,5 +1,5 @@
 
-#include <hw_interface/vel_tracking_mode.hpp>
+#include <px4_interface/vel_tracking_mode.hpp>
 #include <px4_ros2/components/node_with_mode.hpp>
 
 #include "rclcpp/rclcpp.hpp"
