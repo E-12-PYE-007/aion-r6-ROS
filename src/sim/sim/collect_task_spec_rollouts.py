@@ -468,7 +468,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variant-id", action="append", dest="variant_ids")
     parser.add_argument("--include-invalid-variants", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--no-tracker", action="store_true")
+    tracker_group = parser.add_mutually_exclusive_group()
+    tracker_group.add_argument(
+        "--no-tracker",
+        dest="no_tracker",
+        action="store_true",
+        default=True,
+        help="Drive Isaac directly from the expert /cmd_vel publisher. This is the default.",
+    )
+    tracker_group.add_argument(
+        "--use-tracker",
+        dest="no_tracker",
+        action="store_false",
+        help="Use hw_interface sim_waypoint_tracking to drive from /vla/action_chunk.",
+    )
     parser.add_argument(
         "--prepare-scene-command",
         default=None,
