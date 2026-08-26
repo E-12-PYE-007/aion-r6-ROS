@@ -71,7 +71,10 @@ class SimWaypointTracker : public rclcpp::Node
             vel_targets = _controller->computeCommand(*_current_action_chunk, *_current_pose);
             auto msg = geometry_msgs::msg::Twist();
 
-            msg.angular.z = vel_targets.yaw_rate;
+            // /sim_odom yaw is corrected into the planner frame before the
+            // controller sees it. Isaac /cmd_vel still expects the raw runtime
+            // yaw-rate sign, so convert back at the command boundary.
+            msg.angular.z = -vel_targets.yaw_rate;
             msg.linear.x = vel_targets.speed_body_x;
 
             RCLCPP_INFO(
@@ -112,4 +115,3 @@ int main(int argc, char * argv[])
   rclcpp::shutdown();
   return 0;
 }
-
