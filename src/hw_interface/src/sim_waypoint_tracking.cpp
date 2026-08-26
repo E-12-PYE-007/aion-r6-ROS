@@ -53,11 +53,11 @@ class SimWaypointTracker : public rclcpp::Node
 
         void odom_callback(const std::shared_ptr<nav_msgs::msg::Odometry> msg){
 
-            // Convert from Isaac FLU coordinate system to FRD (Px4 used NED, but north orientation is unimportant here)
+            // Keep the tracker in the same runtime odom convention as the expert node.
             geometry_msgs::msg::Pose2D pose;
             pose.x = msg->pose.pose.position.x;
-            pose.y = -msg->pose.pose.position.y;
-            pose.theta = -tf2::getYaw(msg->pose.pose.orientation);
+            pose.y = msg->pose.pose.position.y;
+            pose.theta = tf2::getYaw(msg->pose.pose.orientation);
             _current_pose = pose;
         }
 
