@@ -738,6 +738,45 @@ class ExpertPolicyNode(Node):
         self.path_progress_m = max(self.path_progress_m, progress)
         return self.path_progress_m
 
+    def select_direct_tracking_target(
+        self,
+        trajectory: TimedTrajectory,
+        progress_m: float,
+    ) -> tuple[np.ndarray, float, float]:
+        if self.current_position is None or self.current_yaw is None:
+            return sample_path_pose(trajectory.path, progress_m)
+
+        total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+        start_distance = min(total_distance, float(progress_m) + self.expert_path_lookahead_m)
+        upper_distance = min(
+            total_distance,
+            float(progress_m) + max(5.0, self.expert_path_lookahead_m * 5.0),
+        )
+        if start_distance >= total_distance or upper_distance <= start_distance:
+            position, yaw = sample_path_pose(trajectory.path, total_distance)
+            return position, yaw, total_distance
+
+        best: tuple[float, np.ndarray, float, float] | None = None
+        step_m = 0.15
+        count = max(1, int(math.ceil((upper_distance - start_distance) / step_m)))
+        for index in range(count + 1):
+            distance = min(upper_distance, start_distance + index * step_m)
+            position, yaw = sample_path_pose(trajectory.path, distance)
+            x, y, theta = world_to_robot(self.current_position, self.current_yaw, position, yaw)
+            if x <= 0.10 or abs(y) > 3.0:
+                continue
+            preferred_x_error = abs(x - self.expert_path_lookahead_m)
+            score = 0.7 * abs(y) + 0.25 * preferred_x_error + 0.10 * abs(theta) + 0.02 * (distance - start_distance)
+            if best is None or score < best[0]:
+                best = (score, position, yaw, distance)
+
+        if best is not None:
+            _, position, yaw, distance = best
+            return position, yaw, distance
+
+        position, yaw = sample_path_pose(trajectory.path, start_distance)
+        return position, yaw, start_distance
+
     def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, progress_m: float) -> None:
         if self.cmd_vel_publisher is None or self.current_position is None or self.current_yaw is None:
             return
@@ -747,19 +786,8 @@ class ExpertPolicyNode(Node):
             self.cmd_vel_publisher.publish(msg)
             return
 
-        target_position, target_yaw, target_distance = sample_distance_action_target(
-            trajectory,
-            self.current_position,
-            self.current_yaw,
-            progress_m,
-            self.expert_path_lookahead_m,
-            min_forward_x_m=0.12,
-            max_lateral_y_m=2.5,
-            max_forward_search_m=5.0,
-            max_backward_reacquire_m=2.5,
-            search_step_m=0.12,
-        )
-        relative_x, relative_y, _ = world_to_robot(
+        target_position, target_yaw, target_distance = self.select_direct_tracking_target(trajectory, progress_m)
+        relative_x, relative_y, relative_theta = world_to_robot(
             self.current_position,
             self.current_yaw,
             target_position,
@@ -782,22 +810,22 @@ class ExpertPolicyNode(Node):
             float(self.get_parameter("max_yaw_rate_radps").value),
         )
 
-        abs_heading_error = abs(heading_error)
-        if abs_heading_error > self.expert_heading_slowdown_rad:
+        steering_error = wrap_to_pi(1.05 * heading_error + 0.35 * relative_theta)
+        abs_steering_error = abs(steering_error)
+        if abs_steering_error > self.expert_heading_slowdown_rad:
             slowdown_span = max(math.pi - self.expert_heading_slowdown_rad, 1e-6)
             slowdown = 1.0 - 0.55 * min(
                 1.0,
-                (abs_heading_error - self.expert_heading_slowdown_rad) / slowdown_span,
+                (abs_steering_error - self.expert_heading_slowdown_rad) / slowdown_span,
             )
             speed = max(self.expert_min_tracking_speed_mps, speed * slowdown)
 
         if abs(curvature) > 1e-6:
             speed = min(speed, max(self.expert_min_tracking_speed_mps, max_yaw_rate / abs(curvature)))
 
-        yaw_rate = curvature * speed
-        if abs_heading_error > 1.8:
+        yaw_rate = 0.9 * steering_error
+        if abs_steering_error > 1.8:
             speed = min(speed, self.expert_min_tracking_speed_mps)
-            yaw_rate = 0.9 * wrap_to_pi(heading_error)
 
         msg.linear.x = float(max(0.0, min(speed, max_speed)))
         msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, yaw_rate)))
