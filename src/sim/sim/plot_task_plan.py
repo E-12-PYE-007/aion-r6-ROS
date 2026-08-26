@@ -146,6 +146,21 @@ def load_rollout_path(rollout_dir: Path | None) -> list[np.ndarray]:
     return points
 
 
+def load_runtime_planned_path(rollout_dir: Path | None) -> list[np.ndarray]:
+    if rollout_dir is None:
+        return []
+    path = rollout_dir / "runtime_planned_path.json"
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    points = payload.get("path") or []
+    return [
+        np.asarray([float(point[0]), float(point[1])], dtype=np.float64)
+        for point in points
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task_spec", type=Path)
@@ -199,6 +214,7 @@ def main() -> None:
         )
     planned_ok = planned_path is not None
     rollout_path = load_rollout_path(args.rollout_dir)
+    runtime_planned_path = load_runtime_planned_path(args.rollout_dir)
     note = f"nudged {nudged_count} reference subgoals to nearby reachable points" if nudged_count else ""
     print(f"collision_inflation_m={collision_map.inflation_m:.2f}")
     for obstacle in collision_map.obstacles:
@@ -259,6 +275,16 @@ def main() -> None:
     plot_polyline(ax, reference_path, "--", color="tab:blue", linewidth=2, label="reference")
     if planned_path:
         plot_polyline(ax, planned_path, "-", color="tab:green", linewidth=2, label="Hybrid A*")
+    if runtime_planned_path:
+        plot_polyline(
+            ax,
+            runtime_planned_path,
+            "-",
+            color="tab:orange",
+            linewidth=2.2,
+            alpha=0.85,
+            label="runtime Hybrid A*",
+        )
     if rollout_path:
         plot_polyline(ax, rollout_path, "-", color="tab:red", linewidth=2.2, label="actual sim path")
         ax.scatter(

@@ -191,6 +191,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
+        self.declare_parameter("runtime_planned_path_output", "")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
         self.declare_parameter("expert_path_lookahead_m", 0.9)
@@ -299,6 +300,10 @@ class ExpertPolicyNode(Node):
 
         self.publisher = self.create_publisher(ActionChunk, str(self.get_parameter("action_chunk_topic").value), 10)
         self.frame_debug_publisher = self.create_publisher(String, str(self.get_parameter("frame_debug_topic").value), 10)
+        runtime_planned_path_output = str(self.get_parameter("runtime_planned_path_output").value)
+        self.runtime_planned_path_output = (
+            Path(runtime_planned_path_output) if runtime_planned_path_output else None
+        )
         self.cmd_vel_publisher = None
         expert_cmd_vel_topic = str(self.get_parameter("expert_cmd_vel_topic").value)
         if expert_cmd_vel_topic:
@@ -682,6 +687,7 @@ class ExpertPolicyNode(Node):
             raise RuntimeError(message)
         self.planned_path = planned
         self.trajectory = self.profile_path(planned)
+        self.write_runtime_planned_path(planned, subgoals, collision_map)
         self.path_progress_m = 0.0
         self.path_progress_anchor_position = None
         self.path_progress_distance_budget_m = 0.0
@@ -690,6 +696,38 @@ class ExpertPolicyNode(Node):
             f"around {len(collision_map.obstacles)} obstacles, "
             f"path_length={path_length(planned):.2f}m duration={self.trajectory.duration():.2f}s"
         )
+
+    def write_runtime_planned_path(
+        self,
+        planned: list[np.ndarray],
+        subgoals: list[tuple[np.ndarray, float]],
+        collision_map: CollisionMap,
+    ) -> None:
+        if self.runtime_planned_path_output is None:
+            return
+        try:
+            self.runtime_planned_path_output.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "task_spec": self.task_spec_path.as_posix(),
+                "scene_yaml": self.scene_path.as_posix(),
+                "task_id": self.task_id,
+                "variant_id": self.variant_id,
+                "flip_scene_y": bool(self.flip_scene_y),
+                "flip_runtime_odom_y": bool(self.flip_runtime_odom_y),
+                "flip_runtime_odom_yaw": bool(self.flip_runtime_odom_yaw),
+                "path_length_m": float(path_length(planned)),
+                "point_count": len(planned),
+                "collision_inflation_m": float(collision_map.inflation_m),
+                "path": [[float(point[0]), float(point[1])] for point in planned],
+                "subgoals": [
+                    {"position": [float(position[0]), float(position[1])], "yaw": float(yaw)}
+                    for position, yaw in subgoals
+                ],
+            }
+            self.runtime_planned_path_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self.get_logger().info(f"Wrote runtime planned path to {self.runtime_planned_path_output}")
+        except Exception as exc:
+            self.get_logger().warn(f"Could not write runtime planned path: {exc}")
 
     def requires_full_reference_progress(self) -> bool:
         task_type = self.task.get("task_type")
@@ -828,7 +866,8 @@ class ExpertPolicyNode(Node):
             speed = min(speed, self.expert_min_tracking_speed_mps)
 
         msg.linear.x = float(max(0.0, min(speed, max_speed)))
-        msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, yaw_rate)))
+        command_yaw_rate = -yaw_rate if self.flip_runtime_odom_yaw else yaw_rate
+        msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, command_yaw_rate)))
         self.cmd_vel_publisher.publish(msg)
 
     def publish_chunk(self) -> None:

@@ -158,6 +158,7 @@ def command_for_expert(
     task_spec: dict[str, Any],
     rollout: Rollout,
     collection: dict[str, Any],
+    rollout_dir: Path,
     *,
     drive_cmd_vel_topic: str | None = None,
 ) -> list[str]:
@@ -170,6 +171,7 @@ def command_for_expert(
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
         "expert_cmd_vel_topic": drive_cmd_vel_topic or collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
+        "runtime_planned_path_output": (rollout_dir / "runtime_planned_path.json").as_posix(),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
         "flip_isaac_y": False,
@@ -391,6 +393,7 @@ def run_rollout(
             task_spec,
             rollout,
             collection,
+            rollout_dir,
             drive_cmd_vel_topic=drive_cmd_vel_topic,
         ),
     ))

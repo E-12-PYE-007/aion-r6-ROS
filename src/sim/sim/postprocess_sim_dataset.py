@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Validate collected rollouts and generate final training labels.
+
+This is intentionally a post-collection step. Raw rollout folders can contain
+live ActionChunk messages that were useful for driving/debugging the robot, but
+the final dataset labels are regenerated deterministically from the saved
+runtime planned path and the recorded pose at each image timestamp.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from sim.expert_trajectory_utils import (
+    path_length,
+    project_progress_near,
+    sample_distance_action_target,
+    world_to_robot,
+)
+from sim.export_edge_training_manifest import WAYPOINT_CONVENTIONS, waypoints_to_async_actions
+from sim.trajectory_profile import TimedTrajectory
+from sim.validate_collected_rollout import ValidationResult, validate_rollout_dir
+
+
+@dataclass
+class PostprocessResult:
+    rollout_dir: Path
+    accepted: bool
+    sample_count: int = 0
+    skipped_samples: int = 0
+    reason: str | None = None
+    warnings: list[str] | None = None
+    metrics: dict[str, Any] | None = None
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} did not contain a JSON object.")
+    return data
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8-sig") as f:
+        for line_number, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number} is not valid JSON: {exc}") from exc
+            if isinstance(record, dict):
+                records.append(record)
+    return records
+
+
+def discover_rollouts(input_root: Path) -> list[Path]:
+    if (input_root / "poses.jsonl").exists():
+        return [input_root]
+    return sorted(path.parent for path in input_root.rglob("poses.jsonl"))
+
+
+def finite_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def record_pose(record: dict[str, Any]) -> tuple[np.ndarray, float] | None:
+    pose = record.get("pose")
+    if not isinstance(pose, (list, tuple)) or len(pose) < 4:
+        return None
+    x = finite_float(pose[1])
+    y = finite_float(pose[2])
+    yaw = finite_float(pose[3])
+    if x is None or y is None or yaw is None:
+        return None
+    return np.asarray([x, y], dtype=np.float64), yaw
+
+
+def record_time(record: dict[str, Any]) -> float | None:
+    value = record.get("img_time", record.get("anchor_time"))
+    return finite_float(value)
+
+
+def image_exists(rollout_dir: Path, record: dict[str, Any]) -> bool:
+    image = record.get("image")
+    return isinstance(image, str) and (rollout_dir / "img" / image).exists()
+
+
+def load_runtime_trajectory(rollout_dir: Path) -> TimedTrajectory:
+    path = rollout_dir / "runtime_planned_path.json"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is missing; rerun rollouts with runtime_planned_path_output enabled")
+    payload = load_json(path)
+    raw_path = payload.get("path")
+    if not isinstance(raw_path, list) or len(raw_path) < 2:
+        raise ValueError(f"{path} does not contain a usable planned path")
+    points = [np.asarray([float(point[0]), float(point[1])], dtype=np.float64) for point in raw_path]
+    distances = np.concatenate(([0.0], np.cumsum([float(np.linalg.norm(points[i + 1] - points[i])) for i in range(len(points) - 1)])))
+    zeros = np.zeros(len(points), dtype=np.float64)
+    return TimedTrajectory(path=points, times=distances.copy(), distances=distances, yaws=zeros, speeds=zeros, yaw_rates=zeros)
+
+
+def generate_action_chunk_for_pose(
+    trajectory: TimedTrajectory,
+    position: np.ndarray,
+    yaw: float,
+    progress_m: float,
+    *,
+    chunk_size: int,
+    first_preview_m: float,
+    waypoint_spacing_m: float,
+) -> tuple[np.ndarray, float]:
+    poses: list[list[float]] = []
+    last_target_distance: float | None = None
+    for index in range(chunk_size):
+        preview_m = first_preview_m + index * waypoint_spacing_m
+        min_target_distance = (
+            last_target_distance + waypoint_spacing_m
+            if last_target_distance is not None
+            else None
+        )
+        target_position, target_yaw, target_distance = sample_distance_action_target(
+            trajectory,
+            position,
+            yaw,
+            progress_m,
+            preview_m,
+            min_forward_x_m=0.08,
+            max_lateral_y_m=1.75,
+            max_forward_search_m=3.0,
+            search_step_m=0.15,
+            min_target_distance=min_target_distance,
+        )
+        x, y, theta = world_to_robot(position, yaw, target_position, target_yaw)
+        poses.append([float(x), float(y), float(theta)])
+        last_target_distance = float(target_distance)
+    return np.asarray(poses, dtype=np.float32), float(last_target_distance or progress_m)
+
+
+def build_labels_for_rollout(
+    rollout_dir: Path,
+    *,
+    min_samples: int,
+    overwrite: bool,
+    chunk_size: int,
+    first_preview_m: float,
+    waypoint_spacing_m: float,
+    async_action_spacing_m: float,
+    waypoint_convention: str,
+) -> tuple[PostprocessResult, dict[str, Any] | None]:
+    metadata = load_json(rollout_dir / "metadata.json")
+    records = load_jsonl(rollout_dir / "poses.jsonl")
+    trajectory = load_runtime_trajectory(rollout_dir)
+
+    images: list[str] = []
+    timestamps: list[float] = []
+    waypoints: list[np.ndarray] = []
+    debug_records: list[dict[str, Any]] = []
+    skipped = 0
+    previous_progress: float | None = None
+
+    for index, record in enumerate(records):
+        pose = record_pose(record)
+        time_s = record_time(record)
+        if pose is None or time_s is None or not image_exists(rollout_dir, record):
+            skipped += 1
+            continue
+        position, yaw = pose
+        progress = project_progress_near(
+            trajectory.path,
+            position,
+            previous_progress,
+            max_backward_m=0.5,
+            max_forward_m=2.0,
+        )
+        progress = max(float(previous_progress or 0.0), float(progress))
+        previous_progress = progress
+        chunk, target_progress = generate_action_chunk_for_pose(
+            trajectory,
+            position,
+            yaw,
+            progress,
+            chunk_size=chunk_size,
+            first_preview_m=first_preview_m,
+            waypoint_spacing_m=waypoint_spacing_m,
+        )
+        if chunk.shape != (chunk_size, 3) or not np.isfinite(chunk).all():
+            skipped += 1
+            continue
+        images.append(str(Path("img") / str(record["image"])).replace("\\", "/"))
+        timestamps.append(float(time_s))
+        waypoints.append(chunk)
+        debug_records.append(
+            {
+                "sample_index": index,
+                "image": record.get("image"),
+                "time_s": float(time_s),
+                "path_progress_m": float(progress),
+                "target_progress_m": float(target_progress),
+                "first_waypoint": chunk[0].astype(float).tolist(),
+                "last_waypoint": chunk[-1].astype(float).tolist(),
+            }
+        )
+
+    if len(waypoints) < min_samples:
+        return (
+            PostprocessResult(
+                rollout_dir=rollout_dir,
+                accepted=False,
+                sample_count=len(waypoints),
+                skipped_samples=skipped,
+                reason=f"generated label samples < {min_samples}",
+            ),
+            None,
+        )
+
+    waypoint_array = np.stack(waypoints).astype(np.float32)
+    async_actions = waypoints_to_async_actions(
+        waypoint_array,
+        spacing_m=async_action_spacing_m,
+        convention=waypoint_convention,
+    )
+
+    outputs = {
+        "target_waypoints.npy": waypoint_array,
+        "target_async_actions.npy": async_actions,
+        "timestamps.npy": np.asarray(timestamps, dtype=np.float32),
+    }
+    for filename, array in outputs.items():
+        output_path = rollout_dir / filename
+        if overwrite or not output_path.exists():
+            np.save(output_path, array)
+
+    sample_jsonl = rollout_dir / "postprocessed_samples.jsonl"
+    if overwrite or not sample_jsonl.exists():
+        with sample_jsonl.open("w", encoding="utf-8") as f:
+            for record in debug_records:
+                f.write(json.dumps(record) + "\n")
+
+    label_summary = {
+        "label_source": "runtime_planned_path",
+        "runtime_planned_path": "runtime_planned_path.json",
+        "sample_count": len(waypoints),
+        "skipped_samples": skipped,
+        "path_length_m": path_length(trajectory.path),
+        "chunk_size": chunk_size,
+        "first_preview_m": first_preview_m,
+        "waypoint_spacing_m": waypoint_spacing_m,
+        "async_action_spacing_m": async_action_spacing_m,
+        "waypoint_convention": waypoint_convention,
+        "target_waypoints_shape": list(waypoint_array.shape),
+        "target_async_actions_shape": list(async_actions.shape),
+    }
+    (rollout_dir / "postprocess_label_summary.json").write_text(json.dumps(label_summary, indent=2), encoding="utf-8")
+
+    instruction = (
+        metadata.get("language_instruction")
+        or metadata.get("instruction")
+        or metadata.get("task_id")
+        or "navigate safely"
+    )
+    manifest_record = {
+        "episode_id": str(metadata.get("trajectory_name") or rollout_dir.name),
+        "root": rollout_dir.resolve().as_posix(),
+        "images": images,
+        "timestamps_path": "timestamps.npy",
+        "instruction": str(instruction),
+        "target_waypoints_path": "target_waypoints.npy",
+        "target_async_actions_path": "target_async_actions.npy",
+        "metadata": {
+            "dataset_name": metadata.get("dataset_name"),
+            "task_id": metadata.get("task_id"),
+            "variant_id": metadata.get("variant_id"),
+            "variant_type": metadata.get("variant_type"),
+            "recovery_case": metadata.get("recovery_case"),
+            "source_format": metadata.get("format", "stream_jsonl"),
+            "label_source": "runtime_planned_path",
+            "raw_waypoint_format": "x_forward_m_y_left_m_yaw_rad",
+            "async_action_format": "x_over_spacing_y_over_spacing_cos_yaw_sin_yaw",
+            "async_action_spacing_m": float(async_action_spacing_m),
+            "waypoint_convention": waypoint_convention,
+        },
+    }
+    return (
+        PostprocessResult(
+            rollout_dir=rollout_dir,
+            accepted=True,
+            sample_count=len(waypoints),
+            skipped_samples=skipped,
+            reason=None,
+            metrics=label_summary,
+        ),
+        manifest_record,
+    )
+
+
+def validate_for_final_dataset(rollout_dir: Path, args: argparse.Namespace) -> ValidationResult:
+    return validate_rollout_dir(
+        rollout_dir=rollout_dir,
+        min_samples=args.min_samples,
+        min_motion_m=args.min_motion_m,
+        min_action_chunk_fraction=0.0,
+        min_cmd_vel_fraction=args.min_cmd_vel_fraction,
+        max_mean_abs_action_first_y_m=None,
+        max_abs_action_first_y_m=None,
+        max_action_chunk_age_s=None,
+        max_mean_reference_lateral_error_m=args.max_mean_reference_lateral_error_m,
+        max_reference_lateral_error_m=args.max_reference_lateral_error_m,
+        max_final_target_distance_m=args.max_final_target_distance_m,
+        max_black_image_fraction=args.max_black_image_fraction,
+        min_target_fence_clearance_m=args.min_target_fence_clearance_m,
+    )
+
+
+def result_payload(result: PostprocessResult) -> dict[str, Any]:
+    return {
+        "rollout_dir": result.rollout_dir.as_posix(),
+        "accepted": result.accepted,
+        "sample_count": result.sample_count,
+        "skipped_samples": result.skipped_samples,
+        "reason": result.reason,
+        "warnings": result.warnings or [],
+        "metrics": result.metrics or {},
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input_root", type=Path, help="One rollout dir or a root containing many rollout dirs.")
+    parser.add_argument("--out-manifest", type=Path, required=True, help="Final accepted-rollout JSONL manifest.")
+    parser.add_argument("--summary-json", type=Path, default=None)
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--min-samples", type=int, default=20)
+    parser.add_argument("--min-motion-m", type=float, default=None)
+    parser.add_argument("--min-cmd-vel-fraction", type=float, default=0.5)
+    parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=1.0)
+    parser.add_argument("--max-reference-lateral-error-m", type=float, default=2.5)
+    parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
+    parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
+    parser.add_argument("--chunk-size", type=int, default=8)
+    parser.add_argument("--first-preview-m", type=float, default=0.35)
+    parser.add_argument("--waypoint-spacing-m", type=float, default=0.18)
+    parser.add_argument("--async-action-spacing-m", type=float, default=0.125)
+    parser.add_argument(
+        "--waypoint-convention",
+        choices=WAYPOINT_CONVENTIONS,
+        default="x_forward_y_left",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    rollouts = discover_rollouts(args.input_root.resolve())
+    if not rollouts:
+        print(f"No rollout folders found under {args.input_root}")
+        return 1
+
+    args.out_manifest.parent.mkdir(parents=True, exist_ok=True)
+    summary_path = args.summary_json or args.out_manifest.with_suffix(".summary.json")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+
+    manifest_records: list[dict[str, Any]] = []
+    results: list[PostprocessResult] = []
+    for rollout_dir in rollouts:
+        validation = validate_for_final_dataset(rollout_dir, args)
+        if not validation.valid:
+            results.append(
+                PostprocessResult(
+                    rollout_dir=rollout_dir,
+                    accepted=False,
+                    reason="; ".join(validation.errors),
+                    warnings=validation.warnings,
+                    metrics=validation.metrics,
+                )
+            )
+            continue
+
+        try:
+            result, record = build_labels_for_rollout(
+                rollout_dir,
+                min_samples=args.min_samples,
+                overwrite=bool(args.overwrite),
+                chunk_size=int(args.chunk_size),
+                first_preview_m=float(args.first_preview_m),
+                waypoint_spacing_m=float(args.waypoint_spacing_m),
+                async_action_spacing_m=float(args.async_action_spacing_m),
+                waypoint_convention=str(args.waypoint_convention),
+            )
+        except Exception as exc:
+            result = PostprocessResult(
+                rollout_dir=rollout_dir,
+                accepted=False,
+                reason=f"label generation failed: {exc}",
+                warnings=validation.warnings,
+                metrics=validation.metrics,
+            )
+            record = None
+
+        result.warnings = list(validation.warnings) + list(result.warnings or [])
+        if result.accepted and result.metrics is not None:
+            result.metrics = {"validation": validation.metrics, "labels": result.metrics}
+        elif result.metrics is None:
+            result.metrics = validation.metrics
+        results.append(result)
+        if record is not None:
+            manifest_records.append(record)
+
+    with args.out_manifest.open("w", encoding="utf-8") as f:
+        for record in manifest_records:
+            f.write(json.dumps(record) + "\n")
+
+    summary = {
+        "input_root": args.input_root.resolve().as_posix(),
+        "out_manifest": args.out_manifest.resolve().as_posix(),
+        "rollouts_found": len(rollouts),
+        "accepted_rollouts": len(manifest_records),
+        "rejected_rollouts": len(rollouts) - len(manifest_records),
+        "total_samples": sum(result.sample_count for result in results if result.accepted),
+        "results": [result_payload(result) for result in results],
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    print(f"Found {len(rollouts)} rollout(s).")
+    print(f"Accepted {len(manifest_records)} rollout(s), rejected {len(rollouts) - len(manifest_records)}.")
+    print(f"Wrote manifest: {args.out_manifest}")
+    print(f"Wrote summary:  {summary_path}")
+    rejected = [result for result in results if not result.accepted]
+    if rejected:
+        print("First rejected rollout reasons:")
+        for result in rejected[:10]:
+            print(f"  {result.rollout_dir.name}: {result.reason}")
+    return 0 if manifest_records else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
