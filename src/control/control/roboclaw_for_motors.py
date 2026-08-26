@@ -21,7 +21,7 @@ RIGHT_MOTOR_MULTIPLIER = 1.0  # Sign/scale for right duty command + encoder.
 
 ENCODER_PERIOD_SEC = 1.0 / 30.0  # Encoder read rate.
 MAX_DUTY_CYCLE = 100.0  # Max commanded duty cycle percentage.
-MAX_VELOCITY_QPPS = 3000.0  # NEEDS VERIFICATION: coarse safety cap on commanded velocity (encoder counts/sec), not a tuned limit.
+MAX_VELOCITY_QPPS = 3000.0
 
 DRY_RUN = False  # True = skip serial connection and motor commands.
 

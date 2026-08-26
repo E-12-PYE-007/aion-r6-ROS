@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure-pursuit controller node for the Aion R6.
 
-Subscribes to /odom (nav_msgs/Odometry) for the current pose and to
+Subscribes to ODOM_TOPIC (nav_msgs/Odometry) for the current pose and to
 /vla/action_chunk (aion_msgs/ActionChunk) for the target motion, and
 publishes body velocity commands on cmd_vel (geometry_msgs/Twist).
 """
@@ -20,6 +20,8 @@ MAX_ANGULAR_VELOCITY = 0.3  # [rad/s] Shared rover yaw rate limit
 LOOKAHEAD_DISTANCE = 0.2  # [m]
 CONTROL_PERIOD_SEC = 1.0 / 30.0  # Control rate of 30Hz
 HERMITE_SAMPLES_PER_SEGMENT = 10
+
+ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; point at the EKF's fused output once it exists.
 
 
 def sign(value):
@@ -109,7 +111,7 @@ class PurePursuitControllerNode(Node):
         self._last_chunk_seq = None   # None until the first chunk is received
 
         self._odom_subscription = self.create_subscription(
-            Odometry, '/odom', self.odom_callback, 10)
+            Odometry, ODOM_TOPIC, self.odom_callback, 10)
         self._action_chunk_subscription = self.create_subscription(
             ActionChunk, '/vla/action_chunk', self.action_chunk_callback, 10)
         self._cmd_vel_publisher = self.create_publisher(Twist, 'cmd_vel', 10)

@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'control'
+package_name = 'localisation'
 
 setup(
     name=package_name,
@@ -11,11 +11,11 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools', 'basicmicro'],
+    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='dstrahan',
     maintainer_email='dan.strahan08@gmail.com',
-    description='Motion control nodes for the Aion R6 rover -- turns target motion into motor commands, and the Roboclaw motor driver that consumes them.',
+    description='State-estimation nodes for the Aion R6 rover -- turns raw sensor sources into pose/velocity estimates.',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -24,9 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'roboclaw_for_motors = control.roboclaw_for_motors:main',
-            'pure_pursuit_controller = control.pure_pursuit_controller:main',
-            'cmd_vel_to_roboclaw = control.cmd_vel_to_roboclaw:main',
+            'encoder_localisation = localisation.encoder_localisation:main',
         ],
     },
 )
