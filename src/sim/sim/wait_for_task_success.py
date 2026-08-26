@@ -55,8 +55,9 @@ class TaskSuccessWaiter(Node):
         self.declare_parameter("min_odom_messages", 2)
         self.declare_parameter("success_margin_m", 0.0)
         self.declare_parameter("target_tolerance_m", 0.5)
-        self.declare_parameter("flip_scene_y", True)
+        self.declare_parameter("flip_scene_y", False)
         self.declare_parameter("flip_runtime_odom_y", False)
+        self.declare_parameter("flip_runtime_odom_yaw", True)
         self.declare_parameter("summary_path", "")
 
         self.task_spec_path = Path(str(self.get_parameter("task_spec").value))
@@ -70,6 +71,7 @@ class TaskSuccessWaiter(Node):
         self.target_tolerance_m = float(self.get_parameter("target_tolerance_m").value)
         self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
+        self.flip_runtime_odom_yaw = bool(self.get_parameter("flip_runtime_odom_yaw").value)
         summary_value = str(self.get_parameter("summary_path").value)
         self.summary_path = Path(summary_value) if summary_value else None
 
@@ -183,7 +185,11 @@ class TaskSuccessWaiter(Node):
         self.previous_xy = (x, y)
 
         if self.world_start_position is not None and self.world_start_yaw is not None:
-            local_position, local_yaw = odom_to_pose(msg, self.flip_runtime_odom_y)
+            local_position, local_yaw = odom_to_pose(
+                msg,
+                self.flip_runtime_odom_y,
+                self.flip_runtime_odom_yaw,
+            )
             world_position, _ = local_odom_to_world(
                 local_position,
                 local_yaw,

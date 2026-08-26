@@ -1404,10 +1404,11 @@ def parse_args() -> argparse.Namespace:
         help="Run Hybrid A* for each trajectory variant and filter variants that cannot be planned.",
     )
     parser.add_argument(
-        "--no-flip-isaac-y",
+        "--flip-isaac-y",
         action="store_true",
-        help="Validate planner geometry without flipping Isaac's Y axis.",
+        help="Validate planner geometry by mirroring Isaac's Y axis.",
     )
+    parser.add_argument("--no-flip-isaac-y", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--allow-invalid",
         action="store_true",
@@ -1432,7 +1433,7 @@ def main() -> None:
             max_start_distance_m=args.max_start_distance_m,
             check_expert_support=not args.skip_expert_support_check,
             check_planner=args.check_planner,
-            flip_isaac_y=not args.no_flip_isaac_y,
+            flip_isaac_y=args.flip_isaac_y,
         )
         total_valid += len(valid_tasks)
         total_invalid += len(invalid_tasks)
@@ -1454,7 +1455,7 @@ def main() -> None:
                 "max_start_distance_m": args.max_start_distance_m,
                 "expert_support_checked": not args.skip_expert_support_check,
                 "planner_checked": args.check_planner,
-                "flip_isaac_y": not args.no_flip_isaac_y,
+                "flip_isaac_y": args.flip_isaac_y,
             }
             write_yaml(args.write_valid_output_dir / spec_path.name, filtered)
 

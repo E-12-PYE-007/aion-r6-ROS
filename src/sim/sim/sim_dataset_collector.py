@@ -134,9 +134,10 @@ class SimDatasetCollectorNode(Node):
         self.declare_parameter('action_chunk_topic', '/vla/action_chunk')
         self.declare_parameter('sample_frequency_hz', 3.0)
         self.declare_parameter('jpeg_quality', 80)
-        self.declare_parameter('flip_isaac_y', True)
-        self.declare_parameter('flip_scene_y', True)
+        self.declare_parameter('flip_isaac_y', False)
+        self.declare_parameter('flip_scene_y', False)
         self.declare_parameter('flip_runtime_odom_y', False)
+        self.declare_parameter('flip_runtime_odom_yaw', True)
 
         base_dir = self.get_parameter('base_dir').get_parameter_value().string_value
         if not base_dir:
@@ -159,6 +160,7 @@ class SimDatasetCollectorNode(Node):
         self.flip_isaac_y = self.get_parameter('flip_isaac_y').get_parameter_value().bool_value
         self.flip_scene_y = self.get_parameter('flip_scene_y').get_parameter_value().bool_value
         self.flip_runtime_odom_y = self.get_parameter('flip_runtime_odom_y').get_parameter_value().bool_value
+        self.flip_runtime_odom_yaw = self.get_parameter('flip_runtime_odom_yaw').get_parameter_value().bool_value
         self.world_start_pose = load_world_start_pose(self.task_spec_path, self.task_id, self.flip_scene_y)
         self.planner_settings = parse_optional_json(self.planner_settings_json, "planner_settings_json")
         self.speed_profile = parse_optional_json(self.speed_profile_json, "speed_profile_json")
@@ -237,6 +239,9 @@ class SimDatasetCollectorNode(Node):
             y = -y
             heading = -heading
             vy = -vy
+            yaw_rate = -yaw_rate
+        elif self.flip_runtime_odom_yaw:
+            heading = -heading
             yaw_rate = -yaw_rate
 
         local_pose = (msg_time, x, y, heading)
@@ -343,6 +348,7 @@ class SimDatasetCollectorNode(Node):
             "flip_isaac_y": self.flip_isaac_y,
             "flip_scene_y": self.flip_scene_y,
             "flip_runtime_odom_y": self.flip_runtime_odom_y,
+            "flip_runtime_odom_yaw": self.flip_runtime_odom_yaw,
             "format": "stream_jsonl",
         }
         with open(self.metadata_path, "w") as f:

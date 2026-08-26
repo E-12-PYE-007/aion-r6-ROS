@@ -215,7 +215,7 @@ def fence_follow_geometry_metrics(
     if not fences:
         return {}, None
 
-    flip_scene_y = bool(metadata.get("flip_scene_y", True))
+    flip_scene_y = bool(metadata.get("flip_scene_y", False))
     expected_path_side = str(structured_task.get("path_side", ""))
     expected_sign = 1.0 if expected_path_side == "left" else -1.0 if expected_path_side == "right" else 0.0
     segments = [
@@ -426,7 +426,7 @@ def reference_progress_metrics(
         variant_id = str(metadata.get("variant_id") or "nominal")
         task = find_task(task_spec, task_id)
         variant = find_variant(task, variant_id)
-        flip_scene_y = bool(metadata.get("flip_scene_y", True))
+        flip_scene_y = bool(metadata.get("flip_scene_y", False))
         reference_path = reference_path_for_task(scene, scene_path, task, variant, flip_scene_y)
         world_start_position, _ = get_start_pose(scene, task, flip_scene_y)
     except Exception as exc:

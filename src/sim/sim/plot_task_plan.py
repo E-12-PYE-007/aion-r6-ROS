@@ -153,14 +153,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variant-id", default="nominal")
     parser.add_argument("--rollout-dir", type=Path, default=None, help="Collected rollout directory containing poses.jsonl.")
     parser.add_argument("--output", type=Path, default=Path("task_plan.png"))
-    parser.add_argument("--no-flip-isaac-y", action="store_true")
+    parser.add_argument("--flip-isaac-y", action="store_true", help="Mirror scene geometry by flipping Isaac Y.")
+    parser.add_argument("--no-flip-isaac-y", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--skip-planner", action="store_true", help="Plot reference and rollout without running Hybrid A*.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    flip_isaac_y = not args.no_flip_isaac_y
+    flip_isaac_y = args.flip_isaac_y
     task_spec = load_yaml(args.task_spec)
     scene_yaml = Path(task_spec["scene"]["source_yaml"])
     scene = load_yaml(scene_yaml)

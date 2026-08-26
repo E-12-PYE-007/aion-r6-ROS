@@ -53,11 +53,12 @@ class SimWaypointTracker : public rclcpp::Node
 
         void odom_callback(const std::shared_ptr<nav_msgs::msg::Odometry> msg){
 
-            // Keep the tracker in the same runtime odom convention as the expert node.
+            // Keep the tracker in the same runtime convention as the expert node:
+            // raw Isaac odom x/y, but yaw sign corrected into the planner frame.
             geometry_msgs::msg::Pose2D pose;
             pose.x = msg->pose.pose.position.x;
             pose.y = msg->pose.pose.position.y;
-            pose.theta = tf2::getYaw(msg->pose.pose.orientation);
+            pose.theta = -tf2::getYaw(msg->pose.pose.orientation);
             _current_pose = pose;
         }
 

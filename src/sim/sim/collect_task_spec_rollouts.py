@@ -164,9 +164,10 @@ def command_for_expert(task_spec_path: Path, task_spec: dict[str, Any], rollout:
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
-        "flip_isaac_y": True,
-        "flip_scene_y": True,
+        "flip_isaac_y": False,
+        "flip_scene_y": False,
         "flip_runtime_odom_y": False,
+        "flip_runtime_odom_yaw": True,
     }
     return ["ros2", "run", "sim", expert_executable(task_spec, rollout.task)] + ros_param_args(params)
 
@@ -198,9 +199,10 @@ def command_for_collector(
         "cmd_vel_topic": collection.get("cmd_vel_topic", "/cmd_vel"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
         "sample_frequency_hz": collection.get("sample_frequency_hz", 3.0),
-        "flip_isaac_y": True,
-        "flip_scene_y": True,
+        "flip_isaac_y": False,
+        "flip_scene_y": False,
         "flip_runtime_odom_y": False,
+        "flip_runtime_odom_yaw": True,
     }
     return ["ros2", "run", "sim", "sim_dataset_collector"] + ros_param_args(params)
 
@@ -259,6 +261,9 @@ def command_for_task_success_wait(
         "fallback_duration_s": max_duration_s,
         "wall_timeout_s": wall_timeout_s,
         "summary_path": (rollout_dir / "task_success_wait_summary.json").as_posix(),
+        "flip_scene_y": False,
+        "flip_runtime_odom_y": False,
+        "flip_runtime_odom_yaw": True,
     }
     return ["ros2", "run", "sim", "wait_for_task_success"] + ros_param_args(params)
 

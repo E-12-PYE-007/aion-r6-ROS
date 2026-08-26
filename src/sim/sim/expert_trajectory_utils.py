@@ -52,12 +52,15 @@ def yaw_from_quaternion(quat) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
-def odom_to_pose(msg, flip_isaac_y: bool) -> tuple[np.ndarray, float]:
+def odom_to_pose(msg, flip_isaac_y: bool, flip_yaw: bool = False) -> tuple[np.ndarray, float]:
     x = float(msg.pose.pose.position.x)
     y = float(msg.pose.pose.position.y)
     yaw = yaw_from_quaternion(msg.pose.pose.orientation)
     if flip_isaac_y:
-        return np.asarray([x, -y], dtype=np.float64), -yaw
+        y = -y
+        yaw = -yaw
+    elif flip_yaw:
+        yaw = -yaw
     return np.asarray([x, y], dtype=np.float64), yaw
 
 

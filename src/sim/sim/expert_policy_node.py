@@ -195,9 +195,10 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("path_progress_motion_slack_m", 0.6)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
-        self.declare_parameter("flip_isaac_y", True)
-        self.declare_parameter("flip_scene_y", True)
+        self.declare_parameter("flip_isaac_y", False)
+        self.declare_parameter("flip_scene_y", False)
         self.declare_parameter("flip_runtime_odom_y", False)
+        self.declare_parameter("flip_runtime_odom_yaw", True)
         self.declare_parameter("use_hybrid_astar", True)
         self.declare_parameter("robot_radius_m", 0.32)
         self.declare_parameter("obstacle_padding_m", 0.08)
@@ -250,6 +251,7 @@ class ExpertPolicyNode(Node):
         self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
         self.flip_isaac_y = self.flip_scene_y
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
+        self.flip_runtime_odom_yaw = bool(self.get_parameter("flip_runtime_odom_yaw").value)
         self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_scene_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
         self.first_preview_m = float(self.get_parameter("first_preview_m").value)
@@ -339,7 +341,11 @@ class ExpertPolicyNode(Node):
         raw_x = float(msg.pose.pose.position.x)
         raw_y = float(msg.pose.pose.position.y)
         raw_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
-        local_position, local_yaw = odom_to_pose(msg, self.flip_runtime_odom_y)
+        local_position, local_yaw = odom_to_pose(
+            msg,
+            self.flip_runtime_odom_y,
+            self.flip_runtime_odom_yaw,
+        )
         world_position, world_yaw = local_odom_to_world(
             local_position,
             local_yaw,
@@ -355,6 +361,7 @@ class ExpertPolicyNode(Node):
             "flip_isaac_y": self.flip_isaac_y,
             "flip_scene_y": self.flip_scene_y,
             "flip_runtime_odom_y": self.flip_runtime_odom_y,
+            "flip_runtime_odom_yaw": self.flip_runtime_odom_yaw,
             "local_x_after_flip": float(local_position[0]),
             "local_y_after_flip": float(local_position[1]),
             "local_yaw_after_flip": float(local_yaw),
