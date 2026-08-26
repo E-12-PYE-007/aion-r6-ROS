@@ -463,9 +463,10 @@ def build_distance_action_chunk(
     search_step_m = 0.15
     max_forward_search_m = 3.0
 
+    last_target_distance: float | None = None
     for index in range(len(msg.relative_poses)):
         preview_m = first_preview_m + index * waypoint_spacing_m
-        target_position, target_yaw, _ = sample_distance_action_target(
+        target_position, target_yaw, target_distance = sample_distance_action_target(
             trajectory,
             current_position,
             current_yaw,
@@ -474,7 +475,13 @@ def build_distance_action_chunk(
             min_forward_x_m=min_forward_x_m,
             max_forward_search_m=max_forward_search_m,
             search_step_m=search_step_m,
+            min_target_distance=(
+                last_target_distance + waypoint_spacing_m
+                if last_target_distance is not None
+                else None
+            ),
         )
+        last_target_distance = target_distance
         x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
         pose = Pose2D()
         pose.x = float(x)
@@ -493,12 +500,16 @@ def sample_distance_action_target(
     *,
     min_forward_x_m: float = 0.08,
     max_forward_search_m: float = 3.0,
+    max_backward_reacquire_m: float = 2.5,
     search_step_m: float = 0.15,
+    min_target_distance: float | None = None,
 ) -> tuple[np.ndarray, float, float]:
     """Sample by path distance ahead of current progress, forcing a usable forward target."""
     total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
     current_progress_m = min(max(float(current_progress_m), 0.0), total_distance)
     target_distance = min(current_progress_m + max(float(preview_m), 0.0), total_distance)
+    if min_target_distance is not None:
+        target_distance = max(target_distance, min(max(float(min_target_distance), 0.0), total_distance))
     target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
     x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
 
@@ -509,7 +520,75 @@ def sample_distance_action_target(
         target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
         x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
 
+    if x <= min_forward_x_m:
+        reacquired = nearest_forward_path_target(
+            trajectory,
+            current_position,
+            current_yaw,
+            current_progress_m,
+            min_forward_x_m=min_forward_x_m,
+            max_backward_m=max_backward_reacquire_m,
+            max_forward_m=max_forward_search_m,
+            search_step_m=search_step_m,
+            min_target_distance=min_target_distance,
+        )
+        if reacquired is not None:
+            target_position, target_yaw, target_distance = reacquired
+
     return target_position, target_yaw, target_distance
+
+
+def nearest_forward_path_target(
+    trajectory,
+    current_position: np.ndarray,
+    current_yaw: float,
+    current_progress_m: float,
+    *,
+    min_forward_x_m: float,
+    max_backward_m: float,
+    max_forward_m: float,
+    search_step_m: float,
+    min_target_distance: float | None = None,
+) -> tuple[np.ndarray, float, float] | None:
+    """Find a nearby path point that is genuinely in front of the rover frame.
+
+    Progress projection can legitimately be ahead of the robot when the rover is
+    off-path or sideways around an obstacle. In that case, continuing to sample
+    farther along the path can leave every ActionChunk point behind the rover,
+    which makes the tracker rotate in place. This local scan gives the controller
+    a forward reacquisition target without changing the monotonic progress state.
+    """
+    total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+    if total_distance <= 0.0:
+        return None
+
+    step = max(float(search_step_m), 0.02)
+    lower = max(0.0, float(current_progress_m) - max(float(max_backward_m), 0.0))
+    upper = min(total_distance, float(current_progress_m) + max(float(max_forward_m), 0.0))
+    if min_target_distance is not None:
+        lower = max(lower, min(max(float(min_target_distance), 0.0), total_distance))
+    if lower > upper:
+        return None
+
+    best: tuple[float, np.ndarray, float, float] | None = None
+    count = max(1, int(math.ceil((upper - lower) / step)))
+    for i in range(count + 1):
+        distance = min(upper, lower + i * step)
+        position, yaw = sample_path_pose(trajectory.path, distance)
+        x, y, theta = world_to_robot(current_position, current_yaw, position, yaw)
+        if x <= min_forward_x_m:
+            continue
+        euclidean = float(np.linalg.norm(position - current_position))
+        # Prefer nearby, forward, low-lateral-error targets. The tiny path term
+        # keeps later chunk entries ordered when several candidates are similar.
+        score = euclidean + 0.35 * abs(float(y)) + 0.03 * abs(distance - current_progress_m)
+        if best is None or score < best[0]:
+            best = (score, position, yaw, distance)
+
+    if best is None:
+        return None
+    _, position, yaw, distance = best
+    return position, yaw, distance
 
 
 def sample_timed_action_target(
