@@ -153,7 +153,14 @@ def expert_executable(task_spec: dict[str, Any], task: dict[str, Any]) -> str:
     return EXPERT_BY_TASK_TYPE.get(task_type, "fenceline_expert_trajectory")
 
 
-def command_for_expert(task_spec_path: Path, task_spec: dict[str, Any], rollout: Rollout, collection: dict[str, Any]) -> list[str]:
+def command_for_expert(
+    task_spec_path: Path,
+    task_spec: dict[str, Any],
+    rollout: Rollout,
+    collection: dict[str, Any],
+    *,
+    drive_cmd_vel_topic: str | None = None,
+) -> list[str]:
     expert = task_spec.get("expert", {})
     params = {
         "task_spec": task_spec_path.as_posix(),
@@ -161,6 +168,7 @@ def command_for_expert(task_spec_path: Path, task_spec: dict[str, Any], rollout:
         "variant_id": rollout.variant.get("variant_id", "nominal"),
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
+        "expert_cmd_vel_topic": drive_cmd_vel_topic or collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
@@ -372,8 +380,21 @@ def run_rollout(
     tracker_command = command_for_tracker(use_tracker)
     if tracker_command is not None:
         commands.append(("tracker", tracker_command))
-    commands.append(("expert", command_for_expert(task_spec_path, task_spec, rollout, collection)))
-    commands.append(("diagnostics", command_for_diagnostics(rollout_dir, collection)))
+    drive_cmd_vel_topic = None if use_tracker else str(collection.get("cmd_vel_topic", "/cmd_vel"))
+    diagnostics_collection = dict(collection)
+    if drive_cmd_vel_topic is not None:
+        diagnostics_collection["expert_cmd_vel_topic"] = drive_cmd_vel_topic
+    commands.append((
+        "expert",
+        command_for_expert(
+            task_spec_path,
+            task_spec,
+            rollout,
+            collection,
+            drive_cmd_vel_topic=drive_cmd_vel_topic,
+        ),
+    ))
+    commands.append(("diagnostics", command_for_diagnostics(rollout_dir, diagnostics_collection)))
     commands.append(("collector", command_for_collector(task_spec_path, rollout, collection, base_dir, dataset_name)))
     wait_command = (
         command_for_task_success_wait(task_spec_path, rollout, collection, duration_s, rollout_dir)

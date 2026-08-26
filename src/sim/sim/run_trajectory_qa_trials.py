@@ -372,6 +372,7 @@ def main() -> int:
             "run_collection_manifest",
             manifest.as_posix(),
             "--retry-failed",
+            "--no-tracker",
             "--use-isaac-bridge",
             "--isaac-root",
             isaac_root.as_posix(),

@@ -35,6 +35,7 @@ from sim.expert_trajectory_utils import (
     sample_path_pose,
     sample_distance_action_target,
     sample_timed_action_target,
+    wrap_to_pi,
     world_to_robot,
     yaw_from_quaternion,
 )
@@ -192,6 +193,10 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
+        self.declare_parameter("expert_path_lookahead_m", 0.9)
+        self.declare_parameter("expert_min_tracking_speed_mps", 0.16)
+        self.declare_parameter("expert_heading_slowdown_rad", 0.8)
+        self.declare_parameter("expert_tracking_max_yaw_rate_radps", 0.3)
         self.declare_parameter("path_progress_motion_slack_m", 0.6)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
@@ -255,6 +260,19 @@ class ExpertPolicyNode(Node):
         self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_scene_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
         self.first_preview_m = float(self.get_parameter("first_preview_m").value)
+        self.expert_path_lookahead_m = max(0.25, float(self.get_parameter("expert_path_lookahead_m").value))
+        self.expert_min_tracking_speed_mps = max(
+            0.0,
+            float(self.get_parameter("expert_min_tracking_speed_mps").value),
+        )
+        self.expert_heading_slowdown_rad = max(
+            0.05,
+            float(self.get_parameter("expert_heading_slowdown_rad").value),
+        )
+        self.expert_tracking_max_yaw_rate_radps = max(
+            0.05,
+            float(self.get_parameter("expert_tracking_max_yaw_rate_radps").value),
+        )
         self.future_time_offsets_s = [
             float(value)
             for value in self.get_parameter("future_time_offsets_s").value
@@ -720,13 +738,69 @@ class ExpertPolicyNode(Node):
         self.path_progress_m = max(self.path_progress_m, progress)
         return self.path_progress_m
 
-    def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, profile_time_s: float) -> None:
-        if self.cmd_vel_publisher is None:
+    def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, progress_m: float) -> None:
+        if self.cmd_vel_publisher is None or self.current_position is None or self.current_yaw is None:
             return
-        _, _, speed, yaw_rate = trajectory.sample(profile_time_s)
+        total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
         msg = Twist()
-        msg.linear.x = float(speed)
-        msg.angular.z = float(yaw_rate)
+        if total_distance <= 1e-6 or total_distance - progress_m <= 0.15:
+            self.cmd_vel_publisher.publish(msg)
+            return
+
+        target_position, target_yaw, target_distance = sample_distance_action_target(
+            trajectory,
+            self.current_position,
+            self.current_yaw,
+            progress_m,
+            self.expert_path_lookahead_m,
+            min_forward_x_m=0.12,
+            max_lateral_y_m=2.5,
+            max_forward_search_m=5.0,
+            max_backward_reacquire_m=2.5,
+            search_step_m=0.12,
+        )
+        relative_x, relative_y, _ = world_to_robot(
+            self.current_position,
+            self.current_yaw,
+            target_position,
+            target_yaw,
+        )
+
+        profile_time_s = float(np.interp(target_distance, trajectory.distances, trajectory.times))
+        _, _, profile_speed, _ = trajectory.sample(profile_time_s)
+        max_speed = min(
+            float(self.get_parameter("expert_speed_limit_mps").value),
+            float(self.get_parameter("max_speed_mps").value),
+        )
+        speed = min(max(float(profile_speed), self.expert_min_tracking_speed_mps), max_speed)
+
+        heading_error = math.atan2(float(relative_y), max(float(relative_x), 0.05))
+        distance_sq = max(float(relative_x * relative_x + relative_y * relative_y), 1e-5)
+        curvature = 2.0 * float(relative_y) / distance_sq
+        max_yaw_rate = min(
+            self.expert_tracking_max_yaw_rate_radps,
+            float(self.get_parameter("max_yaw_rate_radps").value),
+        )
+
+        abs_heading_error = abs(heading_error)
+        if abs_heading_error > self.expert_heading_slowdown_rad:
+            slowdown_span = max(math.pi - self.expert_heading_slowdown_rad, 1e-6)
+            slowdown = 1.0 - 0.55 * min(
+                1.0,
+                (abs_heading_error - self.expert_heading_slowdown_rad) / slowdown_span,
+            )
+            speed = max(self.expert_min_tracking_speed_mps, speed * slowdown)
+
+        if abs(curvature) > 1e-6:
+            speed = min(speed, max(self.expert_min_tracking_speed_mps, max_yaw_rate / abs(curvature)))
+
+        yaw_rate = curvature * speed
+        if abs_heading_error > 1.8:
+            speed = min(speed, self.expert_min_tracking_speed_mps)
+            yaw_rate = 0.9 * wrap_to_pi(heading_error)
+
+        msg.linear.x = float(max(0.0, min(speed, max_speed)))
+        msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, yaw_rate)))
         self.cmd_vel_publisher.publish(msg)
 
     def publish_chunk(self) -> None:
@@ -736,7 +810,6 @@ class ExpertPolicyNode(Node):
         self.maybe_plan_path()
         trajectory = self.active_trajectory()
         progress_m = self.current_path_progress(trajectory.path)
-        profile_time_s = float(np.interp(progress_m, trajectory.distances, trajectory.times))
         self.publish_frame_debug(trajectory, progress_m)
         msg = build_distance_action_chunk(
             self,
@@ -756,7 +829,7 @@ class ExpertPolicyNode(Node):
                 f"progress_m={progress_m:.3f}/{path_length(trajectory.path):.3f}"
             )
         self.publisher.publish(msg)
-        self.publish_expert_cmd_vel(trajectory, profile_time_s)
+        self.publish_expert_cmd_vel(trajectory, progress_m)
         self.seq_num += 1
 
     def publish_frame_debug(self, trajectory: TimedTrajectory, progress_m: float) -> None:

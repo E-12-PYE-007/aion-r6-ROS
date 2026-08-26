@@ -460,10 +460,12 @@ def build_distance_action_chunk(
 
     total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
     min_forward_x_m = 0.08
+    max_lateral_y_m = 1.75
     search_step_m = 0.15
     max_forward_search_m = 3.0
 
     last_target_distance: float | None = None
+    last_safe_pose: tuple[float, float, float] | None = None
     for index in range(len(msg.relative_poses)):
         preview_m = first_preview_m + index * waypoint_spacing_m
         target_position, target_yaw, target_distance = sample_distance_action_target(
@@ -473,6 +475,7 @@ def build_distance_action_chunk(
             current_progress_m,
             preview_m,
             min_forward_x_m=min_forward_x_m,
+            max_lateral_y_m=max_lateral_y_m,
             max_forward_search_m=max_forward_search_m,
             search_step_m=search_step_m,
             min_target_distance=(
@@ -481,8 +484,18 @@ def build_distance_action_chunk(
                 else None
             ),
         )
-        last_target_distance = target_distance
         x, y, theta = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        if (
+            not action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m)
+            and last_safe_pose is not None
+        ):
+            x, y, theta = last_safe_pose
+        elif not action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m):
+            x, y, theta = local_reacquisition_pose(x, y, min_forward_x_m, max_lateral_y_m)
+            last_safe_pose = (float(x), float(y), float(theta))
+        elif action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m):
+            last_target_distance = target_distance
+            last_safe_pose = (float(x), float(y), float(theta))
         pose = Pose2D()
         pose.x = float(x)
         pose.y = float(y)
@@ -499,6 +512,7 @@ def sample_distance_action_target(
     preview_m: float,
     *,
     min_forward_x_m: float = 0.08,
+    max_lateral_y_m: float = 1.75,
     max_forward_search_m: float = 3.0,
     max_backward_reacquire_m: float = 2.5,
     search_step_m: float = 0.15,
@@ -511,22 +525,27 @@ def sample_distance_action_target(
     if min_target_distance is not None:
         target_distance = max(target_distance, min(max(float(min_target_distance), 0.0), total_distance))
     target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
-    x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+    x, y, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
 
     searched = 0.0
-    while x <= min_forward_x_m and searched < max_forward_search_m and target_distance < total_distance:
+    while (
+        not action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m)
+        and searched < max_forward_search_m
+        and target_distance < total_distance
+    ):
         searched += search_step_m
         target_distance = min(target_distance + search_step_m, total_distance)
         target_position, target_yaw = sample_path_pose(trajectory.path, target_distance)
-        x, _, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
+        x, y, _ = world_to_robot(current_position, current_yaw, target_position, target_yaw)
 
-    if x <= min_forward_x_m:
+    if not action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m):
         reacquired = nearest_forward_path_target(
             trajectory,
             current_position,
             current_yaw,
             current_progress_m,
             min_forward_x_m=min_forward_x_m,
+            max_lateral_y_m=max_lateral_y_m,
             max_backward_m=max_backward_reacquire_m,
             max_forward_m=max_forward_search_m,
             search_step_m=search_step_m,
@@ -538,6 +557,32 @@ def sample_distance_action_target(
     return target_position, target_yaw, target_distance
 
 
+def action_target_is_trackable(
+    x: float,
+    y: float,
+    min_forward_x_m: float,
+    max_lateral_y_m: float,
+) -> bool:
+    return (
+        math.isfinite(float(x))
+        and math.isfinite(float(y))
+        and float(x) > float(min_forward_x_m)
+        and abs(float(y)) <= float(max_lateral_y_m)
+    )
+
+
+def local_reacquisition_pose(
+    x: float,
+    y: float,
+    min_forward_x_m: float,
+    max_lateral_y_m: float,
+) -> tuple[float, float, float]:
+    forward_x = max(float(min_forward_x_m) + 0.12, min(max(float(x), 0.2), 0.45))
+    lateral_y = min(max(float(y), -float(max_lateral_y_m)), float(max_lateral_y_m))
+    theta = math.atan2(lateral_y, forward_x)
+    return forward_x, lateral_y, theta
+
+
 def nearest_forward_path_target(
     trajectory,
     current_position: np.ndarray,
@@ -545,6 +590,7 @@ def nearest_forward_path_target(
     current_progress_m: float,
     *,
     min_forward_x_m: float,
+    max_lateral_y_m: float,
     max_backward_m: float,
     max_forward_m: float,
     search_step_m: float,
@@ -576,7 +622,7 @@ def nearest_forward_path_target(
         distance = min(upper, lower + i * step)
         position, yaw = sample_path_pose(trajectory.path, distance)
         x, y, theta = world_to_robot(current_position, current_yaw, position, yaw)
-        if x <= min_forward_x_m:
+        if not action_target_is_trackable(x, y, min_forward_x_m, max_lateral_y_m):
             continue
         euclidean = float(np.linalg.norm(position - current_position))
         # Prefer nearby, forward, low-lateral-error targets. The tiny path term
