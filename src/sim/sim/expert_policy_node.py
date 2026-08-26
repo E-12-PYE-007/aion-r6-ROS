@@ -31,6 +31,7 @@ from sim.expert_trajectory_utils import (
     orient_loop_path_from_start,
     path_length,
     point2,
+    project_progress,
     project_progress_near,
     sample_path_pose,
     sample_distance_action_target,
@@ -199,6 +200,11 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("expert_heading_slowdown_rad", 0.8)
         self.declare_parameter("expert_tracking_max_yaw_rate_radps", 0.3)
         self.declare_parameter("path_progress_motion_slack_m", 0.6)
+        self.declare_parameter("max_expert_tracking_error_m", 2.0)
+        self.declare_parameter("max_target_lateral_error_m", 3.0)
+        self.declare_parameter("max_tracking_target_distance_m", 2.5)
+        self.declare_parameter("recovery_lookahead_m", 0.7)
+        self.declare_parameter("recovery_speed_mps", 0.12)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", False)
@@ -293,8 +299,30 @@ class ExpertPolicyNode(Node):
             0.0,
             float(self.get_parameter("path_progress_motion_slack_m").value),
         )
+        self.max_expert_tracking_error_m = max(
+            0.0,
+            float(self.get_parameter("max_expert_tracking_error_m").value),
+        )
+        self.max_target_lateral_error_m = max(
+            0.25,
+            float(self.get_parameter("max_target_lateral_error_m").value),
+        )
+        self.max_tracking_target_distance_m = max(
+            0.5,
+            float(self.get_parameter("max_tracking_target_distance_m").value),
+        )
+        self.recovery_lookahead_m = max(
+            0.1,
+            float(self.get_parameter("recovery_lookahead_m").value),
+        )
+        self.recovery_speed_mps = max(
+            0.0,
+            float(self.get_parameter("recovery_speed_mps").value),
+        )
         self.path_progress_anchor_position: Optional[np.ndarray] = None
         self.path_progress_distance_budget_m = 0.0
+        self.latest_tracking_error_m: Optional[float] = None
+        self.latest_off_path = False
         self.latest_odom_frame_debug: dict[str, object] = {}
         self.seq_num = 1
 
@@ -761,6 +789,14 @@ class ExpertPolicyNode(Node):
             max_backward_m=0.5,
             max_forward_m=2.0,
         )
+        closest_position, _ = sample_path_pose(path, projected_progress)
+        tracking_error_m = float(np.linalg.norm(self.current_position - closest_position))
+        self.latest_tracking_error_m = tracking_error_m
+        self.latest_off_path = (
+            self.max_expert_tracking_error_m > 0.0
+            and tracking_error_m > self.max_expert_tracking_error_m
+        )
+
         if self.path_progress_anchor_position is None:
             self.path_progress_anchor_position = self.current_position.copy()
         else:
@@ -772,6 +808,8 @@ class ExpertPolicyNode(Node):
         max_motion_consistent_progress = (
             self.path_progress_distance_budget_m + self.path_progress_motion_slack_m
         )
+        if self.latest_off_path:
+            return self.path_progress_m
         progress = min(projected_progress, max_motion_consistent_progress)
         self.path_progress_m = max(self.path_progress_m, progress)
         return self.path_progress_m
@@ -801,10 +839,21 @@ class ExpertPolicyNode(Node):
             distance = min(upper_distance, start_distance + index * step_m)
             position, yaw = sample_path_pose(trajectory.path, distance)
             x, y, theta = world_to_robot(self.current_position, self.current_yaw, position, yaw)
-            if x <= 0.10 or abs(y) > 3.0:
+            euclidean_distance = float(np.linalg.norm(position - self.current_position))
+            if (
+                x <= 0.10
+                or abs(y) > self.max_target_lateral_error_m
+                or euclidean_distance > self.max_tracking_target_distance_m
+            ):
                 continue
             preferred_x_error = abs(x - self.expert_path_lookahead_m)
-            score = 0.7 * abs(y) + 0.25 * preferred_x_error + 0.10 * abs(theta) + 0.02 * (distance - start_distance)
+            score = (
+                0.7 * abs(y)
+                + 0.25 * preferred_x_error
+                + 0.10 * abs(theta)
+                + 0.15 * euclidean_distance
+                + 0.02 * (distance - start_distance)
+            )
             if best is None or score < best[0]:
                 best = (score, position, yaw, distance)
 
@@ -812,8 +861,20 @@ class ExpertPolicyNode(Node):
             _, position, yaw, distance = best
             return position, yaw, distance
 
-        position, yaw = sample_path_pose(trajectory.path, start_distance)
-        return position, yaw, start_distance
+        position, yaw = sample_path_pose(trajectory.path, progress_m)
+        return position, yaw, progress_m
+
+    def select_recovery_tracking_target(
+        self,
+        trajectory: TimedTrajectory,
+    ) -> tuple[np.ndarray, float, float]:
+        if self.current_position is None:
+            return sample_path_pose(trajectory.path, self.path_progress_m)
+        total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
+        closest_progress = project_progress(trajectory.path, self.current_position)
+        target_distance = min(total_distance, closest_progress + self.recovery_lookahead_m)
+        position, yaw = sample_path_pose(trajectory.path, target_distance)
+        return position, yaw, target_distance
 
     def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, progress_m: float) -> None:
         if self.cmd_vel_publisher is None or self.current_position is None or self.current_yaw is None:
@@ -823,8 +884,16 @@ class ExpertPolicyNode(Node):
         if total_distance <= 1e-6 or total_distance - progress_m <= 0.15:
             self.cmd_vel_publisher.publish(msg)
             return
-
-        target_position, target_yaw, target_distance = self.select_direct_tracking_target(trajectory, progress_m)
+        recovering = bool(self.latest_off_path)
+        if recovering:
+            target_position, target_yaw, target_distance = self.select_recovery_tracking_target(trajectory)
+            self.get_logger().warn(
+                f"Recovering toward planned path: "
+                f"tracking_error={self.latest_tracking_error_m:.2f}m "
+                f"limit={self.max_expert_tracking_error_m:.2f}m"
+            )
+        else:
+            target_position, target_yaw, target_distance = self.select_direct_tracking_target(trajectory, progress_m)
         relative_x, relative_y, relative_theta = world_to_robot(
             self.current_position,
             self.current_yaw,
@@ -839,6 +908,8 @@ class ExpertPolicyNode(Node):
             float(self.get_parameter("max_speed_mps").value),
         )
         speed = min(max(float(profile_speed), self.expert_min_tracking_speed_mps), max_speed)
+        if recovering:
+            speed = min(speed, self.recovery_speed_mps)
 
         heading_error = math.atan2(float(relative_y), max(float(relative_x), 0.05))
         distance_sq = max(float(relative_x * relative_x + relative_y * relative_y), 1e-5)
@@ -849,6 +920,8 @@ class ExpertPolicyNode(Node):
         )
 
         steering_error = wrap_to_pi(1.05 * heading_error + 0.35 * relative_theta)
+        if recovering:
+            steering_error = heading_error
         abs_steering_error = abs(steering_error)
         if abs_steering_error > self.expert_heading_slowdown_rad:
             slowdown_span = max(math.pi - self.expert_heading_slowdown_rad, 1e-6)
@@ -902,13 +975,12 @@ class ExpertPolicyNode(Node):
     def publish_frame_debug(self, trajectory: TimedTrajectory, progress_m: float) -> None:
         if self.current_position is None or self.current_yaw is None:
             return
-        target_position, target_yaw, target_distance = sample_distance_action_target(
-            trajectory,
-            self.current_position,
-            self.current_yaw,
-            progress_m,
-            self.first_preview_m,
-        )
+        if self.latest_off_path:
+            target_position, target_yaw, target_distance = self.select_recovery_tracking_target(trajectory)
+            target_source = "recovery"
+        else:
+            target_position, target_yaw, target_distance = self.select_direct_tracking_target(trajectory, progress_m)
+            target_source = "tracking"
         delta_world = target_position - self.current_position
         relative_x, relative_y, relative_theta = world_to_robot(
             self.current_position,
@@ -925,7 +997,11 @@ class ExpertPolicyNode(Node):
             "target_world_y": float(target_position[1]),
             "target_world_yaw": float(target_yaw),
             "target_path_distance_m": float(target_distance),
+            "target_source": target_source,
             "current_path_progress_m": float(progress_m),
+            "tracking_error_m": float(self.latest_tracking_error_m or 0.0),
+            "off_path": bool(self.latest_off_path),
+            "max_expert_tracking_error_m": float(self.max_expert_tracking_error_m),
             "delta_world_x": float(delta_world[0]),
             "delta_world_y": float(delta_world[1]),
             "relative_x": float(relative_x),

@@ -24,6 +24,7 @@ from sim.expert_trajectory_utils import (
     path_length,
     point2,
     project_progress_near,
+    sample_path_pose,
 )
 from sim.validate_scene_task_specs import reference_path_for_task
 
@@ -55,6 +56,8 @@ class TaskSuccessWaiter(Node):
         self.declare_parameter("min_odom_messages", 2)
         self.declare_parameter("success_margin_m", 0.0)
         self.declare_parameter("target_tolerance_m", 0.5)
+        self.declare_parameter("max_success_tracking_error_m", 1.25)
+        self.declare_parameter("max_progress_tracking_error_m", 2.0)
         self.declare_parameter("flip_scene_y", False)
         self.declare_parameter("flip_runtime_odom_y", False)
         self.declare_parameter("flip_runtime_odom_yaw", True)
@@ -69,6 +72,14 @@ class TaskSuccessWaiter(Node):
         self.min_odom_messages = int(self.get_parameter("min_odom_messages").value)
         self.success_margin_m = float(self.get_parameter("success_margin_m").value)
         self.target_tolerance_m = float(self.get_parameter("target_tolerance_m").value)
+        self.max_success_tracking_error_m = max(
+            0.0,
+            float(self.get_parameter("max_success_tracking_error_m").value),
+        )
+        self.max_progress_tracking_error_m = max(
+            self.max_success_tracking_error_m,
+            float(self.get_parameter("max_progress_tracking_error_m").value),
+        )
         self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
         self.flip_runtime_odom_yaw = bool(self.get_parameter("flip_runtime_odom_yaw").value)
@@ -92,6 +103,8 @@ class TaskSuccessWaiter(Node):
         self.previous_xy: tuple[float, float] | None = None
         self.latest_world_position: np.ndarray | None = None
         self.latest_target_distance_m: float | None = None
+        self.latest_tracking_error_m: float | None = None
+        self.max_tracking_error_m = 0.0
         self.distance_travelled_m = 0.0
         self.path_progress_m = 0.0
         self.odom_messages = 0
@@ -205,7 +218,11 @@ class TaskSuccessWaiter(Node):
                     max_backward_m=0.5,
                     max_forward_m=2.0,
                 )
-                self.path_progress_m = max(self.path_progress_m, progress)
+                closest_position, _ = sample_path_pose(self.reference_path, progress)
+                self.latest_tracking_error_m = float(np.linalg.norm(world_position - closest_position))
+                self.max_tracking_error_m = max(self.max_tracking_error_m, self.latest_tracking_error_m)
+                if self.latest_tracking_error_m <= self.max_progress_tracking_error_m:
+                    self.path_progress_m = max(self.path_progress_m, progress)
             if self.target_position is not None:
                 self.latest_target_distance_m = float(np.linalg.norm(world_position - self.target_position))
 
@@ -214,6 +231,11 @@ class TaskSuccessWaiter(Node):
             self.required_distance_m is not None
             and self.path_progress_m >= self.required_distance_m
         )
+        tracking_is_close = (
+            self.reference_path is None
+            or self.latest_tracking_error_m is None
+            or self.latest_tracking_error_m <= self.max_success_tracking_error_m
+        )
         reached_target = (
             self.target_position is None
             or (
@@ -221,7 +243,7 @@ class TaskSuccessWaiter(Node):
                 and self.latest_target_distance_m <= self.target_tolerance_m
             )
         )
-        if reached_required_distance and reached_target:
+        if reached_required_distance and reached_target and tracking_is_close:
             self.success = True
             self.stop_reason = "success_distance_and_target" if self.target_position is not None else "success_progress"
             self.done = self.odom_messages >= self.min_odom_messages
@@ -251,6 +273,10 @@ class TaskSuccessWaiter(Node):
             "reference_path_length_m": self.reference_path_length_m,
             "target_tolerance_m": self.target_tolerance_m if self.target_position is not None else None,
             "target_distance_m": self.latest_target_distance_m,
+            "latest_tracking_error_m": self.latest_tracking_error_m,
+            "max_tracking_error_m": self.max_tracking_error_m,
+            "max_success_tracking_error_m": self.max_success_tracking_error_m,
+            "max_progress_tracking_error_m": self.max_progress_tracking_error_m,
             "target_position": self.target_position.tolist() if self.target_position is not None else None,
             "latest_world_position": (
                 self.latest_world_position.tolist() if self.latest_world_position is not None else None
