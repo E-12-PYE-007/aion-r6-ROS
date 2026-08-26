@@ -195,16 +195,16 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("runtime_planned_path_output", "")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
-        self.declare_parameter("expert_path_lookahead_m", 0.9)
+        self.declare_parameter("expert_path_lookahead_m", 0.5)
         self.declare_parameter("expert_min_tracking_speed_mps", 0.16)
         self.declare_parameter("expert_heading_slowdown_rad", 0.8)
         self.declare_parameter("expert_tracking_max_yaw_rate_radps", 0.3)
         self.declare_parameter("path_progress_motion_slack_m", 0.6)
-        self.declare_parameter("max_expert_tracking_error_m", 2.0)
-        self.declare_parameter("max_target_lateral_error_m", 3.0)
-        self.declare_parameter("max_tracking_target_distance_m", 2.5)
-        self.declare_parameter("recovery_lookahead_m", 0.7)
-        self.declare_parameter("recovery_speed_mps", 0.12)
+        self.declare_parameter("max_expert_tracking_error_m", 0.85)
+        self.declare_parameter("max_target_lateral_error_m", 1.1)
+        self.declare_parameter("max_tracking_target_distance_m", 1.25)
+        self.declare_parameter("recovery_lookahead_m", 0.45)
+        self.declare_parameter("recovery_speed_mps", 0.10)
         self.declare_parameter("future_time_offsets_s", [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4])
         self.declare_parameter("publish_rate_hz", 3.0)
         self.declare_parameter("flip_isaac_y", False)
@@ -824,10 +824,7 @@ class ExpertPolicyNode(Node):
 
         total_distance = float(trajectory.distances[-1]) if len(trajectory.distances) else 0.0
         start_distance = min(total_distance, float(progress_m) + self.expert_path_lookahead_m)
-        upper_distance = min(
-            total_distance,
-            float(progress_m) + max(5.0, self.expert_path_lookahead_m * 5.0),
-        )
+        upper_distance = min(total_distance, float(progress_m) + self.max_tracking_target_distance_m)
         if start_distance >= total_distance or upper_distance <= start_distance:
             position, yaw = sample_path_pose(trajectory.path, total_distance)
             return position, yaw, total_distance
