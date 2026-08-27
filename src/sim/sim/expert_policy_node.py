@@ -1000,7 +1000,11 @@ class ExpertPolicyNode(Node):
             speed = min(speed, self.expert_min_tracking_speed_mps)
 
         msg.linear.x = float(max(0.0, min(speed, max_speed)))
-        command_yaw_rate = -yaw_rate if self.flip_runtime_odom_yaw else yaw_rate
+        command_yaw_rate = (
+            -yaw_rate
+            if self.flip_runtime_odom_yaw and not self.use_isaac_camera_pose_debug
+            else yaw_rate
+        )
         msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, command_yaw_rate)))
         self.cmd_vel_publisher.publish(msg)
 
