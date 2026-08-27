@@ -197,10 +197,14 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("runtime_planned_path_output", "")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
-        self.declare_parameter("expert_path_lookahead_m", 0.5)
-        self.declare_parameter("expert_min_tracking_speed_mps", 0.16)
+        self.declare_parameter("expert_path_lookahead_m", 0.42)
+        self.declare_parameter("expert_min_tracking_speed_mps", 0.12)
         self.declare_parameter("expert_heading_slowdown_rad", 0.8)
-        self.declare_parameter("expert_tracking_max_yaw_rate_radps", 0.3)
+        self.declare_parameter("expert_tracking_max_yaw_rate_radps", 0.38)
+        self.declare_parameter("tracking_slowdown_error_m", 0.5)
+        self.declare_parameter("tracking_strong_slowdown_error_m", 0.8)
+        self.declare_parameter("tracking_slowdown_scale", 0.8)
+        self.declare_parameter("tracking_strong_slowdown_scale", 0.55)
         self.declare_parameter("path_progress_motion_slack_m", 0.6)
         self.declare_parameter("max_expert_tracking_error_m", 0.85)
         self.declare_parameter("max_target_lateral_error_m", 1.1)
@@ -282,6 +286,22 @@ class ExpertPolicyNode(Node):
         self.expert_tracking_max_yaw_rate_radps = max(
             0.05,
             float(self.get_parameter("expert_tracking_max_yaw_rate_radps").value),
+        )
+        self.tracking_slowdown_error_m = max(
+            0.0,
+            float(self.get_parameter("tracking_slowdown_error_m").value),
+        )
+        self.tracking_strong_slowdown_error_m = max(
+            self.tracking_slowdown_error_m,
+            float(self.get_parameter("tracking_strong_slowdown_error_m").value),
+        )
+        self.tracking_slowdown_scale = min(
+            1.0,
+            max(0.0, float(self.get_parameter("tracking_slowdown_scale").value)),
+        )
+        self.tracking_strong_slowdown_scale = min(
+            self.tracking_slowdown_scale,
+            max(0.0, float(self.get_parameter("tracking_strong_slowdown_scale").value)),
         )
         self.future_time_offsets_s = [
             float(value)
@@ -971,6 +991,11 @@ class ExpertPolicyNode(Node):
         speed = min(max(float(profile_speed), self.expert_min_tracking_speed_mps), max_speed)
         if recovering:
             speed = min(speed, self.recovery_speed_mps)
+        elif self.latest_tracking_error_m is not None:
+            if self.latest_tracking_error_m > self.tracking_strong_slowdown_error_m:
+                speed = max(self.expert_min_tracking_speed_mps, speed * self.tracking_strong_slowdown_scale)
+            elif self.latest_tracking_error_m > self.tracking_slowdown_error_m:
+                speed = max(self.expert_min_tracking_speed_mps, speed * self.tracking_slowdown_scale)
 
         heading_error = math.atan2(float(relative_y), max(float(relative_x), 0.05))
         distance_sq = max(float(relative_x * relative_x + relative_y * relative_y), 1e-5)
