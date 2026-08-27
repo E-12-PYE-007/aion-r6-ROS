@@ -358,7 +358,8 @@ class ExpertPolicyNode(Node):
         self.timer = self.create_timer(1.0 / rate_hz, self.publish_chunk)
         self.get_logger().info(
             f"{node_name} loaded task_id={self.task_id} variant_id={self.variant_id} "
-            f"reference_path_length={path_length(self.path):.2f}m"
+            f"reference_path_length={path_length(self.path):.2f}m "
+            f"pose_source={'isaac_camera_pose_debug' if self.use_isaac_camera_pose_debug else 'sim_odom'}"
         )
 
     def resolve_path(self) -> list[np.ndarray]:
@@ -415,8 +416,9 @@ class ExpertPolicyNode(Node):
             self.world_start_position,
             self.world_start_yaw,
         )
-        self.current_position = world_position
-        self.current_yaw = world_yaw
+        if not self.use_isaac_camera_pose_debug:
+            self.current_position = world_position
+            self.current_yaw = world_yaw
         self.latest_odom_frame_debug = {
             "pose_source": "sim_odom",
             "raw_odom_x": raw_x,
@@ -1004,7 +1006,8 @@ class ExpertPolicyNode(Node):
 
     def publish_chunk(self) -> None:
         if self.current_position is None or self.current_yaw is None:
-            self.get_logger().warn("No sim odom received yet; not publishing ActionChunk")
+            pose_source = "Isaac camera pose debug" if self.use_isaac_camera_pose_debug else "sim odom"
+            self.get_logger().warn(f"No {pose_source} received yet; not publishing ActionChunk")
             return
         self.maybe_plan_path()
         trajectory = self.active_trajectory()
