@@ -171,6 +171,8 @@ def command_for_expert(
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
         "expert_cmd_vel_topic": drive_cmd_vel_topic or collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
+        "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
+        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", False)),
         "runtime_planned_path_output": (rollout_dir / "runtime_planned_path.json").as_posix(),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
@@ -497,6 +499,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prepare-timeout-s", type=float, default=90.0)
     parser.add_argument("--prepare-topic-timeout-s", type=float, default=30.0)
     parser.add_argument("--skip-prepare-topic-wait", action="store_true")
+    parser.add_argument(
+        "--use-isaac-camera-pose-debug",
+        action="store_true",
+        help=(
+            "Diagnostic mode: drive the expert from camera_world_pose in "
+            "/isaac/scene_pose_debug instead of /sim_odom."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -505,7 +515,9 @@ def main() -> int:
     args = parse_args()
     task_spec_path = args.task_spec.resolve()
     task_spec = load_yaml(task_spec_path)
-    collection = task_spec.get("collection", {})
+    collection = dict(task_spec.get("collection", {}))
+    if args.use_isaac_camera_pose_debug:
+        collection["use_isaac_camera_pose_debug"] = True
     base_dir = args.base_dir or Path(str(collection.get("base_dir", "sim_datasets/generated")))
     duration_s = float(args.duration_s if args.duration_s is not None else collection.get("duration_s", 20.0))
     rollouts = selected_rollouts(

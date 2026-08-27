@@ -192,6 +192,8 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("action_chunk_topic", "/vla/action_chunk")
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
+        self.declare_parameter("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
+        self.declare_parameter("use_isaac_camera_pose_debug", False)
         self.declare_parameter("runtime_planned_path_output", "")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)
@@ -264,6 +266,7 @@ class ExpertPolicyNode(Node):
         self.flip_isaac_y = self.flip_scene_y
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
         self.flip_runtime_odom_yaw = bool(self.get_parameter("flip_runtime_odom_yaw").value)
+        self.use_isaac_camera_pose_debug = bool(self.get_parameter("use_isaac_camera_pose_debug").value)
         self.world_start_position, self.world_start_yaw = get_start_pose(self.scene, self.task, self.flip_scene_y)
         self.waypoint_spacing_m = float(self.get_parameter("waypoint_spacing_m").value)
         self.first_preview_m = float(self.get_parameter("first_preview_m").value)
@@ -324,6 +327,9 @@ class ExpertPolicyNode(Node):
         self.latest_tracking_error_m: Optional[float] = None
         self.latest_off_path = False
         self.latest_odom_frame_debug: dict[str, object] = {}
+        self.initial_camera_debug_position: Optional[np.ndarray] = None
+        self.initial_camera_debug_yaw: Optional[float] = None
+        self.latest_camera_pose_debug: dict[str, object] = {}
         self.seq_num = 1
 
         self.publisher = self.create_publisher(ActionChunk, str(self.get_parameter("action_chunk_topic").value), 10)
@@ -340,6 +346,12 @@ class ExpertPolicyNode(Node):
             Odometry,
             str(self.get_parameter("odom_topic").value),
             self.odom_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("isaac_pose_debug_topic").value),
+            self.isaac_pose_debug_callback,
             qos_profile_sensor_data,
         )
         rate_hz = float(self.get_parameter("publish_rate_hz").value)
@@ -406,6 +418,7 @@ class ExpertPolicyNode(Node):
         self.current_position = world_position
         self.current_yaw = world_yaw
         self.latest_odom_frame_debug = {
+            "pose_source": "sim_odom",
             "raw_odom_x": raw_x,
             "raw_odom_y": raw_y,
             "raw_odom_yaw": raw_yaw,
@@ -416,6 +429,55 @@ class ExpertPolicyNode(Node):
             "local_x_after_flip": float(local_position[0]),
             "local_y_after_flip": float(local_position[1]),
             "local_yaw_after_flip": float(local_yaw),
+            "world_x": float(world_position[0]),
+            "world_y": float(world_position[1]),
+            "world_yaw": float(world_yaw),
+        }
+
+    def isaac_pose_debug_callback(self, msg: String) -> None:
+        if not self.use_isaac_camera_pose_debug:
+            return
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed /isaac/scene_pose_debug JSON")
+            return
+        camera_pose = data.get("camera_world_pose")
+        if not isinstance(camera_pose, dict):
+            return
+        try:
+            camera_position = np.array(
+                [
+                    float(camera_pose["x"]),
+                    float(camera_pose["y"]),
+                ],
+                dtype=float,
+            )
+            camera_yaw = float(camera_pose["yaw"])
+        except (KeyError, TypeError, ValueError):
+            return
+
+        if self.initial_camera_debug_position is None or self.initial_camera_debug_yaw is None:
+            self.initial_camera_debug_position = camera_position
+            self.initial_camera_debug_yaw = camera_yaw
+
+        camera_delta = camera_position - self.initial_camera_debug_position
+        world_position = self.world_start_position + camera_delta
+        world_yaw = wrap_to_pi(
+            self.world_start_yaw + wrap_to_pi(camera_yaw - self.initial_camera_debug_yaw)
+        )
+        self.current_position = world_position
+        self.current_yaw = world_yaw
+        self.latest_camera_pose_debug = {
+            "pose_source": "isaac_camera_pose_debug",
+            "isaac_camera_initial_x": float(self.initial_camera_debug_position[0]),
+            "isaac_camera_initial_y": float(self.initial_camera_debug_position[1]),
+            "isaac_camera_initial_yaw": float(self.initial_camera_debug_yaw),
+            "isaac_camera_x": float(camera_position[0]),
+            "isaac_camera_y": float(camera_position[1]),
+            "isaac_camera_yaw": float(camera_yaw),
+            "isaac_camera_delta_x": float(camera_delta[0]),
+            "isaac_camera_delta_y": float(camera_delta[1]),
             "world_x": float(world_position[0]),
             "world_y": float(world_position[1]),
             "world_yaw": float(world_yaw),
@@ -936,7 +998,8 @@ class ExpertPolicyNode(Node):
             speed = min(speed, self.expert_min_tracking_speed_mps)
 
         msg.linear.x = float(max(0.0, min(speed, max_speed)))
-        msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, yaw_rate)))
+        command_yaw_rate = -yaw_rate if self.flip_runtime_odom_yaw else yaw_rate
+        msg.angular.z = float(max(-max_yaw_rate, min(max_yaw_rate, command_yaw_rate)))
         self.cmd_vel_publisher.publish(msg)
 
     def publish_chunk(self) -> None:
@@ -984,8 +1047,13 @@ class ExpertPolicyNode(Node):
             target_position,
             target_yaw,
         )
+        pose_debug = (
+            self.latest_camera_pose_debug
+            if self.use_isaac_camera_pose_debug and self.latest_camera_pose_debug
+            else self.latest_odom_frame_debug
+        )
         payload = {
-            **self.latest_odom_frame_debug,
+            **pose_debug,
             "current_world_x": float(self.current_position[0]),
             "current_world_y": float(self.current_position[1]),
             "current_world_yaw": float(self.current_yaw),
