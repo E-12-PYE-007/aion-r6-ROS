@@ -53,4 +53,11 @@ def generate_launch_description():
             output='screen',
             parameters=[{'pattern': LaunchConfiguration('pattern')}],
         ),
+        Node(
+            package='debug',
+            executable='path_plotter',
+            name='path_plotter',
+            output='screen',
+            parameters=[{'odom_topic': '/odometry/wheel'}],
+        ),
     ])

@@ -21,6 +21,11 @@ LOOKAHEAD_DISTANCE = 0.2  # [m]
 CONTROL_PERIOD_SEC = 1.0 / 30.0  # Control rate of 30Hz
 HERMITE_SAMPLES_PER_SEGMENT = 10
 
+# Curvature slowdown: target speed = MAX_LINEAR_VELOCITY / (1 + K_CURV * |curvature|).
+# Not physically principled - the principled part is the path curvature itself;
+# this just keeps tight arcs from being taken flat out. Starting point, tune from here.
+K_CURV = 1.0
+
 ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; point at the EKF's fused output once it exists.
 
 
@@ -183,7 +188,11 @@ class PurePursuitControllerNode(Node):
 
         curvature = 2.0 * body_y / (euclid_dist * euclid_dist)  # Curvature to approach path on
 
-        return saturate(MAX_LINEAR_VELOCITY, curvature * MAX_LINEAR_VELOCITY)
+        # Ease off as the path curves. Angular still comes from curvature * target,
+        # so the turn radius we command is unchanged - we just take it slower.
+        target_linear = MAX_LINEAR_VELOCITY / (1.0 + K_CURV * abs(curvature))
+
+        return saturate(target_linear, curvature * target_linear)
 
 
 def main(args=None):
