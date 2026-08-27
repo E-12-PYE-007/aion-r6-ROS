@@ -13,13 +13,13 @@ from aion_msgs.msg import LeftRightInt32
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 
-WHEEL_RADIUS_M = 0.0804              # Must match roboclaw_tests.py.
-ENCODER_COUNTS_PER_WHEEL_REV = 1100  # Must match roboclaw_tests.py.
-EFFECTIVE_TRACK_WIDTH_M = 0.5132     # Must match roboclaw_tests.py.
+WHEEL_RADIUS_M = 0.0804              
+ENCODER_COUNTS_PER_WHEEL_REV = 1100  # Tested empirically
+EFFECTIVE_TRACK_WIDTH_M = 0.5132     # Calibrated compensation for scrub
 
 METERS_PER_TICK = (2.0 * math.pi * WHEEL_RADIUS_M) / ENCODER_COUNTS_PER_WHEEL_REV
 
-ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; the EKF's fused output takes over this role later.
+ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; replace with EKF Odom later
 
 
 class EncoderLocalisationNode(Node):
