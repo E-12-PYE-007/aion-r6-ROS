@@ -269,6 +269,8 @@ def command_for_task_success_wait(
         "task_id": rollout.task["task_id"],
         "variant_id": rollout.variant.get("variant_id", "nominal"),
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
+        "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
+        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", False)),
         "max_duration_s": max_duration_s,
         "fallback_duration_s": max_duration_s,
         "wall_timeout_s": wall_timeout_s,

@@ -13,6 +13,7 @@ from nav_msgs.msg import Odometry
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
 
 from sim.expert_trajectory_utils import (
     find_task,
@@ -25,6 +26,7 @@ from sim.expert_trajectory_utils import (
     point2,
     project_progress_near,
     sample_path_pose,
+    wrap_to_pi,
 )
 from sim.validate_scene_task_specs import reference_path_for_task
 
@@ -50,6 +52,8 @@ class TaskSuccessWaiter(Node):
         self.declare_parameter("task_id", "")
         self.declare_parameter("variant_id", "nominal")
         self.declare_parameter("odom_topic", "/sim_odom")
+        self.declare_parameter("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
+        self.declare_parameter("use_isaac_camera_pose_debug", False)
         self.declare_parameter("max_duration_s", 60.0)
         self.declare_parameter("fallback_duration_s", 20.0)
         self.declare_parameter("wall_timeout_s", 900.0)
@@ -83,6 +87,7 @@ class TaskSuccessWaiter(Node):
         self.flip_scene_y = bool(self.get_parameter("flip_scene_y").value)
         self.flip_runtime_odom_y = bool(self.get_parameter("flip_runtime_odom_y").value)
         self.flip_runtime_odom_yaw = bool(self.get_parameter("flip_runtime_odom_yaw").value)
+        self.use_isaac_camera_pose_debug = bool(self.get_parameter("use_isaac_camera_pose_debug").value)
         summary_value = str(self.get_parameter("summary_path").value)
         self.summary_path = Path(summary_value) if summary_value else None
 
@@ -101,13 +106,17 @@ class TaskSuccessWaiter(Node):
         self.start_stamp_s: float | None = None
         self.latest_stamp_s: float | None = None
         self.previous_xy: tuple[float, float] | None = None
+        self.initial_camera_debug_position: np.ndarray | None = None
+        self.initial_camera_debug_yaw: float | None = None
         self.latest_world_position: np.ndarray | None = None
+        self.latest_world_yaw: float | None = None
         self.latest_target_distance_m: float | None = None
         self.latest_tracking_error_m: float | None = None
         self.max_tracking_error_m = 0.0
         self.distance_travelled_m = 0.0
         self.path_progress_m = 0.0
         self.odom_messages = 0
+        self.pose_messages = 0
         self.done = False
         self.success = False
         self.timed_out = False
@@ -119,11 +128,24 @@ class TaskSuccessWaiter(Node):
             self.odom_callback,
             10,
         )
+        if self.use_isaac_camera_pose_debug:
+            self.create_subscription(
+                String,
+                str(self.get_parameter("isaac_pose_debug_topic").value),
+                self.isaac_pose_debug_callback,
+                10,
+            )
 
         if self.required_distance_m is None:
             self.get_logger().warn(
                 f"Task {self.task_id!r} does not expose a distance-based success condition; "
                 f"falling back to {self.fallback_duration_s:.1f}s sim time."
+            )
+
+        if self.use_isaac_camera_pose_debug:
+            self.get_logger().info(
+                "Task success/progress will use /isaac/scene_pose_debug camera_world_pose; "
+                "/sim_odom is used only for sim-time heartbeat."
             )
         else:
             target_text = ""
@@ -185,17 +207,19 @@ class TaskSuccessWaiter(Node):
         stamp_s = stamp_to_seconds(msg.header.stamp)
         if stamp_s <= 0.0:
             return
-        x = float(msg.pose.pose.position.x)
-        y = float(msg.pose.pose.position.y)
 
         self.odom_messages += 1
         if self.start_stamp_s is None:
             self.start_stamp_s = stamp_s
         self.latest_stamp_s = stamp_s
 
-        if self.previous_xy is not None:
-            self.distance_travelled_m += math.hypot(x - self.previous_xy[0], y - self.previous_xy[1])
-        self.previous_xy = (x, y)
+        if self.use_isaac_camera_pose_debug:
+            self.update_completion()
+            return
+
+        x = float(msg.pose.pose.position.x)
+        y = float(msg.pose.pose.position.y)
+        self.update_distance((x, y))
 
         if self.world_start_position is not None and self.world_start_yaw is not None:
             local_position, local_yaw = odom_to_pose(
@@ -209,23 +233,74 @@ class TaskSuccessWaiter(Node):
                 self.world_start_position,
                 self.world_start_yaw,
             )
-            self.latest_world_position = world_position
-            if self.reference_path is not None:
-                progress = project_progress_near(
-                    self.reference_path,
-                    world_position,
-                    self.path_progress_m,
-                    max_backward_m=0.5,
-                    max_forward_m=2.0,
-                )
-                closest_position, _ = sample_path_pose(self.reference_path, progress)
-                self.latest_tracking_error_m = float(np.linalg.norm(world_position - closest_position))
-                self.max_tracking_error_m = max(self.max_tracking_error_m, self.latest_tracking_error_m)
-                if self.latest_tracking_error_m <= self.max_progress_tracking_error_m:
-                    self.path_progress_m = max(self.path_progress_m, progress)
-            if self.target_position is not None:
-                self.latest_target_distance_m = float(np.linalg.norm(world_position - self.target_position))
+            self.update_world_progress(world_position, None)
 
+        self.update_completion()
+
+    def isaac_pose_debug_callback(self, msg: String) -> None:
+        if not self.use_isaac_camera_pose_debug:
+            return
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed /isaac/scene_pose_debug JSON")
+            return
+        camera_pose = data.get("camera_world_pose")
+        if not isinstance(camera_pose, dict):
+            return
+        if self.world_start_position is None or self.world_start_yaw is None:
+            return
+        try:
+            camera_position = np.array(
+                [
+                    float(camera_pose["x"]),
+                    float(camera_pose["y"]),
+                ],
+                dtype=float,
+            )
+            camera_yaw = float(camera_pose["yaw"])
+        except (KeyError, TypeError, ValueError):
+            return
+
+        if self.initial_camera_debug_position is None or self.initial_camera_debug_yaw is None:
+            self.initial_camera_debug_position = camera_position
+            self.initial_camera_debug_yaw = camera_yaw
+
+        camera_delta = camera_position - self.initial_camera_debug_position
+        world_position = self.world_start_position + camera_delta
+        world_yaw = wrap_to_pi(
+            self.world_start_yaw + wrap_to_pi(camera_yaw - self.initial_camera_debug_yaw)
+        )
+        self.pose_messages += 1
+        self.update_distance((float(world_position[0]), float(world_position[1])))
+        self.update_world_progress(world_position, world_yaw)
+        self.update_completion()
+
+    def update_distance(self, xy: tuple[float, float]) -> None:
+        if self.previous_xy is not None:
+            self.distance_travelled_m += math.hypot(xy[0] - self.previous_xy[0], xy[1] - self.previous_xy[1])
+        self.previous_xy = xy
+
+    def update_world_progress(self, world_position: np.ndarray, world_yaw: float | None) -> None:
+        self.latest_world_position = world_position
+        self.latest_world_yaw = world_yaw
+        if self.reference_path is not None:
+            progress = project_progress_near(
+                self.reference_path,
+                world_position,
+                self.path_progress_m,
+                max_backward_m=0.5,
+                max_forward_m=2.0,
+            )
+            closest_position, _ = sample_path_pose(self.reference_path, progress)
+            self.latest_tracking_error_m = float(np.linalg.norm(world_position - closest_position))
+            self.max_tracking_error_m = max(self.max_tracking_error_m, self.latest_tracking_error_m)
+            if self.latest_tracking_error_m <= self.max_progress_tracking_error_m:
+                self.path_progress_m = max(self.path_progress_m, progress)
+        if self.target_position is not None:
+            self.latest_target_distance_m = float(np.linalg.norm(world_position - self.target_position))
+
+    def update_completion(self) -> None:
         sim_elapsed_s = self.sim_elapsed_s()
         reached_required_distance = (
             self.required_distance_m is not None
@@ -246,10 +321,17 @@ class TaskSuccessWaiter(Node):
         if reached_required_distance and reached_target and tracking_is_close:
             self.success = True
             self.stop_reason = "success_distance_and_target" if self.target_position is not None else "success_progress"
-            self.done = self.odom_messages >= self.min_odom_messages
-        elif sim_elapsed_s >= self.target_duration_s and self.odom_messages >= self.min_odom_messages:
+            self.done = self.has_enough_messages()
+        elif sim_elapsed_s >= self.target_duration_s and self.has_enough_messages():
             self.stop_reason = "max_duration_reached"
             self.done = True
+
+    def has_enough_messages(self) -> bool:
+        if self.odom_messages < self.min_odom_messages:
+            return False
+        if self.use_isaac_camera_pose_debug and self.pose_messages < self.min_odom_messages:
+            return False
+        return True
 
     def check_wall_timeout(self) -> None:
         if time.monotonic() - self.start_wall_s > self.wall_timeout_s:
@@ -281,6 +363,8 @@ class TaskSuccessWaiter(Node):
             "latest_world_position": (
                 self.latest_world_position.tolist() if self.latest_world_position is not None else None
             ),
+            "latest_world_yaw": self.latest_world_yaw,
+            "pose_source": "isaac_camera_pose_debug" if self.use_isaac_camera_pose_debug else "sim_odom",
             "success": self.success,
             "stop_reason": self.stop_reason,
             "sim_elapsed_s": self.sim_elapsed_s(),
@@ -288,6 +372,7 @@ class TaskSuccessWaiter(Node):
             "fallback_duration_s": self.fallback_duration_s,
             "wall_timeout_s": self.wall_timeout_s,
             "odom_messages": self.odom_messages,
+            "pose_messages": self.pose_messages,
         }
 
     def write_summary(self) -> None:

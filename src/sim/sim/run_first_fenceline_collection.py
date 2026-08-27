@@ -301,6 +301,7 @@ def filter_manifest(
     manifest_all_path: Path,
     manifest_path: Path,
     selection: dict[str, dict[str, Any]],
+    duration_policy: dict[str, float],
 ) -> dict[str, Any]:
     manifest = load_yaml(manifest_all_path)
     rows = []
@@ -328,6 +329,12 @@ def filter_manifest(
         if key in seen:
             continue
         seen.add(key)
+        row = dict(row)
+        collection = dict(row.get("collection") or {})
+        collection["duration_s"] = duration_for_rollout_row(row, selected, duration_policy)
+        collection["use_isaac_camera_pose_debug"] = True
+        collection.setdefault("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
+        row["collection"] = collection
         rows.append(row)
 
     filtered = dict(manifest)
@@ -350,6 +357,26 @@ def filter_manifest(
     filtered["counts"] = counts
     write_yaml(manifest_path, filtered)
     return filtered
+
+
+def duration_for_rollout_row(
+    row: dict[str, Any],
+    selected: dict[str, Any],
+    duration_policy: dict[str, float],
+) -> float:
+    scene_id = str(row.get("scene_id") or "").lower()
+    rollout_id = str(row.get("rollout_id") or "").lower()
+    task_id = str(row.get("task_id") or selected.get("task_id") or "").lower()
+    text = " ".join([scene_id, rollout_id, task_id])
+    if "perimeter_large" in text:
+        return duration_policy["large_perimeter"]
+    if "rectangle" in text or "perimeter" in task_id:
+        return duration_policy["rectangle"]
+    if "corner" in text:
+        return duration_policy["corner"]
+    if "gap" in text or "connected" in task_id:
+        return duration_policy["gap"]
+    return duration_policy["straight"]
 
 
 def metadata_field(metadata: dict[str, Any], *keys: str) -> Any:
@@ -416,8 +443,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-layouts", type=int, default=None)
     parser.add_argument("--variant-sample-seed", type=int, default=11)
     parser.add_argument("--visual-sample-seed", type=int, default=23)
-    parser.add_argument("--duration-s", type=float, default=90.0)
+    parser.add_argument("--duration-s", type=float, default=90.0, help="Fallback duration for straight/simple layouts.")
+    parser.add_argument("--gap-duration-s", type=float, default=120.0)
+    parser.add_argument("--corner-duration-s", type=float, default=120.0)
+    parser.add_argument("--rectangle-duration-s", type=float, default=180.0)
+    parser.add_argument("--large-perimeter-duration-s", type=float, default=260.0)
     parser.add_argument("--prepare-timeout-s", type=float, default=120.0)
+    parser.add_argument(
+        "--validation-planner-preset",
+        choices=("full", "fast"),
+        default="full",
+        help="Planner validation preset passed to validate_scene_task_specs.",
+    )
+    parser.add_argument("--validation-grid-resolution-m", type=float, default=None)
+    parser.add_argument("--validation-yaw-resolution-deg", type=float, default=None)
+    parser.add_argument("--validation-max-iterations", type=int, default=None)
+    parser.add_argument("--validation-subgoal-spacing-m", type=float, default=None)
     parser.add_argument("--variation-config", default="configs/variation_configs/variation.yaml")
     parser.add_argument("--isaac-python", default=None)
     parser.add_argument("--max-visuals-per-pose-variant", type=int, default=1)
@@ -443,6 +484,13 @@ def main() -> int:
     manifest = output_dir / "manifest.yaml"
     selection_path = output_dir / "selected_tasks_and_variants.yaml"
     isaac_python = args.isaac_python or sys.executable
+    duration_policy = {
+        "straight": float(args.duration_s),
+        "gap": float(args.gap_duration_s),
+        "corner": float(args.corner_duration_s),
+        "rectangle": float(args.rectangle_duration_s),
+        "large_perimeter": float(args.large_perimeter_duration_s),
+    }
 
     if not args.no_clean:
         clean_output_dir(output_dir)
@@ -470,19 +518,30 @@ def main() -> int:
         label="Generate fenceline task specs",
     )
 
-    run_command(
-        [
+    validation_command = [
             "ros2",
             "run",
             "sim",
             "validate_scene_task_specs",
             task_specs_dir.as_posix(),
             "--check-planner",
+            "--planner-speed-preset",
+            str(args.validation_planner_preset),
             "--allow-invalid",
             "--verbose",
             "--write-valid-output-dir",
             valid_specs_dir.as_posix(),
-        ],
+    ]
+    if args.validation_grid_resolution_m is not None:
+        validation_command.extend(["--planner-grid-resolution-m", str(args.validation_grid_resolution_m)])
+    if args.validation_yaw_resolution_deg is not None:
+        validation_command.extend(["--planner-yaw-resolution-deg", str(args.validation_yaw_resolution_deg)])
+    if args.validation_max_iterations is not None:
+        validation_command.extend(["--planner-max-iterations", str(args.validation_max_iterations)])
+    if args.validation_subgoal_spacing_m is not None:
+        validation_command.extend(["--planner-subgoal-spacing-m", str(args.validation_subgoal_spacing_m)])
+    run_command(
+        validation_command,
         label="Validate fenceline task specs",
     )
 
@@ -530,7 +589,7 @@ def main() -> int:
         label="Generate full first-pass manifest",
     )
 
-    filtered = filter_manifest(manifest_all, manifest, selection)
+    filtered = filter_manifest(manifest_all, manifest, selection, duration_policy)
     print(f"Wrote filtered first-pass manifest: {manifest}", flush=True)
     print(f"Selected {len(filtered.get('rollouts') or [])} rollout(s).", flush=True)
     print(yaml.safe_dump(filtered.get("counts", {}), sort_keys=True), flush=True)
@@ -564,8 +623,6 @@ def main() -> int:
             isaac_root.as_posix(),
             "--base-dir",
             rollouts_dir.as_posix(),
-            "--duration-s",
-            str(args.duration_s),
             "--prepare-timeout-s",
             str(args.prepare_timeout_s),
             *(["--dry-run"] if args.dry_run else []),

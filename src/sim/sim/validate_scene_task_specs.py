@@ -1231,6 +1231,7 @@ def planner_accepts_variant(
     task: dict[str, Any],
     variant: dict[str, Any],
     flip_isaac_y: bool,
+    planner_overrides: dict[str, Any] | None = None,
 ) -> tuple[bool, str | None, dict[str, Any]]:
     if task.get("task_type") == "hold_position":
         return True, None, {}
@@ -1238,7 +1239,9 @@ def planner_accepts_variant(
         reference_path = reference_path_for_task(scene, scene_yaml, task, variant, flip_isaac_y)
         reference_length = path_length(reference_path)
         start_position, start_yaw = shifted_start_pose(scene, task, variant, flip_isaac_y)
-        settings = variant.get("planner_settings") or {}
+        settings = dict(variant.get("planner_settings") or {})
+        if planner_overrides:
+            settings.update(planner_overrides)
         initial_error, initial_metrics = initial_forward_preview_error(
             reference_path,
             start_position,
@@ -1307,12 +1310,20 @@ def filter_planner_valid_variants(
     scene_yaml: Path,
     task: dict[str, Any],
     flip_isaac_y: bool,
+    planner_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     variants = task.get("trajectory_variants") or [{"variant_id": "nominal", "variant_type": "nominal"}]
     valid_variants = []
     errors = []
     for variant in variants:
-        accepted, reason, metrics = planner_accepts_variant(scene, scene_yaml, task, variant, flip_isaac_y)
+        accepted, reason, metrics = planner_accepts_variant(
+            scene,
+            scene_yaml,
+            task,
+            variant,
+            flip_isaac_y,
+            planner_overrides=planner_overrides,
+        )
         if accepted:
             checked_variant = dict(variant)
             checked_variant["planner_validation"] = {"checked": True, "valid": True}
@@ -1342,6 +1353,7 @@ def validate_spec(
     check_expert_support: bool,
     check_planner: bool,
     flip_isaac_y: bool,
+    planner_overrides: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     spec = load_yaml(spec_path)
     scene_yaml = Path(spec["scene"]["source_yaml"])
@@ -1363,7 +1375,13 @@ def validate_spec(
         else:
             valid_task = task
             if check_planner:
-                valid_task, planner_errors = filter_planner_valid_variants(scene, scene_yaml, task, flip_isaac_y)
+                valid_task, planner_errors = filter_planner_valid_variants(
+                    scene,
+                    scene_yaml,
+                    task,
+                    flip_isaac_y,
+                    planner_overrides=planner_overrides,
+                )
                 errors.extend(planner_errors)
             if errors:
                 invalid_tasks.append({"task": task, "errors": errors})
@@ -1404,6 +1422,39 @@ def parse_args() -> argparse.Namespace:
         help="Run Hybrid A* for each trajectory variant and filter variants that cannot be planned.",
     )
     parser.add_argument(
+        "--planner-speed-preset",
+        choices=("full", "fast"),
+        default="full",
+        help=(
+            "Use coarser Hybrid A* settings during validation. "
+            "'full' uses each variant's planner settings; 'fast' is quicker but less exact."
+        ),
+    )
+    parser.add_argument(
+        "--planner-grid-resolution-m",
+        type=float,
+        default=None,
+        help="Override Hybrid A* grid resolution during validation.",
+    )
+    parser.add_argument(
+        "--planner-yaw-resolution-deg",
+        type=float,
+        default=None,
+        help="Override Hybrid A* yaw resolution during validation.",
+    )
+    parser.add_argument(
+        "--planner-max-iterations",
+        type=int,
+        default=None,
+        help="Override Hybrid A* max iterations during validation.",
+    )
+    parser.add_argument(
+        "--planner-subgoal-spacing-m",
+        type=float,
+        default=None,
+        help="Override planner subgoal spacing during validation.",
+    )
+    parser.add_argument(
         "--flip-isaac-y",
         action="store_true",
         help="Validate planner geometry by mirroring Isaac's Y axis.",
@@ -1418,11 +1469,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def planner_overrides_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if args.planner_speed_preset == "fast":
+        overrides.update(
+            {
+                "grid_resolution_m": 0.35,
+                "yaw_resolution_deg": 30.0,
+                "hybrid_astar_max_iterations": 8000,
+                "planner_subgoal_spacing_m": 4.0,
+            }
+        )
+    if args.planner_grid_resolution_m is not None:
+        overrides["grid_resolution_m"] = float(args.planner_grid_resolution_m)
+    if args.planner_yaw_resolution_deg is not None:
+        overrides["yaw_resolution_deg"] = float(args.planner_yaw_resolution_deg)
+    if args.planner_max_iterations is not None:
+        overrides["hybrid_astar_max_iterations"] = int(args.planner_max_iterations)
+    if args.planner_subgoal_spacing_m is not None:
+        overrides["planner_subgoal_spacing_m"] = float(args.planner_subgoal_spacing_m)
+    return overrides
+
+
 def main() -> None:
     args = parse_args()
     spec_paths = expand_inputs(args.inputs)
     if not spec_paths:
         raise SystemExit("No task spec YAML files found.")
+    planner_overrides = planner_overrides_from_args(args)
+    if planner_overrides and args.check_planner:
+        print(f"Planner validation overrides: {planner_overrides}")
 
     total_valid = 0
     total_invalid = 0
@@ -1434,6 +1510,7 @@ def main() -> None:
             check_expert_support=not args.skip_expert_support_check,
             check_planner=args.check_planner,
             flip_isaac_y=args.flip_isaac_y,
+            planner_overrides=planner_overrides,
         )
         total_valid += len(valid_tasks)
         total_invalid += len(invalid_tasks)
@@ -1455,6 +1532,7 @@ def main() -> None:
                 "max_start_distance_m": args.max_start_distance_m,
                 "expert_support_checked": not args.skip_expert_support_check,
                 "planner_checked": args.check_planner,
+                "planner_overrides": planner_overrides,
                 "flip_isaac_y": args.flip_isaac_y,
             }
             write_yaml(args.write_valid_output_dir / spec_path.name, filtered)
