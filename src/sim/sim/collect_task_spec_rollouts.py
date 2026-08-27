@@ -518,6 +518,7 @@ def main() -> int:
     collection = dict(task_spec.get("collection", {}))
     if args.use_isaac_camera_pose_debug:
         collection["use_isaac_camera_pose_debug"] = True
+    task_spec["collection"] = collection
     base_dir = args.base_dir or Path(str(collection.get("base_dir", "sim_datasets/generated")))
     duration_s = float(args.duration_s if args.duration_s is not None else collection.get("duration_s", 20.0))
     rollouts = selected_rollouts(
