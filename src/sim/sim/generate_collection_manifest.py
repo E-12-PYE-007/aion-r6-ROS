@@ -169,19 +169,48 @@ def visual_usds_for(base_usd: Path | None, include_visual_variations: bool, incl
     if include_base_usd:
         variants.append(("base", base_usd))
     if not include_visual_variations:
-        return variants or [("base", base_usd)]
+        return variants
 
     directory = base_usd.parent
     stem = base_usd.stem
-    prefix = stem.removesuffix("_base")
-    for usd_path in sorted(directory.glob(f"{prefix}_*.usd")):
-        if usd_path.resolve() == base_usd.resolve():
-            continue
-        visual_id = usd_path.stem.removeprefix(f"{prefix}_")
-        if "__task_" in visual_id or "__variant_" in visual_id or visual_id.startswith("_task_"):
-            continue
-        variants.append((visual_id, usd_path.resolve()))
-    return variants or [("base", base_usd)]
+
+    seen_paths = {base_usd.resolve()}
+
+    def append_visual(visual_id: str, usd_path: Path) -> None:
+        resolved = usd_path.resolve()
+        if resolved in seen_paths:
+            return
+        normalized = normalize_name(visual_id)
+        if not normalized or normalized == "base":
+            return
+        seen_paths.add(resolved)
+        variants.append((normalized, resolved))
+
+    if "__task_" in stem and "__variant_" in stem:
+        base_prefix, task_suffix = stem.split("__task_", 1)
+        task_suffix = "__task_" + task_suffix
+
+        # Pattern produced when visual variation is generated from the recovery pose USD:
+        #   <pose_variant_stem>_<visual>.usd
+        for usd_path in sorted(directory.glob(f"{stem}_*.usd")):
+            append_visual(usd_path.stem.removeprefix(f"{stem}_"), usd_path)
+
+        # Pattern produced when the visual name is inserted before the task/variant suffix:
+        #   <base_scene>_<visual>__task_<task>__variant_<recovery>.usd
+        for usd_path in sorted(directory.glob(f"{base_prefix}_*{task_suffix}.usd")):
+            candidate_stem = usd_path.stem
+            if not candidate_stem.startswith(f"{base_prefix}_") or not candidate_stem.endswith(task_suffix):
+                continue
+            visual_id = candidate_stem[len(base_prefix) + 1 : -len(task_suffix)]
+            append_visual(visual_id, usd_path)
+    else:
+        prefix = stem.removesuffix("_base")
+        for usd_path in sorted(directory.glob(f"{prefix}_*.usd")):
+            visual_id = usd_path.stem.removeprefix(f"{prefix}_")
+            if "__task_" in visual_id or "__variant_" in visual_id or visual_id.startswith("_task_"):
+                continue
+            append_visual(visual_id, usd_path)
+    return variants
 
 
 def stable_visual_sample_key(seed: int, suite_id: str, task_id: str, variant_id: str, visual_id: str) -> str:
