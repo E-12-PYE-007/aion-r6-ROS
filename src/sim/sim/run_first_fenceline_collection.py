@@ -497,12 +497,18 @@ def filter_manifest(
     manifest_path: Path,
     selection: dict[str, dict[str, Any]],
     duration_policy: dict[str, float],
+    excluded_rollout_ids: set[str] | None = None,
+    rollouts_dir: Path | None = None,
 ) -> dict[str, Any]:
     manifest = load_yaml(manifest_all_path)
     rows = []
     seen: set[tuple[str, str]] = set()
+    excluded_rollout_ids = excluded_rollout_ids or set()
     for row in manifest.get("rollouts") or []:
         if not isinstance(row, dict):
+            continue
+        rollout_id = str(row.get("rollout_id") or "")
+        if rollout_id in excluded_rollout_ids:
             continue
         scene_id = str(row.get("scene_id") or "")
         variant_id = str(row.get("variant_id", ""))
@@ -529,6 +535,9 @@ def filter_manifest(
         collection["planner_validation_status"] = selected.get("planner_validation_status", "validated")
         row["collection"] = collection
         row["planner_validation_status"] = selected.get("planner_validation_status", "validated")
+        existing_status = existing_rollout_status(row, rollouts_dir)
+        if existing_status:
+            row["status"] = existing_status
         rows.append(row)
 
     filtered = dict(manifest)
@@ -550,11 +559,54 @@ def filter_manifest(
             "skipped": 0,
             "nominal_rows": sum(1 for row in rows if row.get("variant_id") == "nominal"),
             "recovery_rows": sum(1 for row in rows if row.get("variant_id") != "nominal"),
+            "excluded_rollouts": len(excluded_rollout_ids),
         }
     )
+    update_existing_rollout_counts(rows, counts)
     filtered["counts"] = counts
     write_yaml(manifest_path, filtered)
     return filtered
+
+
+def load_excluded_rollout_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    ids: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            ids.add(line)
+    return ids
+
+
+def existing_rollout_status(row: dict[str, Any], rollouts_dir: Path | None) -> str | None:
+    if rollouts_dir is None:
+        return None
+    rollout_id = str(row.get("trajectory_name") or row.get("rollout_id") or "")
+    if not rollout_id:
+        return None
+    rollout_dir = rollouts_dir / rollout_id
+    metadata_path = rollout_dir / "metadata.json"
+    summary_path = rollout_dir / "task_success_wait_summary.json"
+    if not metadata_path.exists() or not summary_path.exists():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "failed"
+    return "complete" if bool(summary.get("success")) else "failed"
+
+
+def update_existing_rollout_counts(rows: list[dict[str, Any]], counts: dict[str, Any]) -> None:
+    counts.update(
+        {
+            "pending": sum(1 for row in rows if row.get("status", "pending") == "pending"),
+            "running": sum(1 for row in rows if row.get("status") == "running"),
+            "complete": sum(1 for row in rows if row.get("status") == "complete"),
+            "failed": sum(1 for row in rows if row.get("status") == "failed"),
+            "skipped": sum(1 for row in rows if row.get("status") == "skipped"),
+        }
+    )
 
 
 def duration_for_rollout_row(
@@ -687,6 +739,7 @@ def main() -> int:
     manifest = output_dir / "manifest.yaml"
     manifest_input_specs_dir = output_dir / "manifest_input_specs"
     selection_path = output_dir / "selected_tasks_and_variants.yaml"
+    excluded_rollout_ids_path = output_dir / "crashing_rollout_ids.txt"
     isaac_python = args.isaac_python or sys.executable
     duration_policy = {
         "straight": float(args.duration_s),
@@ -799,7 +852,20 @@ def main() -> int:
         label="Generate full first-pass manifest",
     )
 
-    filtered = filter_manifest(manifest_all, manifest, selection, duration_policy)
+    excluded_rollout_ids = load_excluded_rollout_ids(excluded_rollout_ids_path)
+    if excluded_rollout_ids:
+        print(
+            f"Excluding {len(excluded_rollout_ids)} known crashing rollout id(s) from {excluded_rollout_ids_path}",
+            flush=True,
+        )
+    filtered = filter_manifest(
+        manifest_all,
+        manifest,
+        selection,
+        duration_policy,
+        excluded_rollout_ids=excluded_rollout_ids,
+        rollouts_dir=rollouts_dir,
+    )
     print(f"Wrote filtered first-pass manifest: {manifest}", flush=True)
     print(f"Selected {len(filtered.get('rollouts') or [])} rollout(s).", flush=True)
     print(yaml.safe_dump(filtered.get("counts", {}), sort_keys=True), flush=True)

@@ -31,6 +31,7 @@ from sim.run_first_fenceline_collection import (
     expand_selected_recovery_variants,
     filter_manifest,
     generate_pose_variant_usds,
+    load_excluded_rollout_ids,
     load_yaml,
     plot_rollouts,
     prepare_manifest_input_specs,
@@ -92,6 +93,7 @@ def main() -> int:
     manifest = output_dir / "manifest.yaml"
     manifest_input_specs_dir = output_dir / "manifest_input_specs"
     selection_path = output_dir / "selected_tasks_and_variants.yaml"
+    excluded_rollout_ids_path = output_dir / "crashing_rollout_ids.txt"
     duration_policy = {
         "straight": float(args.duration_s),
         "gap": float(args.gap_duration_s),
@@ -173,7 +175,20 @@ def main() -> int:
         label="Generate full first-pass manifest from existing valid specs",
     )
 
-    filtered = filter_manifest(manifest_all, manifest, selection, duration_policy)
+    excluded_rollout_ids = load_excluded_rollout_ids(excluded_rollout_ids_path)
+    if excluded_rollout_ids:
+        print(
+            f"Excluding {len(excluded_rollout_ids)} known crashing rollout id(s) from {excluded_rollout_ids_path}",
+            flush=True,
+        )
+    filtered = filter_manifest(
+        manifest_all,
+        manifest,
+        selection,
+        duration_policy,
+        excluded_rollout_ids=excluded_rollout_ids,
+        rollouts_dir=rollouts_dir,
+    )
     print(f"Wrote filtered first-pass manifest: {manifest}", flush=True)
     print(f"Selected {len(filtered.get('rollouts') or [])} rollout(s).", flush=True)
     print(yaml.safe_dump(filtered.get("counts", {}), sort_keys=True), flush=True)
