@@ -184,6 +184,15 @@ def recovery_kind(variant: dict[str, Any]) -> str | None:
     return None
 
 
+def recovery_kind_from_variant_id(variant_id: str) -> str | None:
+    text = variant_id.lower()
+    if "heading" in text or "yaw" in text:
+        return "heading"
+    if text.startswith("recovery_"):
+        return "start"
+    return None
+
+
 def valid_recovery_variants(task: dict[str, Any], *, require_valid: bool = True) -> list[dict[str, Any]]:
     variants = []
     for variant in task.get("trajectory_variants") or []:
@@ -490,6 +499,27 @@ def filter_manifest(
     duration_policy: dict[str, float],
 ) -> dict[str, Any]:
     manifest = load_yaml(manifest_all_path)
+    recovery_fallbacks: dict[tuple[str, str], dict[str, str]] = {}
+    for row in manifest.get("rollouts") or []:
+        if not isinstance(row, dict):
+            continue
+        scene_id = str(row.get("scene_id") or "")
+        selected = selection.get(scene_id)
+        if selected is None or row.get("task_id") != selected.get("task_id"):
+            continue
+        variant_id = str(row.get("variant_id", ""))
+        if variant_id == "nominal":
+            continue
+        if row.get("visual_id") == "base":
+            continue
+        if row.get("requires_pose_variant") and not row.get("pose_variant_ready"):
+            continue
+        kind = recovery_kind_from_variant_id(variant_id)
+        if kind is None:
+            continue
+        key = (scene_id, str(row.get("task_id") or ""))
+        recovery_fallbacks.setdefault(key, {}).setdefault(kind, variant_id)
+
     rows = []
     seen: set[tuple[str, str]] = set()
     for row in manifest.get("rollouts") or []:
@@ -508,6 +538,8 @@ def filter_manifest(
             keep_variants.update(str(item) for item in recovery_variant_ids)
         elif selected.get("recovery_variant_id"):
             keep_variants.add(str(selected["recovery_variant_id"]))
+        fallback_recovery_ids = recovery_fallbacks.get((scene_id, str(row.get("task_id") or "")), {})
+        keep_variants.update(fallback_recovery_ids.values())
         if variant_id not in keep_variants:
             continue
         if row.get("visual_id") == "base":
@@ -531,8 +563,9 @@ def filter_manifest(
     filtered = dict(manifest)
     filtered["source_manifest"] = manifest_all_path.as_posix()
     filtered["selection_rule"] = (
-        "first fenceline collection: one selected follow task per layout; validated specs keep nominal plus one "
-        "recovery variant, unvalidated fallback specs keep nominal only; one non-base visual each"
+        "first fenceline collection: one selected follow task per layout; validated specs keep nominal plus selected "
+        "start and heading recovery variants when available; unvalidated fallback specs keep nominal only; one non-base "
+        "visual each"
     )
     filtered["rollouts"] = rows
     counts = dict(filtered.get("counts", {}))
