@@ -184,7 +184,7 @@ def recovery_kind(variant: dict[str, Any]) -> str | None:
     return None
 
 
-def valid_recovery_variants(task: dict[str, Any]) -> list[dict[str, Any]]:
+def valid_recovery_variants(task: dict[str, Any], *, require_valid: bool = True) -> list[dict[str, Any]]:
     variants = []
     for variant in task.get("trajectory_variants") or []:
         if not isinstance(variant, dict):
@@ -193,7 +193,7 @@ def valid_recovery_variants(task: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if not has_start_delta(variant):
             continue
-        if not variant_is_valid(variant):
+        if require_valid and not variant_is_valid(variant):
             continue
         data_category = str(variant.get("data_category", ""))
         variant_type = str(variant.get("variant_type", ""))
@@ -213,10 +213,16 @@ def choose_recovery_variant(task: dict[str, Any], scene_id: str, sample_seed: in
     )[0]
 
 
-def choose_recovery_variants_by_kind(task: dict[str, Any], scene_id: str, sample_seed: int) -> list[dict[str, Any]]:
+def choose_recovery_variants_by_kind(
+    task: dict[str, Any],
+    scene_id: str,
+    sample_seed: int,
+    *,
+    require_valid: bool = True,
+) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     used_ids: set[str] = set()
-    variants = valid_recovery_variants(task)
+    variants = valid_recovery_variants(task, require_valid=require_valid)
     for kind in ("start", "heading"):
         candidates = [variant for variant in variants if recovery_kind(variant) == kind]
         if not candidates:
@@ -231,10 +237,33 @@ def choose_recovery_variants_by_kind(task: dict[str, Any], scene_id: str, sample
     if selected:
         return selected
 
-    fallback = choose_recovery_variant(task, scene_id, sample_seed)
+    variants = valid_recovery_variants(task, require_valid=require_valid)
+    fallback = None
+    if variants:
+        fallback = sorted(
+            variants,
+            key=lambda variant: stable_key(sample_seed, scene_id, task.get("task_id"), variant.get("variant_id")),
+        )[0]
     if fallback is None:
         return []
     return [fallback] if str(fallback.get("variant_id")) not in used_ids else []
+
+
+def specs_by_scene_id(directory: Path | None) -> dict[str, tuple[Path, dict[str, Any]]]:
+    indexed: dict[str, tuple[Path, dict[str, Any]]] = {}
+    if directory is None or not directory.exists():
+        return indexed
+    for spec_path in spec_paths(directory):
+        spec = load_yaml(spec_path)
+        indexed[scene_id_for_spec(spec_path, spec)] = (spec_path, spec)
+    return indexed
+
+
+def task_by_id(spec: dict[str, Any], task_id: str) -> dict[str, Any] | None:
+    for task in spec.get("tasks") or []:
+        if isinstance(task, dict) and str(task.get("task_id")) == str(task_id):
+            return task
+    return None
 
 
 def build_selection(
@@ -245,6 +274,7 @@ def build_selection(
     include_unvalidated_nominal: bool = False,
 ) -> dict[str, dict[str, Any]]:
     selection: dict[str, dict[str, Any]] = {}
+    raw_specs = specs_by_scene_id(raw_specs_dir)
     for spec_path in spec_paths(valid_specs_dir):
         spec = load_yaml(spec_path)
         scene_id = scene_id_for_spec(spec_path, spec)
@@ -252,10 +282,25 @@ def build_selection(
         if task is None:
             print(f"[SKIP] No valid fenceline follow task in {spec_path}", flush=True)
             continue
-        recoveries = choose_recovery_variants_by_kind(task, scene_id, sample_seed)
+        recovery_spec_path = spec_path
+        recovery_task = task
+        raw_match = raw_specs.get(scene_id)
+        if raw_match is not None:
+            raw_spec_path, raw_spec = raw_match
+            raw_task = task_by_id(raw_spec, str(task.get("task_id")))
+            if raw_task is not None:
+                recovery_spec_path = raw_spec_path
+                recovery_task = raw_task
+        recoveries = choose_recovery_variants_by_kind(
+            recovery_task,
+            scene_id,
+            sample_seed,
+            require_valid=(recovery_spec_path == spec_path),
+        )
         recovery_ids = [str(recovery.get("variant_id")) for recovery in recoveries if recovery.get("variant_id")]
         selection[scene_id] = {
             "spec_path": spec_path.as_posix(),
+            "recovery_spec_path": recovery_spec_path.as_posix(),
             "planner_validation_status": "validated",
             "task_id": task.get("task_id"),
             "task_type": task.get("task_type"),
@@ -285,13 +330,56 @@ def build_selection(
     return selection
 
 
+def selected_variant_ids(selected: dict[str, Any]) -> set[str]:
+    ids = {"nominal"}
+    recovery_variant_ids = selected.get("recovery_variant_ids")
+    if isinstance(recovery_variant_ids, list):
+        ids.update(str(item) for item in recovery_variant_ids)
+    elif selected.get("recovery_variant_id"):
+        ids.add(str(selected["recovery_variant_id"]))
+    return ids
+
+
+def copy_selected_task_spec(selected: dict[str, Any], output_dir: Path) -> None:
+    nominal_spec_path = Path(str(selected["spec_path"]))
+    recovery_spec_path = Path(str(selected.get("recovery_spec_path") or selected["spec_path"]))
+    nominal_spec = load_yaml(nominal_spec_path)
+    recovery_spec = load_yaml(recovery_spec_path)
+    task_id = str(selected["task_id"])
+    nominal_task = task_by_id(nominal_spec, task_id)
+    recovery_task = task_by_id(recovery_spec, task_id)
+    if nominal_task is None:
+        raise ValueError(f"{nominal_spec_path} has no selected task {task_id}")
+    if recovery_task is None:
+        recovery_task = nominal_task
+
+    keep_variant_ids = selected_variant_ids(selected)
+    merged_task = dict(nominal_task)
+    merged_variants: list[dict[str, Any]] = []
+    for variant_id in keep_variant_ids:
+        source_task = nominal_task if variant_id == "nominal" else recovery_task
+        for variant in source_task.get("trajectory_variants") or []:
+            if isinstance(variant, dict) and str(variant.get("variant_id", "nominal")) == variant_id:
+                merged_variants.append(dict(variant))
+                break
+    merged_variants = sorted(
+        merged_variants,
+        key=lambda variant: (str(variant.get("variant_id", "")) != "nominal", str(variant.get("variant_id", ""))),
+    )
+    merged_task["trajectory_variants"] = merged_variants
+
+    merged_spec = dict(nominal_spec)
+    merged_spec["tasks"] = [merged_task]
+    destination = output_dir / nominal_spec_path.name
+    write_yaml(destination, merged_spec)
+
+
 def prepare_manifest_input_specs(selection: dict[str, dict[str, Any]], output_dir: Path) -> Path:
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     for selected in selection.values():
-        source = Path(str(selected["spec_path"]))
-        shutil.copy2(source, output_dir / source.name)
+        copy_selected_task_spec(selected, output_dir)
     return output_dir
 
 
@@ -312,7 +400,7 @@ def expand_selected_recovery_variants(selection: dict[str, dict[str, Any]], pose
         if not recovery_variant_ids:
             print(f"[SKIP] {scene_id}: no valid recovery variant selected", flush=True)
             continue
-        spec_path = Path(str(selected["spec_path"]))
+        spec_path = Path(str(selected.get("recovery_spec_path") or selected["spec_path"]))
         layout_path = generated_layout_for_spec(spec_path)
         if layout_path is None or not layout_path.exists():
             print(f"[SKIP] {scene_id}: missing generated layout for pose expansion", flush=True)
