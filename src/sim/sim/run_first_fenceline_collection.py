@@ -505,10 +505,6 @@ def filter_manifest(
         if not isinstance(row, dict):
             continue
         scene_id = str(row.get("scene_id") or "")
-        selected = selection.get(scene_id)
-        if selected is None:
-            continue
-
         variant_id = str(row.get("variant_id", ""))
         variant_type = str(row.get("variant_type") or "")
         data_category = str(row.get("data_category") or "")
@@ -526,6 +522,7 @@ def filter_manifest(
         seen.add(key)
         row = dict(row)
         collection = dict(row.get("collection") or {})
+        selected = selection.get(scene_id, {})
         collection["duration_s"] = duration_for_rollout_row(row, selected, duration_policy)
         collection["use_isaac_camera_pose_debug"] = True
         collection.setdefault("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
