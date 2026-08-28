@@ -499,27 +499,6 @@ def filter_manifest(
     duration_policy: dict[str, float],
 ) -> dict[str, Any]:
     manifest = load_yaml(manifest_all_path)
-    recovery_fallbacks: dict[tuple[str, str], dict[str, str]] = {}
-    for row in manifest.get("rollouts") or []:
-        if not isinstance(row, dict):
-            continue
-        scene_id = str(row.get("scene_id") or "")
-        selected = selection.get(scene_id)
-        if selected is None or row.get("task_id") != selected.get("task_id"):
-            continue
-        variant_id = str(row.get("variant_id", ""))
-        if variant_id == "nominal":
-            continue
-        if row.get("visual_id") == "base":
-            continue
-        if row.get("requires_pose_variant") and not row.get("pose_variant_ready"):
-            continue
-        kind = recovery_kind_from_variant_id(variant_id)
-        if kind is None:
-            continue
-        key = (scene_id, str(row.get("task_id") or ""))
-        recovery_fallbacks.setdefault(key, {}).setdefault(kind, variant_id)
-
     rows = []
     seen: set[tuple[str, str]] = set()
     for row in manifest.get("rollouts") or []:
@@ -529,24 +508,19 @@ def filter_manifest(
         selected = selection.get(scene_id)
         if selected is None:
             continue
-        if row.get("task_id") != selected.get("task_id"):
-            continue
+
         variant_id = str(row.get("variant_id", ""))
-        keep_variants = {"nominal"}
-        recovery_variant_ids = selected.get("recovery_variant_ids")
-        if isinstance(recovery_variant_ids, list):
-            keep_variants.update(str(item) for item in recovery_variant_ids)
-        elif selected.get("recovery_variant_id"):
-            keep_variants.add(str(selected["recovery_variant_id"]))
-        fallback_recovery_ids = recovery_fallbacks.get((scene_id, str(row.get("task_id") or "")), {})
-        keep_variants.update(fallback_recovery_ids.values())
-        if variant_id not in keep_variants:
+        variant_type = str(row.get("variant_type") or "")
+        data_category = str(row.get("data_category") or "")
+        is_nominal = variant_id == "nominal"
+        is_recovery = variant_type == "recovery" or data_category == "recovery" or variant_id.startswith("recovery_")
+        if not is_nominal and not is_recovery:
             continue
         if row.get("visual_id") == "base":
             continue
         if row.get("requires_pose_variant") and not row.get("pose_variant_ready"):
             continue
-        key = (scene_id, variant_id)
+        key = (scene_id, str(row.get("task_id") or ""), variant_id)
         if key in seen:
             continue
         seen.add(key)
