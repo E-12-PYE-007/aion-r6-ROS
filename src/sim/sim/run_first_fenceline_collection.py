@@ -165,7 +165,26 @@ def choose_follow_task(spec: dict[str, Any], *, require_valid_nominal: bool = Tr
     )[0]
 
 
-def choose_recovery_variant(task: dict[str, Any], scene_id: str, sample_seed: int) -> dict[str, Any] | None:
+def recovery_kind(variant: dict[str, Any]) -> str | None:
+    delta = variant.get("start_pose_delta")
+    if not isinstance(delta, dict):
+        return None
+    dx = abs(float(delta.get("x_m", 0.0)))
+    dy = abs(float(delta.get("y_m", 0.0)))
+    dyaw = abs(float(delta.get("yaw_rad", 0.0)))
+    variant_id = str(variant.get("variant_id", "")).lower()
+    recovery_case = str(variant.get("recovery_case", "")).lower()
+    text = " ".join([variant_id, recovery_case])
+    if dyaw > 1e-9 and ("heading" in text or dyaw >= max(dx, dy)):
+        return "heading"
+    if dx > 1e-9 or dy > 1e-9:
+        return "start"
+    if dyaw > 1e-9:
+        return "heading"
+    return None
+
+
+def valid_recovery_variants(task: dict[str, Any]) -> list[dict[str, Any]]:
     variants = []
     for variant in task.get("trajectory_variants") or []:
         if not isinstance(variant, dict):
@@ -181,12 +200,41 @@ def choose_recovery_variant(task: dict[str, Any], scene_id: str, sample_seed: in
         if data_category != "recovery" and variant_type != "recovery":
             continue
         variants.append(variant)
+    return variants
+
+
+def choose_recovery_variant(task: dict[str, Any], scene_id: str, sample_seed: int) -> dict[str, Any] | None:
+    variants = valid_recovery_variants(task)
     if not variants:
         return None
     return sorted(
         variants,
         key=lambda variant: stable_key(sample_seed, scene_id, task.get("task_id"), variant.get("variant_id")),
     )[0]
+
+
+def choose_recovery_variants_by_kind(task: dict[str, Any], scene_id: str, sample_seed: int) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    variants = valid_recovery_variants(task)
+    for kind in ("start", "heading"):
+        candidates = [variant for variant in variants if recovery_kind(variant) == kind]
+        if not candidates:
+            continue
+        chosen = sorted(
+            candidates,
+            key=lambda variant: stable_key(sample_seed, scene_id, task.get("task_id"), kind, variant.get("variant_id")),
+        )[0]
+        variant_id = str(chosen.get("variant_id"))
+        selected.append(chosen)
+        used_ids.add(variant_id)
+    if selected:
+        return selected
+
+    fallback = choose_recovery_variant(task, scene_id, sample_seed)
+    if fallback is None:
+        return []
+    return [fallback] if str(fallback.get("variant_id")) not in used_ids else []
 
 
 def build_selection(
@@ -204,14 +252,16 @@ def build_selection(
         if task is None:
             print(f"[SKIP] No valid fenceline follow task in {spec_path}", flush=True)
             continue
-        recovery = choose_recovery_variant(task, scene_id, sample_seed)
+        recoveries = choose_recovery_variants_by_kind(task, scene_id, sample_seed)
+        recovery_ids = [str(recovery.get("variant_id")) for recovery in recoveries if recovery.get("variant_id")]
         selection[scene_id] = {
             "spec_path": spec_path.as_posix(),
             "planner_validation_status": "validated",
             "task_id": task.get("task_id"),
             "task_type": task.get("task_type"),
             "nominal_variant_id": "nominal",
-            "recovery_variant_id": recovery.get("variant_id") if recovery else None,
+            "recovery_variant_id": recovery_ids[0] if recovery_ids else None,
+            "recovery_variant_ids": recovery_ids,
         }
     if include_unvalidated_nominal and raw_specs_dir is not None:
         for spec_path in spec_paths(raw_specs_dir):
@@ -230,6 +280,7 @@ def build_selection(
                 "task_type": task.get("task_type"),
                 "nominal_variant_id": "nominal",
                 "recovery_variant_id": None,
+                "recovery_variant_ids": [],
             }
     return selection
 
@@ -255,8 +306,10 @@ def generated_layout_for_spec(spec_path: Path) -> Path | None:
 
 def expand_selected_recovery_variants(selection: dict[str, dict[str, Any]], pose_variants_dir: Path) -> None:
     for scene_id, selected in sorted(selection.items()):
-        recovery_variant_id = selected.get("recovery_variant_id")
-        if not recovery_variant_id:
+        recovery_variant_ids = selected.get("recovery_variant_ids")
+        if not isinstance(recovery_variant_ids, list):
+            recovery_variant_ids = [selected["recovery_variant_id"]] if selected.get("recovery_variant_id") else []
+        if not recovery_variant_ids:
             print(f"[SKIP] {scene_id}: no valid recovery variant selected", flush=True)
             continue
         spec_path = Path(str(selected["spec_path"]))
@@ -264,25 +317,26 @@ def expand_selected_recovery_variants(selection: dict[str, dict[str, Any]], pose
         if layout_path is None or not layout_path.exists():
             print(f"[SKIP] {scene_id}: missing generated layout for pose expansion", flush=True)
             continue
-        run_command(
-            [
-                "ros2",
-                "run",
-                "sim",
-                "expand_pose_variants",
-                "--layout-yaml",
-                layout_path.as_posix(),
-                "--task-spec",
-                spec_path.as_posix(),
-                "--output-dir",
-                pose_variants_dir.as_posix(),
-                "--task-id",
-                str(selected["task_id"]),
-                "--variant-id",
-                str(recovery_variant_id),
-            ],
-            label=f"Expand recovery pose variant for {scene_id}",
-        )
+        for recovery_variant_id in recovery_variant_ids:
+            run_command(
+                [
+                    "ros2",
+                    "run",
+                    "sim",
+                    "expand_pose_variants",
+                    "--layout-yaml",
+                    layout_path.as_posix(),
+                    "--task-spec",
+                    spec_path.as_posix(),
+                    "--output-dir",
+                    pose_variants_dir.as_posix(),
+                    "--task-id",
+                    str(selected["task_id"]),
+                    "--variant-id",
+                    str(recovery_variant_id),
+                ],
+                label=f"Expand recovery pose variant for {scene_id} / {recovery_variant_id}",
+            )
 
 
 def generated_usd_from_layout(layout_path: Path, isaac_root: Path) -> Path | None:
@@ -361,7 +415,10 @@ def filter_manifest(
             continue
         variant_id = str(row.get("variant_id", ""))
         keep_variants = {"nominal"}
-        if selected.get("recovery_variant_id"):
+        recovery_variant_ids = selected.get("recovery_variant_ids")
+        if isinstance(recovery_variant_ids, list):
+            keep_variants.update(str(item) for item in recovery_variant_ids)
+        elif selected.get("recovery_variant_id"):
             keep_variants.add(str(selected["recovery_variant_id"]))
         if variant_id not in keep_variants:
             continue
