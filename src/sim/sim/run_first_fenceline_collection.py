@@ -130,7 +130,12 @@ def has_start_delta(variant: dict[str, Any]) -> bool:
     return any(abs(float(delta.get(key, 0.0))) > 1e-9 for key in ("x_m", "y_m", "yaw_rad"))
 
 
-def choose_follow_task(spec: dict[str, Any]) -> dict[str, Any] | None:
+def scene_id_for_spec(spec_path: Path, spec: dict[str, Any]) -> str:
+    scene = spec.get("scene") if isinstance(spec.get("scene"), dict) else {}
+    return str(scene.get("scene_id") or spec.get("suite_id") or spec_path.stem)
+
+
+def choose_follow_task(spec: dict[str, Any], *, require_valid_nominal: bool = True) -> dict[str, Any] | None:
     candidates = []
     for task in spec.get("tasks", []):
         if not isinstance(task, dict):
@@ -139,7 +144,12 @@ def choose_follow_task(spec: dict[str, Any]) -> dict[str, Any] | None:
         if task_type not in FOLLOW_TASK_RANK:
             continue
         variants = task.get("trajectory_variants") or []
-        if not any(str(variant.get("variant_id", "")) == "nominal" and variant_is_valid(variant) for variant in variants):
+        has_nominal = any(
+            str(variant.get("variant_id", "")) == "nominal"
+            and ((not require_valid_nominal) or variant_is_valid(variant))
+            for variant in variants
+        )
+        if not has_nominal:
             continue
         candidates.append(task)
     if not candidates:
@@ -179,12 +189,17 @@ def choose_recovery_variant(task: dict[str, Any], scene_id: str, sample_seed: in
     )[0]
 
 
-def build_selection(valid_specs_dir: Path, sample_seed: int) -> dict[str, dict[str, Any]]:
+def build_selection(
+    valid_specs_dir: Path,
+    sample_seed: int,
+    *,
+    raw_specs_dir: Path | None = None,
+    include_unvalidated_nominal: bool = False,
+) -> dict[str, dict[str, Any]]:
     selection: dict[str, dict[str, Any]] = {}
     for spec_path in spec_paths(valid_specs_dir):
         spec = load_yaml(spec_path)
-        scene = spec.get("scene") if isinstance(spec.get("scene"), dict) else {}
-        scene_id = str(scene.get("scene_id") or spec.get("suite_id") or spec_path.stem)
+        scene_id = scene_id_for_spec(spec_path, spec)
         task = choose_follow_task(spec)
         if task is None:
             print(f"[SKIP] No valid fenceline follow task in {spec_path}", flush=True)
@@ -192,12 +207,41 @@ def build_selection(valid_specs_dir: Path, sample_seed: int) -> dict[str, dict[s
         recovery = choose_recovery_variant(task, scene_id, sample_seed)
         selection[scene_id] = {
             "spec_path": spec_path.as_posix(),
+            "planner_validation_status": "validated",
             "task_id": task.get("task_id"),
             "task_type": task.get("task_type"),
             "nominal_variant_id": "nominal",
             "recovery_variant_id": recovery.get("variant_id") if recovery else None,
         }
+    if include_unvalidated_nominal and raw_specs_dir is not None:
+        for spec_path in spec_paths(raw_specs_dir):
+            spec = load_yaml(spec_path)
+            scene_id = scene_id_for_spec(spec_path, spec)
+            if scene_id in selection:
+                continue
+            task = choose_follow_task(spec, require_valid_nominal=False)
+            if task is None:
+                print(f"[SKIP] No unvalidated fenceline follow task in {spec_path}", flush=True)
+                continue
+            selection[scene_id] = {
+                "spec_path": spec_path.as_posix(),
+                "planner_validation_status": "unvalidated",
+                "task_id": task.get("task_id"),
+                "task_type": task.get("task_type"),
+                "nominal_variant_id": "nominal",
+                "recovery_variant_id": None,
+            }
     return selection
+
+
+def prepare_manifest_input_specs(selection: dict[str, dict[str, Any]], output_dir: Path) -> Path:
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for selected in selection.values():
+        source = Path(str(selected["spec_path"]))
+        shutil.copy2(source, output_dir / source.name)
+    return output_dir
 
 
 def generated_layout_for_spec(spec_path: Path) -> Path | None:
@@ -334,12 +378,17 @@ def filter_manifest(
         collection["duration_s"] = duration_for_rollout_row(row, selected, duration_policy)
         collection["use_isaac_camera_pose_debug"] = True
         collection.setdefault("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
+        collection["planner_validation_status"] = selected.get("planner_validation_status", "validated")
         row["collection"] = collection
+        row["planner_validation_status"] = selected.get("planner_validation_status", "validated")
         rows.append(row)
 
     filtered = dict(manifest)
     filtered["source_manifest"] = manifest_all_path.as_posix()
-    filtered["selection_rule"] = "first fenceline collection: one selected follow task per layout, nominal plus one recovery variant, one non-base visual each"
+    filtered["selection_rule"] = (
+        "first fenceline collection: one selected follow task per layout; validated specs keep nominal plus one "
+        "recovery variant, unvalidated fallback specs keep nominal only; one non-base visual each"
+    )
     filtered["rollouts"] = rows
     counts = dict(filtered.get("counts", {}))
     counts.update(
@@ -462,6 +511,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variation-config", default="configs/variation_configs/variation.yaml")
     parser.add_argument("--isaac-python", default=None)
     parser.add_argument("--max-visuals-per-pose-variant", type=int, default=1)
+    parser.add_argument(
+        "--include-unvalidated-nominal",
+        action="store_true",
+        help="If a layout has no valid spec yet, include its raw task spec nominal rollout and rely on Isaac/postprocess rejection.",
+    )
     parser.add_argument("--skip-pose-usd-generation", action="store_true")
     parser.add_argument("--skip-run", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -482,6 +536,7 @@ def main() -> int:
     plots_dir = output_dir / "plots"
     manifest_all = output_dir / "manifest_all.yaml"
     manifest = output_dir / "manifest.yaml"
+    manifest_input_specs_dir = output_dir / "manifest_input_specs"
     selection_path = output_dir / "selected_tasks_and_variants.yaml"
     isaac_python = args.isaac_python or sys.executable
     duration_policy = {
@@ -545,11 +600,17 @@ def main() -> int:
         label="Validate fenceline task specs",
     )
 
-    selection = build_selection(valid_specs_dir, int(args.variant_sample_seed))
+    selection = build_selection(
+        valid_specs_dir,
+        int(args.variant_sample_seed),
+        raw_specs_dir=task_specs_dir,
+        include_unvalidated_nominal=bool(args.include_unvalidated_nominal),
+    )
     if not selection:
         raise SystemExit("No valid fenceline follow tasks selected.")
     write_yaml(selection_path, {"selection": selection})
     print(f"Wrote selected task/variant policy: {selection_path}", flush=True)
+    manifest_input_specs = prepare_manifest_input_specs(selection, manifest_input_specs_dir)
 
     expand_selected_recovery_variants(selection, pose_variants_dir)
 
@@ -569,7 +630,7 @@ def main() -> int:
             "run",
             "sim",
             "generate_collection_manifest",
-            valid_specs_dir.as_posix(),
+            manifest_input_specs.as_posix(),
             "--output",
             manifest_all.as_posix(),
             "--isaac-root",

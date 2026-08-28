@@ -32,6 +32,7 @@ from sim.run_first_fenceline_collection import (
     filter_manifest,
     generate_pose_variant_usds,
     plot_rollouts,
+    prepare_manifest_input_specs,
     run_command,
     write_yaml,
 )
@@ -53,7 +54,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variation-config", default="configs/variation_configs/variation.yaml")
     parser.add_argument("--max-visuals-per-pose-variant", type=int, default=1)
     parser.add_argument("--duration-s", type=float, default=90.0)
+    parser.add_argument("--gap-duration-s", type=float, default=120.0)
+    parser.add_argument("--corner-duration-s", type=float, default=120.0)
+    parser.add_argument("--rectangle-duration-s", type=float, default=180.0)
+    parser.add_argument("--large-perimeter-duration-s", type=float, default=260.0)
     parser.add_argument("--prepare-timeout-s", type=float, default=120.0)
+    parser.add_argument(
+        "--include-unvalidated-nominal",
+        action="store_true",
+        help="Use task_specs nominal rows for scenes that do not yet have a valid_task_specs file.",
+    )
     parser.add_argument("--skip-pose-expansion", action="store_true")
     parser.add_argument("--skip-pose-usd-generation", action="store_true")
     parser.add_argument("--skip-run", action="store_true")
@@ -73,32 +83,55 @@ def main() -> int:
     isaac_python = args.isaac_python or sys.executable
 
     valid_specs_dir = output_dir / "valid_task_specs"
+    task_specs_dir = output_dir / "task_specs"
     pose_variants_dir = output_dir / "pose_variants"
     rollouts_dir = output_dir / "rollouts"
     plots_dir = output_dir / "plots"
     manifest_all = output_dir / "manifest_all.yaml"
     manifest = output_dir / "manifest.yaml"
+    manifest_input_specs_dir = output_dir / "manifest_input_specs"
     selection_path = output_dir / "selected_tasks_and_variants.yaml"
+    duration_policy = {
+        "straight": float(args.duration_s),
+        "gap": float(args.gap_duration_s),
+        "corner": float(args.corner_duration_s),
+        "rectangle": float(args.rectangle_duration_s),
+        "large_perimeter": float(args.large_perimeter_duration_s),
+    }
 
     if not valid_specs_dir.exists():
         raise SystemExit(f"Missing validated specs directory: {valid_specs_dir}")
+    if args.include_unvalidated_nominal and not task_specs_dir.exists():
+        raise SystemExit(f"Missing raw task specs directory: {task_specs_dir}")
 
     if args.clean_downstream:
-        for path in (pose_variants_dir, rollouts_dir, plots_dir):
+        for path in (pose_variants_dir, rollouts_dir, plots_dir, manifest_input_specs_dir):
             clean_directory(path)
         for path in (manifest_all, manifest, selection_path):
             if path.exists():
                 path.unlink()
     else:
-        for path in (pose_variants_dir, rollouts_dir, plots_dir):
+        for path in (pose_variants_dir, rollouts_dir, plots_dir, manifest_input_specs_dir):
             path.mkdir(parents=True, exist_ok=True)
 
-    selection = build_selection(valid_specs_dir, int(args.variant_sample_seed))
+    selection = build_selection(
+        valid_specs_dir,
+        int(args.variant_sample_seed),
+        raw_specs_dir=task_specs_dir,
+        include_unvalidated_nominal=bool(args.include_unvalidated_nominal),
+    )
     if not selection:
         raise SystemExit("No valid fenceline follow tasks selected from valid_task_specs.")
     write_yaml(selection_path, {"selection": selection})
     print(f"Wrote selected task/variant policy: {selection_path}", flush=True)
     print(f"Selected {len(selection)} task(s).", flush=True)
+    print(
+        "Selection validation status: "
+        f"{sum(1 for item in selection.values() if item.get('planner_validation_status') == 'validated')} validated, "
+        f"{sum(1 for item in selection.values() if item.get('planner_validation_status') == 'unvalidated')} unvalidated nominal fallback",
+        flush=True,
+    )
+    manifest_input_specs = prepare_manifest_input_specs(selection, manifest_input_specs_dir)
 
     if not args.skip_pose_expansion:
         expand_selected_recovery_variants(selection, pose_variants_dir)
@@ -119,7 +152,7 @@ def main() -> int:
             "run",
             "sim",
             "generate_collection_manifest",
-            valid_specs_dir.as_posix(),
+            manifest_input_specs.as_posix(),
             "--output",
             manifest_all.as_posix(),
             "--isaac-root",
@@ -139,7 +172,7 @@ def main() -> int:
         label="Generate full first-pass manifest from existing valid specs",
     )
 
-    filtered = filter_manifest(manifest_all, manifest, selection)
+    filtered = filter_manifest(manifest_all, manifest, selection, duration_policy)
     print(f"Wrote filtered first-pass manifest: {manifest}", flush=True)
     print(f"Selected {len(filtered.get('rollouts') or [])} rollout(s).", flush=True)
     print(yaml.safe_dump(filtered.get("counts", {}), sort_keys=True), flush=True)

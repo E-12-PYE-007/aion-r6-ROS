@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from PIL import Image, ImageOps
 
 from sim.expert_trajectory_utils import (
     path_length,
@@ -100,6 +102,75 @@ def image_exists(rollout_dir: Path, record: dict[str, Any]) -> bool:
     return isinstance(image, str) and (rollout_dir / "img" / image).exists()
 
 
+def letterbox_image(image: Image.Image, size: int, fill: tuple[int, int, int] = (0, 0, 0)) -> Image.Image:
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Cannot resize image with invalid size {image.size}")
+    scale = min(size / width, size / height)
+    resized_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    resized = image.resize(resized_size, Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (size, size), fill)
+    offset = ((size - resized_size[0]) // 2, (size - resized_size[1]) // 2)
+    canvas.paste(resized, offset)
+    return canvas
+
+
+def resize_image(image: Image.Image, size: int, mode: str) -> Image.Image:
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    if mode == "letterbox":
+        return letterbox_image(image, size)
+    if mode == "center_crop":
+        width, height = image.size
+        side = min(width, height)
+        left = (width - side) // 2
+        top = (height - side) // 2
+        cropped = image.crop((left, top, left + side, top + side))
+        return cropped.resize((size, size), Image.Resampling.LANCZOS)
+    if mode == "stretch":
+        return image.resize((size, size), Image.Resampling.LANCZOS)
+    raise ValueError(f"Unsupported resize mode: {mode}")
+
+
+def copy_clean_rollout(
+    source_rollout_dir: Path,
+    export_rollout_dir: Path,
+    *,
+    image_size: int,
+    resize_mode: str,
+    overwrite: bool,
+    jpeg_quality: int,
+) -> None:
+    if export_rollout_dir.exists() and overwrite:
+        shutil.rmtree(export_rollout_dir)
+    export_rollout_dir.mkdir(parents=True, exist_ok=True)
+    image_output_dir = export_rollout_dir / "img"
+    image_output_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename in ("metadata.json", "poses.jsonl"):
+        source_path = source_rollout_dir / filename
+        if source_path.exists():
+            destination_path = export_rollout_dir / filename
+            if overwrite or not destination_path.exists():
+                shutil.copy2(source_path, destination_path)
+
+    source_img_dir = source_rollout_dir / "img"
+    if not source_img_dir.exists():
+        raise FileNotFoundError(f"{source_img_dir} is missing")
+    for source_image in sorted(source_img_dir.iterdir()):
+        if not source_image.is_file() or source_image.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+            continue
+        destination_image = image_output_dir / source_image.name
+        if destination_image.exists() and not overwrite:
+            continue
+        with Image.open(source_image) as image:
+            resized = resize_image(image, image_size, resize_mode)
+            save_kwargs: dict[str, Any] = {}
+            if destination_image.suffix.lower() in {".jpg", ".jpeg"}:
+                save_kwargs = {"quality": int(jpeg_quality), "optimize": True}
+            resized.save(destination_image, **save_kwargs)
+
+
 def load_runtime_trajectory(rollout_dir: Path) -> TimedTrajectory:
     path = rollout_dir / "runtime_planned_path.json"
     if not path.exists():
@@ -154,6 +225,7 @@ def generate_action_chunk_for_pose(
 def build_labels_for_rollout(
     rollout_dir: Path,
     *,
+    output_rollout_dir: Path | None = None,
     min_samples: int,
     overwrite: bool,
     chunk_size: int,
@@ -162,6 +234,7 @@ def build_labels_for_rollout(
     async_action_spacing_m: float,
     waypoint_convention: str,
 ) -> tuple[PostprocessResult, dict[str, Any] | None]:
+    output_dir = output_rollout_dir or rollout_dir
     metadata = load_json(rollout_dir / "metadata.json")
     records = load_jsonl(rollout_dir / "poses.jsonl")
     trajectory = load_runtime_trajectory(rollout_dir)
@@ -241,11 +314,11 @@ def build_labels_for_rollout(
         "timestamps.npy": np.asarray(timestamps, dtype=np.float32),
     }
     for filename, array in outputs.items():
-        output_path = rollout_dir / filename
+        output_path = output_dir / filename
         if overwrite or not output_path.exists():
             np.save(output_path, array)
 
-    sample_jsonl = rollout_dir / "postprocessed_samples.jsonl"
+    sample_jsonl = output_dir / "postprocessed_samples.jsonl"
     if overwrite or not sample_jsonl.exists():
         with sample_jsonl.open("w", encoding="utf-8") as f:
             for record in debug_records:
@@ -264,8 +337,11 @@ def build_labels_for_rollout(
         "waypoint_convention": waypoint_convention,
         "target_waypoints_shape": list(waypoint_array.shape),
         "target_async_actions_shape": list(async_actions.shape),
+        "image_export": {
+            "resized": output_rollout_dir is not None,
+        },
     }
-    (rollout_dir / "postprocess_label_summary.json").write_text(json.dumps(label_summary, indent=2), encoding="utf-8")
+    (output_dir / "postprocess_label_summary.json").write_text(json.dumps(label_summary, indent=2), encoding="utf-8")
 
     instruction = (
         metadata.get("language_instruction")
@@ -275,7 +351,7 @@ def build_labels_for_rollout(
     )
     manifest_record = {
         "episode_id": str(metadata.get("trajectory_name") or rollout_dir.name),
-        "root": rollout_dir.resolve().as_posix(),
+        "root": output_dir.resolve().as_posix(),
         "images": images,
         "timestamps_path": "timestamps.npy",
         "instruction": str(instruction),
@@ -343,6 +419,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input_root", type=Path, help="One rollout dir or a root containing many rollout dirs.")
     parser.add_argument("--out-manifest", type=Path, required=True, help="Final accepted-rollout JSONL manifest.")
     parser.add_argument("--summary-json", type=Path, default=None)
+    parser.add_argument(
+        "--export-root",
+        type=Path,
+        default=None,
+        help="Optional clean dataset root. Accepted rollouts are copied here with resized images and no diagnostics.",
+    )
+    parser.add_argument("--image-size", type=int, default=224, help="Square output image size for --export-root.")
+    parser.add_argument(
+        "--resize-mode",
+        choices=("letterbox", "center_crop", "stretch"),
+        default="letterbox",
+        help="Image resize strategy used for --export-root.",
+    )
+    parser.add_argument("--jpeg-quality", type=int, default=90)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--min-samples", type=int, default=20)
     parser.add_argument("--min-motion-m", type=float, default=None)
@@ -366,11 +456,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    rollouts = discover_rollouts(args.input_root.resolve())
+    input_root = args.input_root.resolve()
+    rollouts = discover_rollouts(input_root)
     if not rollouts:
         print(f"No rollout folders found under {args.input_root}")
         return 1
 
+    if args.export_root is not None:
+        args.export_root.mkdir(parents=True, exist_ok=True)
     args.out_manifest.parent.mkdir(parents=True, exist_ok=True)
     summary_path = args.summary_json or args.out_manifest.with_suffix(".summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,8 +485,21 @@ def main() -> int:
             continue
 
         try:
+            output_rollout_dir = None
+            if args.export_root is not None:
+                relative = rollout_dir.relative_to(input_root) if rollout_dir != input_root else Path(rollout_dir.name)
+                output_rollout_dir = args.export_root / relative
+                copy_clean_rollout(
+                    rollout_dir,
+                    output_rollout_dir,
+                    image_size=int(args.image_size),
+                    resize_mode=str(args.resize_mode),
+                    overwrite=bool(args.overwrite),
+                    jpeg_quality=int(args.jpeg_quality),
+                )
             result, record = build_labels_for_rollout(
                 rollout_dir,
+                output_rollout_dir=output_rollout_dir,
                 min_samples=args.min_samples,
                 overwrite=bool(args.overwrite),
                 chunk_size=int(args.chunk_size),
@@ -427,6 +533,7 @@ def main() -> int:
 
     summary = {
         "input_root": args.input_root.resolve().as_posix(),
+        "export_root": args.export_root.resolve().as_posix() if args.export_root is not None else None,
         "out_manifest": args.out_manifest.resolve().as_posix(),
         "rollouts_found": len(rollouts),
         "accepted_rollouts": len(manifest_records),
