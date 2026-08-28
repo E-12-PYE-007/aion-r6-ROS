@@ -178,7 +178,7 @@ def visual_usds_for(base_usd: Path | None, include_visual_variations: bool, incl
         if usd_path.resolve() == base_usd.resolve():
             continue
         visual_id = usd_path.stem.removeprefix(f"{prefix}_")
-        if visual_id.startswith("base__task_"):
+        if "__task_" in visual_id or "__variant_" in visual_id or visual_id.startswith("_task_"):
             continue
         variants.append((visual_id, usd_path.resolve()))
     return variants or [("base", base_usd)]

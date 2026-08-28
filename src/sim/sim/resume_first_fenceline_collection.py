@@ -176,6 +176,21 @@ def main() -> int:
     print(f"Wrote filtered first-pass manifest: {manifest}", flush=True)
     print(f"Selected {len(filtered.get('rollouts') or [])} rollout(s).", flush=True)
     print(yaml.safe_dump(filtered.get("counts", {}), sort_keys=True), flush=True)
+    all_rows = load_yaml(manifest_all).get("rollouts") or []
+    filtered_rows = filtered.get("rollouts") or []
+    all_recovery = sum(1 for row in all_rows if str(row.get("variant_id") or "").startswith("recovery_"))
+    filtered_recovery = sum(1 for row in filtered_rows if str(row.get("variant_id") or "").startswith("recovery_"))
+    bad_visuals = sum("__variant_recovery" in str(row.get("visual_id") or "") for row in filtered_rows)
+    print(
+        "Manifest sanity: "
+        f"manifest_all_recovery={all_recovery} filtered_recovery={filtered_recovery} "
+        f"bad_recovery_visual_ids={bad_visuals}",
+        flush=True,
+    )
+    if all_recovery > 0 and filtered_recovery == 0:
+        raise RuntimeError("manifest_all.yaml contains recovery rows, but manifest.yaml filtered all of them out.")
+    if bad_visuals > 0:
+        raise RuntimeError("manifest.yaml contains recovery pose USDs misclassified as visual_id rows.")
 
     run_command(
         ["ros2", "run", "sim", "summarize_collection_manifest", manifest.as_posix()],
