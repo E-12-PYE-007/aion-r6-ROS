@@ -188,12 +188,18 @@ def visual_usds_for(base_usd: Path | None, include_visual_variations: bool, incl
 
     if "__task_" in stem and "__variant_" in stem:
         base_prefix, task_suffix = stem.split("__task_", 1)
+        scene_prefix = base_prefix.removesuffix("_base")
         task_suffix = "__task_" + task_suffix
 
         # Pattern produced when visual variation is generated from the recovery pose USD:
         #   <pose_variant_stem>_<visual>.usd
         for usd_path in sorted(directory.glob(f"{stem}_*.usd")):
             append_visual(usd_path.stem.removeprefix(f"{stem}_"), usd_path)
+
+        # Pattern produced by the existing Isaac visual variants for recovery poses:
+        #   <base_scene_without_base>__task_<task>__variant_<recovery>_<visual>.usd
+        for usd_path in sorted(directory.glob(f"{scene_prefix}{task_suffix}_*.usd")):
+            append_visual(usd_path.stem.removeprefix(f"{scene_prefix}{task_suffix}_"), usd_path)
 
         # Pattern produced when the visual name is inserted before the task/variant suffix:
         #   <base_scene>_<visual>__task_<task>__variant_<recovery>.usd
