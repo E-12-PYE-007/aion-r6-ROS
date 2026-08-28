@@ -31,6 +31,7 @@ from sim.run_first_fenceline_collection import (
     expand_selected_recovery_variants,
     filter_manifest,
     generate_pose_variant_usds,
+    load_yaml,
     plot_rollouts,
     prepare_manifest_input_specs,
     run_command,
