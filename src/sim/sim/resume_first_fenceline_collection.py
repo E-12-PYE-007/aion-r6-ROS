@@ -200,8 +200,6 @@ def main() -> int:
             isaac_root.as_posix(),
             "--base-dir",
             rollouts_dir.as_posix(),
-            "--duration-s",
-            str(args.duration_s),
             "--prepare-timeout-s",
             str(args.prepare_timeout_s),
             *(["--dry-run"] if args.dry_run else []),
