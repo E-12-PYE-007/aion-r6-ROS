@@ -82,10 +82,23 @@ def normalize_name(value: str) -> str:
     return value.strip("_") or "unnamed"
 
 
-def select_fenceline_layouts(layout_root: Path, exclude_regex: str | None, limit: int | None) -> list[Path]:
+def select_fenceline_layouts(
+    layout_root: Path,
+    exclude_regex: str | None,
+    limit: int | None,
+    layout_order: str = "default",
+) -> list[Path]:
     pattern = re.compile(exclude_regex) if exclude_regex else None
     selected: list[Path] = []
-    for path in sorted([*layout_root.rglob("*.yaml"), *layout_root.rglob("*.yml")]):
+    paths = [*layout_root.rglob("*.yaml"), *layout_root.rglob("*.yml")]
+    if layout_order == "reverse":
+        paths = sorted(paths, reverse=True)
+    elif layout_order == "gaps-last":
+        paths = sorted(paths, key=lambda path: ("fence_gap" in path.as_posix(), path.as_posix()))
+    else:
+        paths = sorted(paths)
+
+    for path in paths:
         if not path.is_file():
             continue
         relative = path.resolve().relative_to(layout_root.resolve()).as_posix()
@@ -686,6 +699,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--isaac-root", type=Path, default=Path("~/isaac_files"))
     parser.add_argument("--output-dir", type=Path, default=Path("~/sim_datasets/first_fenceline_collection"))
     parser.add_argument("--exclude-layout-regex", default=r"corridor|jetbot")
+    parser.add_argument(
+        "--layout-order",
+        choices=("default", "reverse", "gaps-last"),
+        default="default",
+        help="Validation/collection order for selected layouts. Use gaps-last to leave fence_gap layouts until the end.",
+    )
     parser.add_argument("--limit-layouts", type=int, default=None)
     parser.add_argument("--variant-sample-seed", type=int, default=11)
     parser.add_argument("--visual-sample-seed", type=int, default=23)
@@ -770,7 +789,7 @@ def main() -> int:
     for path in (selected_layouts_dir, task_specs_dir, valid_specs_dir, pose_variants_dir, rollouts_dir, plots_dir):
         path.mkdir(parents=True, exist_ok=True)
 
-    layouts = select_fenceline_layouts(layout_root, args.exclude_layout_regex, args.limit_layouts)
+    layouts = select_fenceline_layouts(layout_root, args.exclude_layout_regex, args.limit_layouts, args.layout_order)
     if not layouts:
         raise SystemExit(f"No fenceline layout YAMLs selected from {layout_root}")
     copy_layouts(layouts, selected_layouts_dir)
