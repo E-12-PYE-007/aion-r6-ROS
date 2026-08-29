@@ -21,6 +21,8 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from sim.expert_trajectory_utils import (
+    find_task,
+    load_yaml,
     path_length,
     project_progress_near,
     sample_distance_action_target,
@@ -28,7 +30,7 @@ from sim.expert_trajectory_utils import (
 )
 from sim.export_edge_training_manifest import WAYPOINT_CONVENTIONS, waypoints_to_async_actions
 from sim.trajectory_profile import TimedTrajectory
-from sim.validate_collected_rollout import ValidationResult, validate_rollout_dir
+from sim.validate_collected_rollout import ValidationResult, resolve_existing_path, validate_rollout_dir
 
 
 @dataclass
@@ -40,6 +42,13 @@ class PostprocessResult:
     reason: str | None = None
     warnings: list[str] | None = None
     metrics: dict[str, Any] | None = None
+
+
+@dataclass
+class SegmentSelection:
+    records: list[dict[str, Any]]
+    diagnostics: list[dict[str, Any]]
+    metrics: dict[str, Any]
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -132,10 +141,263 @@ def resize_image(image: Image.Image, size: int, mode: str) -> Image.Image:
     raise ValueError(f"Unsupported resize mode: {mode}")
 
 
+def closest_point_and_distance(polyline: list[np.ndarray], point: np.ndarray) -> tuple[np.ndarray, float]:
+    if not polyline:
+        return point.copy(), 0.0
+    if len(polyline) == 1:
+        nearest = polyline[0]
+        return nearest, float(np.linalg.norm(point - nearest))
+    best_point = polyline[0]
+    best_distance = math.inf
+    for index in range(len(polyline) - 1):
+        start = polyline[index]
+        end = polyline[index + 1]
+        segment = end - start
+        length_sq = float(np.dot(segment, segment))
+        if length_sq <= 1e-9:
+            candidate = start
+        else:
+            t = float(np.dot(point - start, segment) / length_sq)
+            candidate = start + segment * max(0.0, min(1.0, t))
+        distance = float(np.linalg.norm(point - candidate))
+        if distance < best_distance:
+            best_distance = distance
+            best_point = candidate
+    return best_point, best_distance
+
+
+def transformed_point(point: list[float] | tuple[float, ...], flip_y: bool) -> np.ndarray:
+    x = float(point[0])
+    y = float(point[1])
+    return np.asarray([x, -y if flip_y else y], dtype=np.float64)
+
+
+def signed_side(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    length = float(np.linalg.norm(segment))
+    if length <= 1e-9:
+        return 0.0
+    rel = point - start
+    return float((segment[0] * rel[1] - segment[1] * rel[0]) / length)
+
+
+def distance_to_segment(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    length_sq = float(np.dot(segment, segment))
+    if length_sq <= 1e-9:
+        return float(np.linalg.norm(point - start))
+    t = float(np.dot(point - start, segment) / length_sq)
+    nearest = start + segment * max(0.0, min(1.0, t))
+    return float(np.linalg.norm(point - nearest))
+
+
+def target_fence_segments(rollout_dir: Path, metadata: dict[str, Any]) -> tuple[list[tuple[np.ndarray, np.ndarray]], float]:
+    structured_task = metadata.get("structured_task") if isinstance(metadata.get("structured_task"), dict) else {}
+    task_type = str(structured_task.get("task_type", ""))
+    if task_type not in {"follow_fence", "follow_fence_sequence"}:
+        return [], 0.0
+
+    task_spec_path = resolve_existing_path(str(metadata.get("task_spec", "")), rollout_dir)
+    if task_spec_path is None:
+        return [], 0.0
+
+    try:
+        task_spec = load_yaml(task_spec_path)
+        task_id = str(metadata.get("task_id") or "")
+        task = find_task(task_spec, task_id)
+        scene_path = Path(task_spec["scene"]["source_yaml"])
+        scene = load_yaml(scene_path)
+    except Exception:
+        return [], 0.0
+
+    target_names = structured_task.get("target_fences")
+    if not isinstance(target_names, list) or not target_names:
+        target_fence = structured_task.get("target_fence")
+        target_names = [target_fence] if isinstance(target_fence, str) else []
+    target_name_set = {str(name) for name in target_names}
+    flip_scene_y = bool(metadata.get("flip_scene_y", False))
+    expected_path_side = str(structured_task.get("path_side", ""))
+    expected_sign = 1.0 if expected_path_side == "left" else -1.0 if expected_path_side == "right" else 0.0
+    segments = []
+    for fence in scene.get("fences", []):
+        if fence.get("name") not in target_name_set:
+            continue
+        segments.append((transformed_point(fence["start"], flip_scene_y), transformed_point(fence["end"], flip_scene_y)))
+    return segments, expected_sign
+
+
+def image_is_nonblack(rollout_dir: Path, image_name: str, *, min_mean: float, min_max: float) -> bool:
+    try:
+        with Image.open(rollout_dir / "img" / image_name) as image:
+            image = image.convert("RGB")
+            pixels = np.asarray(image, dtype=np.uint8)
+    except Exception:
+        return False
+    return float(pixels.mean()) >= min_mean and float(pixels.max()) >= min_max
+
+
+def choose_longest_valid_segment(
+    rollout_dir: Path,
+    records: list[dict[str, Any]],
+    trajectory: TimedTrajectory,
+    metadata: dict[str, Any],
+    *,
+    enabled: bool,
+    max_tracking_error_m: float,
+    min_progress_m: float,
+    min_samples: int,
+    min_target_fence_clearance_m: float | None,
+    enforce_fence_side: bool,
+    check_black_images: bool,
+    black_image_min_mean: float,
+    black_image_min_max: float,
+) -> SegmentSelection:
+    if not enabled:
+        return SegmentSelection(
+            records=records,
+            diagnostics=[],
+            metrics={
+                "enabled": False,
+                "input_samples": len(records),
+                "selected_samples": len(records),
+                "selected_start_index": 0,
+                "selected_end_index": max(len(records) - 1, -1),
+            },
+        )
+
+    fence_segments, expected_side_sign = target_fence_segments(rollout_dir, metadata)
+    candidates: list[dict[str, Any]] = []
+    previous_progress: float | None = None
+    invalid_reasons: dict[str, int] = {}
+
+    for index, record in enumerate(records):
+        reason: str | None = None
+        pose = record_pose(record)
+        time_s = record_time(record)
+        image_name = record.get("image")
+        if pose is None:
+            reason = "missing_pose"
+        elif time_s is None:
+            reason = "missing_time"
+        elif not isinstance(image_name, str) or not image_exists(rollout_dir, record):
+            reason = "missing_image"
+        position = np.zeros(2, dtype=np.float64)
+        yaw = 0.0
+        progress = 0.0
+        tracking_error = math.inf
+        fence_distance: float | None = None
+        side_distance: float | None = None
+        if reason is None and pose is not None:
+            position, yaw = pose
+            progress = project_progress_near(
+                trajectory.path,
+                position,
+                previous_progress,
+                max_backward_m=0.5,
+                max_forward_m=2.0,
+            )
+            progress = max(float(previous_progress or 0.0), float(progress))
+            previous_progress = progress
+            _, tracking_error = closest_point_and_distance(trajectory.path, position)
+            if tracking_error > max_tracking_error_m:
+                reason = "tracking_error"
+            if reason is None and fence_segments:
+                nearest_distance = math.inf
+                nearest_side = 0.0
+                for start, end in fence_segments:
+                    distance = distance_to_segment(position, start, end)
+                    if distance < nearest_distance:
+                        nearest_distance = distance
+                        nearest_side = signed_side(position, start, end)
+                fence_distance = nearest_distance
+                side_distance = nearest_side
+                if min_target_fence_clearance_m is not None and fence_distance < min_target_fence_clearance_m:
+                    reason = "target_fence_clearance"
+                elif enforce_fence_side and expected_side_sign and fence_distance < 1.8:
+                    if side_distance * expected_side_sign < 0.15:
+                        reason = "target_fence_side"
+            if reason is None and check_black_images and isinstance(image_name, str):
+                if not image_is_nonblack(
+                    rollout_dir,
+                    image_name,
+                    min_mean=black_image_min_mean,
+                    min_max=black_image_min_max,
+                ):
+                    reason = "black_image"
+        if reason is not None:
+            invalid_reasons[reason] = invalid_reasons.get(reason, 0) + 1
+        candidates.append(
+            {
+                "index": index,
+                "valid": reason is None,
+                "reason": reason,
+                "progress_m": progress,
+                "tracking_error_m": tracking_error,
+                "fence_distance_m": fence_distance,
+                "side_distance_m": side_distance,
+                "record": record,
+            }
+        )
+
+    best: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if candidate["valid"]:
+            current.append(candidate)
+            continue
+        if segment_score(current) > segment_score(best):
+            best = current
+        current = []
+    if segment_score(current) > segment_score(best):
+        best = current
+
+    if not best:
+        selected_records: list[dict[str, Any]] = []
+        start_index = -1
+        end_index = -1
+        progress_delta = 0.0
+    else:
+        selected_records = [candidate["record"] for candidate in best]
+        start_index = int(best[0]["index"])
+        end_index = int(best[-1]["index"])
+        progress_delta = float(best[-1]["progress_m"] - best[0]["progress_m"])
+
+    accepted_segment = len(selected_records) >= min_samples and progress_delta >= min_progress_m
+    metrics = {
+        "enabled": True,
+        "accepted_segment": accepted_segment,
+        "input_samples": len(records),
+        "selected_samples": len(selected_records),
+        "selected_start_index": start_index,
+        "selected_end_index": end_index,
+        "selected_progress_m": progress_delta,
+        "min_required_progress_m": min_progress_m,
+        "min_required_samples": min_samples,
+        "max_tracking_error_m": max_tracking_error_m,
+        "min_target_fence_clearance_m": min_target_fence_clearance_m,
+        "enforce_fence_side": enforce_fence_side,
+        "invalid_reasons": invalid_reasons,
+        "selected_max_tracking_error_m": max((float(c["tracking_error_m"]) for c in best), default=0.0),
+        "selected_min_target_fence_distance_m": min(
+            (float(c["fence_distance_m"]) for c in best if c["fence_distance_m"] is not None),
+            default=None,
+        ),
+    }
+    return SegmentSelection(records=selected_records, diagnostics=candidates, metrics=metrics)
+
+
+def segment_score(segment: list[dict[str, Any]]) -> tuple[float, int]:
+    if not segment:
+        return (0.0, 0)
+    progress = float(segment[-1]["progress_m"] - segment[0]["progress_m"])
+    return (progress, len(segment))
+
+
 def copy_clean_rollout(
     source_rollout_dir: Path,
     export_rollout_dir: Path,
     *,
+    records: list[dict[str, Any]] | None = None,
     image_size: int,
     resize_mode: str,
     overwrite: bool,
@@ -147,18 +409,35 @@ def copy_clean_rollout(
     image_output_dir = export_rollout_dir / "img"
     image_output_dir.mkdir(parents=True, exist_ok=True)
 
-    for filename in ("metadata.json", "poses.jsonl"):
-        source_path = source_rollout_dir / filename
-        if source_path.exists():
-            destination_path = export_rollout_dir / filename
-            if overwrite or not destination_path.exists():
-                shutil.copy2(source_path, destination_path)
+    metadata_source = source_rollout_dir / "metadata.json"
+    if metadata_source.exists():
+        metadata_destination = export_rollout_dir / "metadata.json"
+        if overwrite or not metadata_destination.exists():
+            shutil.copy2(metadata_source, metadata_destination)
+
+    if records is None:
+        poses_source = source_rollout_dir / "poses.jsonl"
+        if poses_source.exists():
+            poses_destination = export_rollout_dir / "poses.jsonl"
+            if overwrite or not poses_destination.exists():
+                shutil.copy2(poses_source, poses_destination)
+    else:
+        poses_destination = export_rollout_dir / "poses.jsonl"
+        if overwrite or not poses_destination.exists():
+            with poses_destination.open("w", encoding="utf-8") as f:
+                for record in records:
+                    f.write(json.dumps(record) + "\n")
 
     source_img_dir = source_rollout_dir / "img"
     if not source_img_dir.exists():
         raise FileNotFoundError(f"{source_img_dir} is missing")
+    selected_images = None
+    if records is not None:
+        selected_images = {str(record.get("image")) for record in records if isinstance(record.get("image"), str)}
     for source_image in sorted(source_img_dir.iterdir()):
         if not source_image.is_file() or source_image.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+            continue
+        if selected_images is not None and source_image.name not in selected_images:
             continue
         destination_image = image_output_dir / source_image.name
         if destination_image.exists() and not overwrite:
@@ -233,11 +512,64 @@ def build_labels_for_rollout(
     waypoint_spacing_m: float,
     async_action_spacing_m: float,
     waypoint_convention: str,
+    segment_filter: bool,
+    min_segment_progress_m: float,
+    max_segment_tracking_error_m: float,
+    min_segment_target_fence_clearance_m: float | None,
+    enforce_segment_fence_side: bool,
+    check_segment_black_images: bool,
+    black_image_min_mean: float,
+    black_image_min_max: float,
+    image_size: int,
+    resize_mode: str,
+    jpeg_quality: int,
 ) -> tuple[PostprocessResult, dict[str, Any] | None]:
     output_dir = output_rollout_dir or rollout_dir
     metadata = load_json(rollout_dir / "metadata.json")
     records = load_jsonl(rollout_dir / "poses.jsonl")
     trajectory = load_runtime_trajectory(rollout_dir)
+    segment = choose_longest_valid_segment(
+        rollout_dir,
+        records,
+        trajectory,
+        metadata,
+        enabled=segment_filter,
+        max_tracking_error_m=max_segment_tracking_error_m,
+        min_progress_m=min_segment_progress_m,
+        min_samples=min_samples,
+        min_target_fence_clearance_m=min_segment_target_fence_clearance_m,
+        enforce_fence_side=enforce_segment_fence_side,
+        check_black_images=check_segment_black_images,
+        black_image_min_mean=black_image_min_mean,
+        black_image_min_max=black_image_min_max,
+    )
+    if segment_filter and not bool(segment.metrics.get("accepted_segment")):
+        return (
+            PostprocessResult(
+                rollout_dir=rollout_dir,
+                accepted=False,
+                sample_count=int(segment.metrics.get("selected_samples", 0)),
+                skipped_samples=len(records) - int(segment.metrics.get("selected_samples", 0)),
+                reason=(
+                    "no clean segment met postprocess thresholds "
+                    f"({segment.metrics.get('selected_samples', 0)} samples, "
+                    f"{float(segment.metrics.get('selected_progress_m', 0.0)):.3f}m progress)"
+                ),
+                metrics={"segment": segment.metrics},
+            ),
+            None,
+        )
+    records = segment.records
+    if output_rollout_dir is not None:
+        copy_clean_rollout(
+            rollout_dir,
+            output_rollout_dir,
+            records=records,
+            image_size=image_size,
+            resize_mode=resize_mode,
+            overwrite=overwrite,
+            jpeg_quality=jpeg_quality,
+        )
 
     images: list[str] = []
     timestamps: list[float] = []
@@ -340,8 +672,27 @@ def build_labels_for_rollout(
         "image_export": {
             "resized": output_rollout_dir is not None,
         },
+        "segment": segment.metrics,
     }
     (output_dir / "postprocess_label_summary.json").write_text(json.dumps(label_summary, indent=2), encoding="utf-8")
+    (output_dir / "postprocess_segment_summary.json").write_text(
+        json.dumps(
+            {
+                "rollout_dir": rollout_dir.as_posix(),
+                "segment": segment.metrics,
+                "sample_diagnostics": [
+                    {
+                        key: value
+                        for key, value in diagnostic.items()
+                        if key != "record"
+                    }
+                    for diagnostic in segment.diagnostics
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     instruction = (
         metadata.get("language_instruction")
@@ -442,6 +793,46 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
     parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
+    parser.add_argument(
+        "--no-segment-filter",
+        action="store_true",
+        help="Disable longest-clean-segment filtering and require the whole rollout to pass.",
+    )
+    parser.add_argument(
+        "--no-salvage-failed-rollouts",
+        action="store_true",
+        help="Reject rollouts that fail whole-rollout validation instead of trying to keep a clean segment.",
+    )
+    parser.add_argument(
+        "--min-segment-progress-m",
+        type=float,
+        default=2.0,
+        help="Minimum reference-path progress required for a salvaged segment.",
+    )
+    parser.add_argument(
+        "--max-segment-tracking-error-m",
+        type=float,
+        default=1.25,
+        help="Maximum distance from the runtime planned path for samples kept in a segment.",
+    )
+    parser.add_argument(
+        "--min-segment-target-fence-clearance-m",
+        type=float,
+        default=0.65,
+        help="Minimum center distance from target fence for samples kept in a segment.",
+    )
+    parser.add_argument(
+        "--no-enforce-segment-fence-side",
+        action="store_true",
+        help="Do not reject segment samples that cross to the wrong side of the target fence.",
+    )
+    parser.add_argument(
+        "--no-segment-black-image-check",
+        action="store_true",
+        help="Do not check each kept segment image for all-black frames.",
+    )
+    parser.add_argument("--black-image-min-mean", type=float, default=2.0)
+    parser.add_argument("--black-image-min-max", type=float, default=8.0)
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--first-preview-m", type=float, default=0.35)
     parser.add_argument("--waypoint-spacing-m", type=float, default=0.18)
@@ -472,7 +863,7 @@ def main() -> int:
     results: list[PostprocessResult] = []
     for rollout_dir in rollouts:
         validation = validate_for_final_dataset(rollout_dir, args)
-        if not validation.valid:
+        if not validation.valid and (args.no_segment_filter or args.no_salvage_failed_rollouts):
             results.append(
                 PostprocessResult(
                     rollout_dir=rollout_dir,
@@ -489,14 +880,6 @@ def main() -> int:
             if args.export_root is not None:
                 relative = rollout_dir.relative_to(input_root) if rollout_dir != input_root else Path(rollout_dir.name)
                 output_rollout_dir = args.export_root / relative
-                copy_clean_rollout(
-                    rollout_dir,
-                    output_rollout_dir,
-                    image_size=int(args.image_size),
-                    resize_mode=str(args.resize_mode),
-                    overwrite=bool(args.overwrite),
-                    jpeg_quality=int(args.jpeg_quality),
-                )
             result, record = build_labels_for_rollout(
                 rollout_dir,
                 output_rollout_dir=output_rollout_dir,
@@ -507,6 +890,21 @@ def main() -> int:
                 waypoint_spacing_m=float(args.waypoint_spacing_m),
                 async_action_spacing_m=float(args.async_action_spacing_m),
                 waypoint_convention=str(args.waypoint_convention),
+                segment_filter=not bool(args.no_segment_filter),
+                min_segment_progress_m=float(args.min_segment_progress_m),
+                max_segment_tracking_error_m=float(args.max_segment_tracking_error_m),
+                min_segment_target_fence_clearance_m=(
+                    None
+                    if args.min_segment_target_fence_clearance_m is None
+                    else float(args.min_segment_target_fence_clearance_m)
+                ),
+                enforce_segment_fence_side=not bool(args.no_enforce_segment_fence_side),
+                check_segment_black_images=not bool(args.no_segment_black_image_check),
+                black_image_min_mean=float(args.black_image_min_mean),
+                black_image_min_max=float(args.black_image_min_max),
+                image_size=int(args.image_size),
+                resize_mode=str(args.resize_mode),
+                jpeg_quality=int(args.jpeg_quality),
             )
         except Exception as exc:
             result = PostprocessResult(
