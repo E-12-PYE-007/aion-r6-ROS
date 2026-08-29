@@ -715,6 +715,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-max-iterations", type=int, default=None)
     parser.add_argument("--validation-subgoal-spacing-m", type=float, default=None)
     parser.add_argument(
+        "--validation-per-spec-timeout-s",
+        type=float,
+        default=480.0,
+        help="For selected validation, mark one spec invalid and continue if it exceeds this timeout. 0 disables.",
+    )
+    parser.add_argument(
         "--validation-full-planner-fallback",
         action="store_true",
         help="When using selected validation, retry fast-planner failures with full planner settings.",
@@ -807,6 +813,8 @@ def main() -> int:
         validation_command.extend(["--planner-max-iterations", str(args.validation_max_iterations)])
     if args.validation_subgoal_spacing_m is not None:
         validation_command.extend(["--planner-subgoal-spacing-m", str(args.validation_subgoal_spacing_m)])
+    if args.validation_mode == "selected":
+        validation_command.extend(["--per-spec-timeout-s", str(args.validation_per_spec_timeout_s)])
     if args.validation_mode == "selected" and args.validation_full_planner_fallback:
         validation_command.append("--full-planner-fallback")
     run_command(

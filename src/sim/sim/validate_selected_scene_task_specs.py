@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,30 @@ def write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         yaml.dump(data, f, Dumper=NoAliasDumper, sort_keys=False, default_flow_style=False)
+
+
+class PerSpecTimeout(RuntimeError):
+    pass
+
+
+def run_with_timeout(timeout_s: float | None, func, *args, **kwargs):
+    if timeout_s is None or timeout_s <= 0.0:
+        return func(*args, **kwargs)
+    if not hasattr(signal, "SIGALRM"):
+        return func(*args, **kwargs)
+
+    def handle_timeout(signum, frame):
+        raise PerSpecTimeout(f"validation exceeded per-spec timeout of {timeout_s:.1f}s")
+
+    previous_handler = signal.signal(signal.SIGALRM, handle_timeout)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, float(timeout_s))
+    try:
+        return func(*args, **kwargs)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0.0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
 
 def stable_key(seed: int, *parts: object) -> str:
@@ -239,6 +264,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-yaw-resolution-deg", type=float, default=None)
     parser.add_argument("--planner-max-iterations", type=int, default=None)
     parser.add_argument("--planner-subgoal-spacing-m", type=float, default=None)
+    parser.add_argument(
+        "--per-spec-timeout-s",
+        type=float,
+        default=0.0,
+        help="Skip a single spec if validation takes longer than this many seconds. 0 disables the timeout.",
+    )
     parser.add_argument("--variant-sample-seed", type=int, default=11)
     parser.add_argument("--flip-isaac-y", action="store_true")
     parser.add_argument(
@@ -277,16 +308,24 @@ def main() -> None:
             print(f"{spec_path}: skipped; selected-validation output already exists at {output_path}", flush=True)
             continue
 
-        spec, valid_tasks, invalid_tasks = validate_selected_spec(
-            spec_path,
-            max_start_distance_m=float(args.max_start_distance_m),
-            check_expert_support=not bool(args.skip_expert_support_check),
-            check_planner=bool(args.check_planner),
-            flip_isaac_y=bool(args.flip_isaac_y),
-            planner_overrides=planner_overrides,
-            sample_seed=int(args.variant_sample_seed),
-            full_planner_fallback=bool(args.full_planner_fallback),
-        )
+        try:
+            spec, valid_tasks, invalid_tasks = run_with_timeout(
+                float(args.per_spec_timeout_s),
+                validate_selected_spec,
+                spec_path,
+                max_start_distance_m=float(args.max_start_distance_m),
+                check_expert_support=not bool(args.skip_expert_support_check),
+                check_planner=bool(args.check_planner),
+                flip_isaac_y=bool(args.flip_isaac_y),
+                planner_overrides=planner_overrides,
+                sample_seed=int(args.variant_sample_seed),
+                full_planner_fallback=bool(args.full_planner_fallback),
+            )
+        except PerSpecTimeout as exc:
+            spec = load_yaml(spec_path)
+            valid_tasks = []
+            invalid_tasks = [{"task": {}, "errors": [str(exc)]}]
+            print(f"{spec_path}: timed out after {float(args.per_spec_timeout_s):.1f}s", flush=True)
         total_valid += len(valid_tasks)
         total_invalid += len(invalid_tasks)
         if invalid_tasks:
