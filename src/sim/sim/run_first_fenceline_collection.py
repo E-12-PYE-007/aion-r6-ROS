@@ -291,20 +291,16 @@ def build_selection(
         if task is None:
             print(f"[SKIP] No valid fenceline follow task in {spec_path}", flush=True)
             continue
+        # Treat valid_task_specs as the source of truth. If selected validation
+        # trimmed the task to nominal + one start + one heading recovery, do not
+        # pull extra recovery variants back in from raw task_specs here.
         recovery_spec_path = spec_path
         recovery_task = task
-        raw_match = raw_specs.get(scene_id)
-        if raw_match is not None:
-            raw_spec_path, raw_spec = raw_match
-            raw_task = task_by_id(raw_spec, str(task.get("task_id")))
-            if raw_task is not None:
-                recovery_spec_path = raw_spec_path
-                recovery_task = raw_task
         recoveries = choose_recovery_variants_by_kind(
             recovery_task,
             scene_id,
             sample_seed,
-            require_valid=(recovery_spec_path == spec_path),
+            require_valid=True,
         )
         recovery_ids = [str(recovery.get("variant_id")) for recovery in recoveries if recovery.get("variant_id")]
         selection[scene_id] = {
@@ -702,8 +698,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validation-planner-preset",
         choices=("full", "fast"),
-        default="full",
+        default="fast",
         help="Planner validation preset passed to validate_scene_task_specs.",
+    )
+    parser.add_argument(
+        "--validation-mode",
+        choices=("selected", "all"),
+        default="selected",
+        help=(
+            "'selected' validates only the one task and deterministic nominal/start/heading variants used by this "
+            "collection; 'all' runs the older exhaustive task-spec validator."
+        ),
     )
     parser.add_argument("--validation-grid-resolution-m", type=float, default=None)
     parser.add_argument("--validation-yaw-resolution-deg", type=float, default=None)
@@ -779,7 +784,7 @@ def main() -> int:
             "ros2",
             "run",
             "sim",
-            "validate_scene_task_specs",
+            "validate_selected_scene_task_specs" if args.validation_mode == "selected" else "validate_scene_task_specs",
             task_specs_dir.as_posix(),
             "--check-planner",
             "--planner-speed-preset",
