@@ -171,6 +171,27 @@ def ordered_spec_paths(directory: Path, layout_order: str) -> list[Path]:
     return sorted(paths)
 
 
+def validation_timeout_marker_path(timeout_dir: Path, spec_path: Path) -> Path:
+    return timeout_dir / f"{spec_path.stem}.timeout"
+
+
+def write_validation_timeout_marker(timeout_dir: Path, spec_path: Path, timeout_s: float) -> None:
+    marker = validation_timeout_marker_path(timeout_dir, spec_path)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "task_spec": spec_path.as_posix(),
+                "timeout_s": float(timeout_s),
+                "reason": "selected validation exceeded per-spec timeout",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def variant_is_valid(variant: dict[str, Any]) -> bool:
     validation = variant.get("planner_validation")
     return not isinstance(validation, dict) or bool(validation.get("valid", False))
@@ -871,6 +892,7 @@ def main() -> int:
     selected_layouts_dir = output_dir / "selected_layouts"
     task_specs_dir = output_dir / "task_specs"
     valid_specs_dir = output_dir / "valid_task_specs"
+    validation_timeouts_dir = output_dir / "validation_timeouts"
     pose_variants_dir = output_dir / "pose_variants"
     rollouts_dir = output_dir / "rollouts"
     plots_dir = output_dir / "plots"
@@ -890,7 +912,15 @@ def main() -> int:
 
     if not args.no_clean:
         clean_output_dir(output_dir)
-    for path in (selected_layouts_dir, task_specs_dir, valid_specs_dir, pose_variants_dir, rollouts_dir, plots_dir):
+    for path in (
+        selected_layouts_dir,
+        task_specs_dir,
+        valid_specs_dir,
+        validation_timeouts_dir,
+        pose_variants_dir,
+        rollouts_dir,
+        plots_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
     layouts = select_fenceline_layouts(layout_root, args.exclude_layout_regex, args.limit_layouts, args.layout_order)
@@ -942,14 +972,24 @@ def main() -> int:
     if args.validation_mode == "selected":
         for spec_path in ordered_spec_paths(task_specs_dir, args.layout_order):
             output_path = valid_specs_dir / spec_path.name
+            timeout_marker = validation_timeout_marker_path(validation_timeouts_dir, spec_path)
             if output_path.exists():
                 print(f"[SKIP] Existing selected validation output: {output_path}", flush=True)
                 continue
-            run_command_with_timeout(
+            if timeout_marker.exists():
+                print(f"[SKIP] Existing validation timeout marker: {timeout_marker}", flush=True)
+                continue
+            result = run_command_with_timeout(
                 [*validation_command_base, spec_path.as_posix(), *validation_args],
                 label=f"Validate selected fenceline task spec {spec_path.name}",
                 timeout_s=float(args.validation_per_spec_timeout_s),
             )
+            if result.returncode == 124:
+                write_validation_timeout_marker(
+                    validation_timeouts_dir,
+                    spec_path,
+                    float(args.validation_per_spec_timeout_s),
+                )
     else:
         run_command(
             [*validation_command_base, task_specs_dir.as_posix(), *validation_args],
