@@ -714,6 +714,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-yaw-resolution-deg", type=float, default=None)
     parser.add_argument("--validation-max-iterations", type=int, default=None)
     parser.add_argument("--validation-subgoal-spacing-m", type=float, default=None)
+    parser.add_argument(
+        "--validation-full-planner-fallback",
+        action="store_true",
+        help="When using selected validation, retry fast-planner failures with full planner settings.",
+    )
     parser.add_argument("--variation-config", default="configs/variation_configs/variation.yaml")
     parser.add_argument("--isaac-python", default=None)
     parser.add_argument("--max-visuals-per-pose-variant", type=int, default=1)
@@ -802,6 +807,8 @@ def main() -> int:
         validation_command.extend(["--planner-max-iterations", str(args.validation_max_iterations)])
     if args.validation_subgoal_spacing_m is not None:
         validation_command.extend(["--planner-subgoal-spacing-m", str(args.validation_subgoal_spacing_m)])
+    if args.validation_mode == "selected" and args.validation_full_planner_fallback:
+        validation_command.append("--full-planner-fallback")
     run_command(
         validation_command,
         label="Validate fenceline task specs",

@@ -143,6 +143,7 @@ def validate_selected_spec(
     flip_isaac_y: bool,
     planner_overrides: dict[str, Any],
     sample_seed: int,
+    full_planner_fallback: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     spec = load_yaml(spec_path)
     scene_yaml = Path(spec["scene"]["source_yaml"])
@@ -161,6 +162,7 @@ def validate_selected_spec(
     valid_variants: list[dict[str, Any]] = []
     invalid_variants: list[str] = []
     for variant in selected_variants(task, scene_id, sample_seed):
+        retried_with_full_planner = False
         if check_planner:
             accepted, reason, metrics = planner_accepts_variant(
                 scene,
@@ -170,6 +172,23 @@ def validate_selected_spec(
                 flip_isaac_y,
                 planner_overrides=planner_overrides,
             )
+            if not accepted and planner_overrides and full_planner_fallback:
+                fast_failure_reason = reason
+                full_accepted, full_reason, full_metrics = planner_accepts_variant(
+                    scene,
+                    scene_yaml,
+                    task,
+                    variant,
+                    flip_isaac_y,
+                    planner_overrides=None,
+                )
+                if full_accepted:
+                    accepted = True
+                    reason = full_reason
+                    metrics = dict(full_metrics)
+                    metrics["fast_planner_retry_reason"] = fast_failure_reason
+                    metrics["selected_validation_fallback"] = "full_planner_after_fast_failure"
+                    retried_with_full_planner = True
         else:
             accepted, reason, metrics = True, None, {}
 
@@ -178,6 +197,10 @@ def validate_selected_spec(
             checked["planner_validation"] = {"checked": bool(check_planner), "valid": True}
             if metrics:
                 checked["planner_validation"]["quality"] = metrics
+            if check_planner and planner_overrides and not retried_with_full_planner:
+                checked["planner_validation"]["planner_preset"] = "fast"
+            elif check_planner and retried_with_full_planner:
+                checked["planner_validation"]["planner_preset"] = "full_fallback"
             if reason:
                 checked["planner_validation"]["note"] = reason
             valid_variants.append(checked)
@@ -219,6 +242,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variant-sample-seed", type=int, default=11)
     parser.add_argument("--flip-isaac-y", action="store_true")
     parser.add_argument(
+        "--full-planner-fallback",
+        action="store_true",
+        help="Retry failed fast-planner variants with the full planner before rejecting them.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Revalidate specs even when the corresponding output YAML already exists.",
@@ -257,6 +285,7 @@ def main() -> None:
             flip_isaac_y=bool(args.flip_isaac_y),
             planner_overrides=planner_overrides,
             sample_seed=int(args.variant_sample_seed),
+            full_planner_fallback=bool(args.full_planner_fallback),
         )
         total_valid += len(valid_tasks)
         total_invalid += len(invalid_tasks)
