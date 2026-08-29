@@ -16,8 +16,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +64,35 @@ def run_command(command: list[str], label: str, *, cwd: Path | None = None, chec
     else:
         print(f"[WARN] {label} exited with code {result.returncode}", flush=True)
     return result
+
+
+def run_command_with_timeout(
+    command: list[str],
+    label: str,
+    timeout_s: float,
+    *,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    print("\n" + "=" * 80, flush=True)
+    print(f"Stage: {label}", flush=True)
+    print("=" * 80, flush=True)
+    print(" ".join(str(part) for part in command), flush=True)
+    process = subprocess.Popen([str(part) for part in command], cwd=cwd, start_new_session=True)
+    try:
+        return_code = process.wait(timeout=None if timeout_s <= 0.0 else float(timeout_s))
+    except subprocess.TimeoutExpired:
+        print(f"[TIMEOUT] {label} exceeded {timeout_s:.1f}s; killing validation process group.", flush=True)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        return subprocess.CompletedProcess([str(part) for part in command], 124)
+    if return_code == 0:
+        print(f"[OK] {label}", flush=True)
+    else:
+        print(f"[WARN] {label} exited with code {return_code}", flush=True)
+    return subprocess.CompletedProcess([str(part) for part in command], return_code)
 
 
 def clean_output_dir(path: Path) -> None:
@@ -129,6 +160,15 @@ def copy_layouts(layouts: list[Path], output_dir: Path) -> None:
 
 def spec_paths(directory: Path) -> list[Path]:
     return sorted([*directory.rglob("*.yaml"), *directory.rglob("*.yml")])
+
+
+def ordered_spec_paths(directory: Path, layout_order: str) -> list[Path]:
+    paths = [*directory.rglob("*.yaml"), *directory.rglob("*.yml")]
+    if layout_order == "reverse":
+        return sorted(paths, reverse=True)
+    if layout_order == "gaps-last":
+        return sorted(paths, key=lambda path: ("fence_gap" in path.as_posix(), path.as_posix()))
+    return sorted(paths)
 
 
 def variant_is_valid(variant: dict[str, Any]) -> bool:
@@ -506,6 +546,7 @@ def filter_manifest(
     manifest_path: Path,
     selection: dict[str, dict[str, Any]],
     duration_policy: dict[str, float],
+    manifest_order: str = "default",
     excluded_rollout_ids: set[str] | None = None,
     rollouts_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -549,6 +590,8 @@ def filter_manifest(
             row["status"] = existing_status
         rows.append(row)
 
+    rows = order_manifest_rows(rows, manifest_order)
+
     filtered = dict(manifest)
     filtered["source_manifest"] = manifest_all_path.as_posix()
     filtered["selection_rule"] = (
@@ -575,6 +618,61 @@ def filter_manifest(
     filtered["counts"] = counts
     write_yaml(manifest_path, filtered)
     return filtered
+
+
+def rollout_family(row: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            str(row.get("scene_id") or "").lower(),
+            str(row.get("rollout_id") or "").lower(),
+            str(row.get("task_id") or "").lower(),
+        ]
+    )
+    if "perimeter_large" in text:
+        return "large_perimeter"
+    if "rectangle_gate" in text:
+        return "rectangle_gate"
+    if "rectangle" in text:
+        return "rectangle"
+    if "right_corner" in text:
+        return "right_corner"
+    if "left_corner" in text:
+        return "left_corner"
+    if "straight" in text:
+        return "straight"
+    if "gap" in text:
+        return "gap"
+    return "other"
+
+
+def order_manifest_rows(rows: list[dict[str, Any]], manifest_order: str) -> list[dict[str, Any]]:
+    if manifest_order == "default":
+        return rows
+    if manifest_order == "gaps-last":
+        return sorted(rows, key=lambda row: (rollout_family(row) == "gap", str(row.get("rollout_id") or "")))
+    if manifest_order != "interleave-layout-types":
+        return rows
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("rollout_id") or "")):
+        buckets.setdefault(rollout_family(row), []).append(row)
+
+    family_order = [
+        "straight",
+        "left_corner",
+        "right_corner",
+        "rectangle",
+        "rectangle_gate",
+        "large_perimeter",
+        "gap",
+        "other",
+    ]
+    ordered: list[dict[str, Any]] = []
+    while any(buckets.get(family) for family in family_order):
+        for family in family_order:
+            if buckets.get(family):
+                ordered.append(buckets[family].pop(0))
+    return ordered
 
 
 def load_excluded_rollout_ids(path: Path) -> set[str]:
@@ -705,6 +803,12 @@ def parse_args() -> argparse.Namespace:
         default="default",
         help="Validation/collection order for selected layouts. Use gaps-last to leave fence_gap layouts until the end.",
     )
+    parser.add_argument(
+        "--manifest-order",
+        choices=("default", "gaps-last", "interleave-layout-types"),
+        default="default",
+        help="Order rollout rows in the filtered manifest. Interleaving gives a more diverse partial dataset.",
+    )
     parser.add_argument("--limit-layouts", type=int, default=None)
     parser.add_argument("--variant-sample-seed", type=int, default=11)
     parser.add_argument("--visual-sample-seed", type=int, default=23)
@@ -810,36 +914,47 @@ def main() -> int:
         label="Generate fenceline task specs",
     )
 
-    validation_command = [
+    validation_command_base = [
             "ros2",
             "run",
             "sim",
             "validate_selected_scene_task_specs" if args.validation_mode == "selected" else "validate_scene_task_specs",
-            task_specs_dir.as_posix(),
-            "--check-planner",
-            "--planner-speed-preset",
-            str(args.validation_planner_preset),
-            "--allow-invalid",
-            "--verbose",
-            "--write-valid-output-dir",
-            valid_specs_dir.as_posix(),
+    ]
+    validation_args = [
+        "--check-planner",
+        "--planner-speed-preset",
+        str(args.validation_planner_preset),
+        "--allow-invalid",
+        "--verbose",
+        "--write-valid-output-dir",
+        valid_specs_dir.as_posix(),
     ]
     if args.validation_grid_resolution_m is not None:
-        validation_command.extend(["--planner-grid-resolution-m", str(args.validation_grid_resolution_m)])
+        validation_args.extend(["--planner-grid-resolution-m", str(args.validation_grid_resolution_m)])
     if args.validation_yaw_resolution_deg is not None:
-        validation_command.extend(["--planner-yaw-resolution-deg", str(args.validation_yaw_resolution_deg)])
+        validation_args.extend(["--planner-yaw-resolution-deg", str(args.validation_yaw_resolution_deg)])
     if args.validation_max_iterations is not None:
-        validation_command.extend(["--planner-max-iterations", str(args.validation_max_iterations)])
+        validation_args.extend(["--planner-max-iterations", str(args.validation_max_iterations)])
     if args.validation_subgoal_spacing_m is not None:
-        validation_command.extend(["--planner-subgoal-spacing-m", str(args.validation_subgoal_spacing_m)])
-    if args.validation_mode == "selected":
-        validation_command.extend(["--per-spec-timeout-s", str(args.validation_per_spec_timeout_s)])
+        validation_args.extend(["--planner-subgoal-spacing-m", str(args.validation_subgoal_spacing_m)])
     if args.validation_mode == "selected" and args.validation_full_planner_fallback:
-        validation_command.append("--full-planner-fallback")
-    run_command(
-        validation_command,
-        label="Validate fenceline task specs",
-    )
+        validation_args.append("--full-planner-fallback")
+    if args.validation_mode == "selected":
+        for spec_path in ordered_spec_paths(task_specs_dir, args.layout_order):
+            output_path = valid_specs_dir / spec_path.name
+            if output_path.exists():
+                print(f"[SKIP] Existing selected validation output: {output_path}", flush=True)
+                continue
+            run_command_with_timeout(
+                [*validation_command_base, spec_path.as_posix(), *validation_args],
+                label=f"Validate selected fenceline task spec {spec_path.name}",
+                timeout_s=float(args.validation_per_spec_timeout_s),
+            )
+    else:
+        run_command(
+            [*validation_command_base, task_specs_dir.as_posix(), *validation_args],
+            label="Validate fenceline task specs",
+        )
 
     selection = build_selection(
         valid_specs_dir,
@@ -902,6 +1017,7 @@ def main() -> int:
         manifest,
         selection,
         duration_policy,
+        args.manifest_order,
         excluded_rollout_ids=excluded_rollout_ids,
         rollouts_dir=rollouts_dir,
     )
