@@ -111,6 +111,13 @@ def image_exists(rollout_dir: Path, record: dict[str, Any]) -> bool:
     return isinstance(image, str) and (rollout_dir / "img" / image).exists()
 
 
+def lanczos_resample() -> int:
+    resampling = getattr(Image, "Resampling", None)
+    if resampling is not None:
+        return int(resampling.LANCZOS)
+    return int(Image.LANCZOS)
+
+
 def letterbox_image(image: Image.Image, size: int, fill: tuple[int, int, int] = (0, 0, 0)) -> Image.Image:
     image = ImageOps.exif_transpose(image).convert("RGB")
     width, height = image.size
@@ -118,7 +125,7 @@ def letterbox_image(image: Image.Image, size: int, fill: tuple[int, int, int] = 
         raise ValueError(f"Cannot resize image with invalid size {image.size}")
     scale = min(size / width, size / height)
     resized_size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    resized = image.resize(resized_size, Image.Resampling.LANCZOS)
+    resized = image.resize(resized_size, lanczos_resample())
     canvas = Image.new("RGB", (size, size), fill)
     offset = ((size - resized_size[0]) // 2, (size - resized_size[1]) // 2)
     canvas.paste(resized, offset)
@@ -135,9 +142,9 @@ def resize_image(image: Image.Image, size: int, mode: str) -> Image.Image:
         left = (width - side) // 2
         top = (height - side) // 2
         cropped = image.crop((left, top, left + side, top + side))
-        return cropped.resize((size, size), Image.Resampling.LANCZOS)
+        return cropped.resize((size, size), lanczos_resample())
     if mode == "stretch":
-        return image.resize((size, size), Image.Resampling.LANCZOS)
+        return image.resize((size, size), lanczos_resample())
     raise ValueError(f"Unsupported resize mode: {mode}")
 
 
