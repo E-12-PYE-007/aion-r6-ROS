@@ -6,7 +6,7 @@ This script is intentionally narrower than the full manifest tools:
 * fenceline generated layout YAMLs only
 * corridor layouts excluded by default
 * one follow task per layout
-* one nominal variant and one deterministic recovery pose variant per layout
+* one nominal variant plus deterministic start and heading recovery variants per layout
 * only visual USDs, not base USDs
 * one deterministic visual sample per task/variant
 """
@@ -562,6 +562,74 @@ def generate_pose_variant_usds(
         )
 
 
+def existing_nominal_visual_usds(base_usd: Path) -> list[Path]:
+    prefix = base_usd.stem.removesuffix("_base")
+    visuals = []
+    for usd_path in sorted(base_usd.parent.glob(f"{prefix}_*.usd")):
+        visual_id = usd_path.stem.removeprefix(f"{prefix}_")
+        if "__task_" in visual_id or "__variant_" in visual_id or visual_id.startswith("_task_"):
+            continue
+        if usd_path.resolve() == base_usd.resolve():
+            continue
+        visuals.append(usd_path)
+    return visuals
+
+
+def generate_nominal_visual_usds(
+    selection: dict[str, dict[str, Any]],
+    isaac_root: Path,
+    isaac_python: str,
+    variation_config: str,
+    visual_sample_seed: int,
+    max_visuals_per_layout: int,
+) -> None:
+    generated_layouts: dict[Path, str] = {}
+    for scene_id, selected in sorted(selection.items()):
+        spec_path = Path(str(selected["spec_path"]))
+        layout_path = generated_layout_for_spec(spec_path)
+        if layout_path is None or not layout_path.exists():
+            print(f"[SKIP] {scene_id}: missing generated layout for nominal visual USD", flush=True)
+            continue
+        generated_layouts[layout_path.resolve()] = scene_id
+
+    for layout_path, scene_id in sorted(generated_layouts.items(), key=lambda item: item[1]):
+        base_usd = generated_usd_from_layout(layout_path, isaac_root)
+        if base_usd is None:
+            print(f"[SKIP] {scene_id}: layout has no output USD metadata for nominal visual USD", flush=True)
+            continue
+        if not base_usd.exists():
+            run_command(
+                [
+                    isaac_python,
+                    "scripts/isaac_scene_generator.py",
+                    layout_path.as_posix(),
+                ],
+                label=f"Generate nominal base USD for {layout_path.name}",
+                cwd=isaac_root,
+            )
+        if not base_usd.exists():
+            raise FileNotFoundError(f"Expected nominal base USD was not generated for {layout_path}")
+
+        if len(existing_nominal_visual_usds(base_usd)) >= max_visuals_per_layout:
+            print(f"[SKIP] {scene_id}: nominal visual USD already exists for {base_usd.name}", flush=True)
+            continue
+
+        run_command(
+            [
+                isaac_python,
+                "scripts/variation_generator.py",
+                relative_to_root(base_usd, isaac_root),
+                variation_config,
+                "--max-variations",
+                str(max_visuals_per_layout),
+                "--sample-seed",
+                str(visual_sample_seed),
+            ],
+            label=f"Generate sampled nominal visual USD for {base_usd.name}",
+            cwd=isaac_root,
+        )
+
+
 def filter_manifest(
     manifest_all_path: Path,
     manifest_path: Path,
@@ -1011,6 +1079,14 @@ def main() -> int:
     expand_selected_recovery_variants(selection, pose_variants_dir)
 
     if not args.skip_pose_usd_generation:
+        generate_nominal_visual_usds(
+            selection=selection,
+            isaac_root=isaac_root,
+            isaac_python=isaac_python,
+            variation_config=args.variation_config,
+            visual_sample_seed=int(args.visual_sample_seed),
+            max_visuals_per_layout=int(args.max_visuals_per_pose_variant),
+        )
         generate_pose_variant_usds(
             pose_variants_dir=pose_variants_dir,
             isaac_root=isaac_root,
