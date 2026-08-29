@@ -806,9 +806,14 @@ def parse_args() -> argparse.Namespace:
         help="Disable longest-clean-segment filtering and require the whole rollout to pass.",
     )
     parser.add_argument(
+        "--salvage-failed-rollouts",
+        action="store_true",
+        help="Try to keep the longest clean segment from a rollout that failed whole-rollout validation.",
+    )
+    parser.add_argument(
         "--no-salvage-failed-rollouts",
         action="store_true",
-        help="Reject rollouts that fail whole-rollout validation instead of trying to keep a clean segment.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--min-segment-progress-m",
@@ -868,9 +873,11 @@ def main() -> int:
 
     manifest_records: list[dict[str, Any]] = []
     results: list[PostprocessResult] = []
-    for rollout_dir in rollouts:
+    salvage_failed_rollouts = bool(args.salvage_failed_rollouts) and not bool(args.no_salvage_failed_rollouts)
+    for rollout_index, rollout_dir in enumerate(rollouts, start=1):
+        print(f"[{rollout_index}/{len(rollouts)}] Checking {rollout_dir.name}", flush=True)
         validation = validate_for_final_dataset(rollout_dir, args)
-        if not validation.valid and (args.no_segment_filter or args.no_salvage_failed_rollouts):
+        if not validation.valid and (args.no_segment_filter or not salvage_failed_rollouts):
             results.append(
                 PostprocessResult(
                     rollout_dir=rollout_dir,
@@ -880,6 +887,7 @@ def main() -> int:
                     metrics=validation.metrics,
                 )
             )
+            print(f"  rejected: {'; '.join(validation.errors)}", flush=True)
             continue
 
         try:
@@ -931,6 +939,9 @@ def main() -> int:
         results.append(result)
         if record is not None:
             manifest_records.append(record)
+            print(f"  accepted: {result.sample_count} samples", flush=True)
+        else:
+            print(f"  rejected: {result.reason}", flush=True)
 
     with args.out_manifest.open("w", encoding="utf-8") as f:
         for record in manifest_records:
