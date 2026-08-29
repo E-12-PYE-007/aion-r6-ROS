@@ -180,6 +180,7 @@ def command_for_expert(
         "flip_scene_y": False,
         "flip_runtime_odom_y": False,
         "flip_runtime_odom_yaw": True,
+        "use_cached_planned_path": True,
     }
     return ["ros2", "run", "sim", expert_executable(task_spec, rollout.task)] + ros_param_args(params)
 

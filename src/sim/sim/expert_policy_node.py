@@ -218,6 +218,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("flip_runtime_odom_y", False)
         self.declare_parameter("flip_runtime_odom_yaw", True)
         self.declare_parameter("use_hybrid_astar", True)
+        self.declare_parameter("use_cached_planned_path", True)
         self.declare_parameter("robot_radius_m", 0.32)
         self.declare_parameter("obstacle_padding_m", 0.08)
         self.declare_parameter("grid_resolution_m", 0.25)
@@ -311,6 +312,7 @@ class ExpertPolicyNode(Node):
         if len(self.path) < 2 or path_length(self.path) < 1e-6:
             raise RuntimeError(f"Task {self.task_id} resolved to an empty path.")
         self.use_hybrid_astar = bool(self.get_parameter("use_hybrid_astar").value)
+        self.use_cached_planned_path = bool(self.get_parameter("use_cached_planned_path").value)
         self.planned_path: Optional[list[np.ndarray]] = None
         self.trajectory: Optional[TimedTrajectory] = None
         self.planning_attempted = False
@@ -514,6 +516,30 @@ class ExpertPolicyNode(Node):
         if self.trajectory is None:
             self.trajectory = self.profile_path(self.active_path())
         return self.trajectory
+
+    def cached_validation_path(self) -> list[np.ndarray] | None:
+        if not self.use_cached_planned_path:
+            return None
+        validation = self.variant.get("planner_validation")
+        if not isinstance(validation, dict) or not bool(validation.get("valid")):
+            return None
+        quality = validation.get("quality")
+        if not isinstance(quality, dict):
+            return None
+        points = quality.get("planned_path_xy")
+        if not isinstance(points, list) or len(points) < 2:
+            return None
+        path: list[np.ndarray] = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                return None
+            try:
+                path.append(np.asarray([float(point[0]), float(point[1])], dtype=np.float64))
+            except (TypeError, ValueError):
+                return None
+        if path_length(path) < 1e-6:
+            return None
+        return path
 
     def profile_path(self, path: list[np.ndarray]) -> TimedTrajectory:
         speed_profile = self.variant.get("speed_profile", {})
@@ -753,6 +779,26 @@ class ExpertPolicyNode(Node):
         self.planning_attempted = True
 
         subgoals = self.reference_subgoals()
+        cached_path = self.cached_validation_path()
+        if cached_path is not None:
+            planned = resample_path(cached_path, max(self.waypoint_spacing_m * 0.5, 0.1))
+            self.planned_path = planned
+            self.trajectory = self.profile_path(planned)
+            self.write_runtime_planned_path(
+                planned,
+                subgoals,
+                None,
+                planned_path_source="cached_validation_planned_path",
+            )
+            self.path_progress_m = 0.0
+            self.path_progress_anchor_position = None
+            self.path_progress_distance_budget_m = 0.0
+            self.get_logger().info(
+                f"Using cached validation planned path with {len(planned)} points "
+                f"path_length={path_length(planned):.2f}m duration={self.trajectory.duration():.2f}s"
+            )
+            return
+
         reference_points = [self.current_position] + [position for position, _ in subgoals] + self.path
         planner_settings = self.variant.get("planner_settings", {})
         collision_map = CollisionMap.from_scene(
@@ -813,7 +859,9 @@ class ExpertPolicyNode(Node):
         self,
         planned: list[np.ndarray],
         subgoals: list[tuple[np.ndarray, float]],
-        collision_map: CollisionMap,
+        collision_map: CollisionMap | None,
+        *,
+        planned_path_source: str = "runtime_hybrid_astar",
     ) -> None:
         if self.runtime_planned_path_output is None:
             return
@@ -827,9 +875,10 @@ class ExpertPolicyNode(Node):
                 "flip_scene_y": bool(self.flip_scene_y),
                 "flip_runtime_odom_y": bool(self.flip_runtime_odom_y),
                 "flip_runtime_odom_yaw": bool(self.flip_runtime_odom_yaw),
+                "planned_path_source": planned_path_source,
                 "path_length_m": float(path_length(planned)),
                 "point_count": len(planned),
-                "collision_inflation_m": float(collision_map.inflation_m),
+                "collision_inflation_m": float(collision_map.inflation_m) if collision_map is not None else None,
                 "path": [[float(point[0]), float(point[1])] for point in planned],
                 "subgoals": [
                     {"position": [float(position[0]), float(position[1])], "yaw": float(yaw)}

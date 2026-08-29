@@ -1025,10 +1025,10 @@ def plan_through_subgoals(
     collision_map: CollisionMap,
     settings: dict[str, Any],
     side_constraint_segments: list[tuple[np.ndarray, np.ndarray]] | None = None,
-) -> tuple[bool, str | None, dict[str, Any]]:
+) -> tuple[bool, str | None, dict[str, Any], list[np.ndarray]]:
     start_pose = Pose(float(start_position[0]), float(start_position[1]), float(start_yaw))
     if collision_map.is_collision(start_position):
-        return False, f"start pose {start_position.tolist()} is in collision", {}
+        return False, f"start pose {start_position.tolist()} is in collision", {}, []
 
     nudged_count = 0
     nudge_distances: list[float] = []
@@ -1091,7 +1091,7 @@ def plan_through_subgoals(
                 f"({attempted_candidates}/{free_candidates} free candidates attempted, "
                 f"{collision_candidates} colliding candidates, {low_clearance_candidates} low-clearance candidates, "
                 f"{wrong_side_candidates} wrong-side candidates)"
-            ), {}
+            ), {}, planned_path
 
         nudge_distance = float(np.linalg.norm(selected_position - goal_position))
         if nudge_distance > 1e-6:
@@ -1115,8 +1115,8 @@ def plan_through_subgoals(
             side_constraint_segments,
         )
     if nudged_count:
-        return True, f"nudged {nudged_count} reference subgoals to nearby reachable points", metrics
-    return True, None, metrics
+        return True, f"nudged {nudged_count} reference subgoals to nearby reachable points", metrics, planned_path
+    return True, None, metrics, planned_path
 
 
 def trajectory_quality_errors(metrics: dict[str, Any], settings: dict[str, Any]) -> list[str]:
@@ -1270,7 +1270,7 @@ def planner_accepts_variant(
             settings,
             point_cost_fn=combined_point_cost_fn(fence_cost_fn, clearance_cost_fn),
         )
-        planned, subgoal_note, metrics = plan_through_subgoals(
+        planned_ok, subgoal_note, metrics, planned_path = plan_through_subgoals(
             planner,
             start_position,
             start_yaw,
@@ -1295,9 +1295,12 @@ def planner_accepts_variant(
             metrics["obstacle_clearance_cost_distance_m"] = float(
                 settings.get("obstacle_clearance_cost_distance_m", 0.4)
             )
+        if planned_ok and planned_path:
+            metrics["planned_path_source"] = "validate_scene_task_specs"
+            metrics["planned_path_xy"] = [[float(point[0]), float(point[1])] for point in planned_path]
     except Exception as exc:
         return False, str(exc), {}
-    if not planned:
+    if not planned_ok or not planned_path:
         return False, subgoal_note or "Hybrid A* failed to plan through reference subgoals", metrics
     quality_errors = trajectory_quality_errors(metrics, settings)
     if quality_errors:
