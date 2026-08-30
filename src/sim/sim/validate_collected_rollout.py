@@ -551,6 +551,7 @@ def validate_rollout_dir(
     max_mean_reference_lateral_error_m: float | None = 2.0,
     max_reference_lateral_error_m: float | None = 4.0,
     max_final_target_distance_m: float | None = 2.0,
+    max_required_progress_shortfall_m: float = 0.0,
     max_black_image_fraction: float | None = 0.05,
     min_target_fence_clearance_m: float | None = 0.65,
     allow_stationary: bool = False,
@@ -615,6 +616,8 @@ def validate_rollout_dir(
     reference_path_length_m = finite_float(reference_metrics.get("reference_path_length_m"))
     if use_reference_progress and reference_path_length_m is not None:
         required_progress_m = min(required_progress_m, max(reference_path_length_m - 0.25, 0.0))
+    progress_shortfall_tolerance_m = max(0.0, float(max_required_progress_shortfall_m))
+    accepted_required_progress_m = max(0.0, required_progress_m - progress_shortfall_tolerance_m)
 
     metrics.update(
         {
@@ -632,6 +635,8 @@ def validate_rollout_dir(
             "success_type": success_type,
             "reference_progress": reference_metrics,
             "required_progress_m": required_progress_m,
+            "accepted_required_progress_m": accepted_required_progress_m,
+            "max_required_progress_shortfall_m": progress_shortfall_tolerance_m,
             "spin_stall": spin_stall_metrics,
             "fence_geometry": fence_geometry_metrics,
         }
@@ -713,8 +718,11 @@ def validate_rollout_dir(
         warnings.append("action_chunk_age_s is missing; freshness could not be checked for this rollout")
     if use_reference_progress:
         progress_m = float(reference_metrics["path_progress_m"])
-        if progress_m < required_progress_m:
-            errors.append(f"path progress {progress_m:.3f}m < required {required_progress_m:.3f}m")
+        if progress_m < accepted_required_progress_m:
+            errors.append(
+                f"path progress {progress_m:.3f}m < required {required_progress_m:.3f}m "
+                f"(accepted shortfall {progress_shortfall_tolerance_m:.3f}m)"
+            )
     elif travelled_m < float(min_motion_m):
         errors.append(f"path distance {travelled_m:.3f}m < required {float(min_motion_m):.3f}m")
     mean_reference_error = finite_float(reference_metrics.get("mean_reference_lateral_error_m"))
@@ -747,7 +755,7 @@ def validate_rollout_dir(
         max_final_target_distance_m is not None
         and final_target_distance is not None
         and progress_m is not None
-        and progress_m < required_progress_m
+        and progress_m < accepted_required_progress_m
         and final_target_distance > float(max_final_target_distance_m)
     ):
         errors.append(
@@ -827,6 +835,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=2.0)
     parser.add_argument("--max-reference-lateral-error-m", type=float, default=4.0)
     parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-required-progress-shortfall-m", type=float, default=0.0)
     parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
     parser.add_argument("--allow-stationary", action="store_true")
@@ -850,6 +859,7 @@ def main() -> int:
         max_mean_reference_lateral_error_m=args.max_mean_reference_lateral_error_m,
         max_reference_lateral_error_m=args.max_reference_lateral_error_m,
         max_final_target_distance_m=args.max_final_target_distance_m,
+        max_required_progress_shortfall_m=args.max_required_progress_shortfall_m,
         max_black_image_fraction=args.max_black_image_fraction,
         min_target_fence_clearance_m=args.min_target_fence_clearance_m,
         allow_stationary=bool(args.allow_stationary),

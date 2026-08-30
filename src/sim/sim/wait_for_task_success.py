@@ -59,6 +59,7 @@ class TaskSuccessWaiter(Node):
         self.declare_parameter("wall_timeout_s", 900.0)
         self.declare_parameter("min_odom_messages", 2)
         self.declare_parameter("success_margin_m", 0.0)
+        self.declare_parameter("perimeter_success_margin_m", 5.0)
         self.declare_parameter("target_tolerance_m", 0.5)
         self.declare_parameter("max_success_tracking_error_m", 1.25)
         self.declare_parameter("max_progress_tracking_error_m", 2.0)
@@ -75,6 +76,10 @@ class TaskSuccessWaiter(Node):
         self.wall_timeout_s = float(self.get_parameter("wall_timeout_s").value)
         self.min_odom_messages = int(self.get_parameter("min_odom_messages").value)
         self.success_margin_m = float(self.get_parameter("success_margin_m").value)
+        self.perimeter_success_margin_m = max(
+            0.0,
+            float(self.get_parameter("perimeter_success_margin_m").value),
+        )
         self.target_tolerance_m = float(self.get_parameter("target_tolerance_m").value)
         self.max_success_tracking_error_m = max(
             0.0,
@@ -178,6 +183,8 @@ class TaskSuccessWaiter(Node):
         success_type = str(success_condition.get("type", ""))
         if success_type in {"reach_path_end", "pass_point", "pass_point_and_continue"}:
             required = finite_float(success_condition.get("min_progress_m"), 0.0) - self.success_margin_m
+            if self.is_perimeter_follow_task(task):
+                required -= self.perimeter_success_margin_m
             target_raw = success_condition.get("target_point")
             target_position = point2(target_raw, self.flip_scene_y) if isinstance(target_raw, (list, tuple)) else None
             if reference_path is not None:
@@ -188,6 +195,12 @@ class TaskSuccessWaiter(Node):
                 target_position = None
             return max(required, 0.0), success_type, target_position, world_start_position, world_start_yaw, reference_path
         return None, success_type, None, world_start_position, world_start_yaw, reference_path
+
+    @staticmethod
+    def is_perimeter_follow_task(task: dict[str, Any]) -> bool:
+        task_id = str(task.get("task_id", ""))
+        scenario_tags = {str(tag) for tag in task.get("scenario_tags", []) if tag is not None}
+        return task_id == "follow_fence_perimeter_from_scene_rover_pose" or "perimeter" in scenario_tags
 
     @staticmethod
     def requires_target_tolerance(task: dict[str, Any], success_condition: dict[str, Any]) -> bool:
@@ -359,6 +372,8 @@ class TaskSuccessWaiter(Node):
             "max_tracking_error_m": self.max_tracking_error_m,
             "max_success_tracking_error_m": self.max_success_tracking_error_m,
             "max_progress_tracking_error_m": self.max_progress_tracking_error_m,
+            "success_margin_m": self.success_margin_m,
+            "perimeter_success_margin_m": self.perimeter_success_margin_m,
             "target_position": self.target_position.tolist() if self.target_position is not None else None,
             "latest_world_position": (
                 self.latest_world_position.tolist() if self.latest_world_position is not None else None

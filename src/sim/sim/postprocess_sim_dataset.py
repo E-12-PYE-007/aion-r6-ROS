@@ -820,6 +820,7 @@ def validate_for_final_dataset(rollout_dir: Path, args: argparse.Namespace) -> V
         max_mean_reference_lateral_error_m=args.max_mean_reference_lateral_error_m,
         max_reference_lateral_error_m=args.max_reference_lateral_error_m,
         max_final_target_distance_m=args.max_final_target_distance_m,
+        max_required_progress_shortfall_m=args.max_required_progress_shortfall_m,
         max_black_image_fraction=args.max_black_image_fraction,
         min_target_fence_clearance_m=args.min_target_fence_clearance_m,
     )
@@ -863,6 +864,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=1.0)
     parser.add_argument("--max-reference-lateral-error-m", type=float, default=2.5)
     parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-required-progress-shortfall-m", type=float, default=0.0)
     parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
     parser.add_argument(

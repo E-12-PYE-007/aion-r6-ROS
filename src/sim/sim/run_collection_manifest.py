@@ -407,6 +407,7 @@ def run_claimed_row(
             max_mean_reference_lateral_error_m=float(args.max_mean_reference_lateral_error_m),
             max_reference_lateral_error_m=float(args.max_reference_lateral_error_m),
             max_final_target_distance_m=float(args.max_final_target_distance_m),
+            max_required_progress_shortfall_m=float(args.max_required_progress_shortfall_m),
             max_black_image_fraction=float(args.max_black_image_fraction),
             min_target_fence_clearance_m=float(args.min_target_fence_clearance_m),
             allow_stationary=bool(args.allow_stationary),
@@ -498,6 +499,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mean-reference-lateral-error-m", type=float, default=2.0)
     parser.add_argument("--max-reference-lateral-error-m", type=float, default=4.0)
     parser.add_argument("--max-final-target-distance-m", type=float, default=2.0)
+    parser.add_argument("--max-required-progress-shortfall-m", type=float, default=0.0)
     parser.add_argument("--max-black-image-fraction", type=float, default=0.05)
     parser.add_argument("--min-target-fence-clearance-m", type=float, default=0.65)
     parser.add_argument("--allow-stationary", action="store_true")
