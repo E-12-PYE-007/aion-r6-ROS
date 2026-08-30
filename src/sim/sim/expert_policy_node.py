@@ -252,11 +252,11 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("fence_offset_cost_weight", 0.6)
         self.declare_parameter("fence_offset_cost_deadband_m", 0.15)
         self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
-        self.declare_parameter("fence_offset_corner_relaxation_m", 1.5)
+        self.declare_parameter("fence_offset_corner_relaxation_m", 0.0)
         self.declare_parameter("fence_min_clearance_cost_weight", 35.0)
         self.declare_parameter("obstacle_clearance_cost_weight", 0.5)
         self.declare_parameter("obstacle_clearance_cost_distance_m", 0.4)
-        self.declare_parameter("controller_path_smoothing_iterations", 3)
+        self.declare_parameter("controller_path_smoothing_iterations", 0)
         self.declare_parameter("controller_path_resample_spacing_m", 0.1)
         self.declare_parameter("controller_path_max_point_shift_m", 0.35)
         self.declare_parameter("controller_path_hairpin_angle_deg", 135.0)
@@ -791,17 +791,24 @@ class ExpertPolicyNode(Node):
                     planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
                 ),
             )
-            planned = smooth_path_for_tracking(
-                cached_path,
-                collision_map.is_collision,
-                iterations=int(self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")),
-                resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
-                max_point_shift_m=float(
-                    self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")
-                ),
-                hairpin_angle_rad=math.radians(
-                    float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
-                ),
+            smoothing_iterations = int(
+                self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")
+            )
+            planned = (
+                smooth_path_for_tracking(
+                    cached_path,
+                    collision_map.is_collision,
+                    iterations=smoothing_iterations,
+                    resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
+                    max_point_shift_m=float(
+                        self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")
+                    ),
+                    hairpin_angle_rad=math.radians(
+                        float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
+                    ),
+                )
+                if smoothing_iterations > 0
+                else cached_path
             )
             self.planned_path = planned
             self.trajectory = self.profile_path(planned)
@@ -840,16 +847,20 @@ class ExpertPolicyNode(Node):
             raise RuntimeError(message)
         if not self.disable_shortcut_smoothing_for_task():
             planned = shortcut_smooth(planned, collision_map.is_collision)
-        planned = smooth_path_for_tracking(
-            planned,
-            collision_map.is_collision,
-            iterations=int(self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")),
-            resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
-            max_point_shift_m=float(self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")),
-            hairpin_angle_rad=math.radians(
-                float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
-            ),
+        smoothing_iterations = int(
+            self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")
         )
+        if smoothing_iterations > 0:
+            planned = smooth_path_for_tracking(
+                planned,
+                collision_map.is_collision,
+                iterations=smoothing_iterations,
+                resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
+                max_point_shift_m=float(self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")),
+                hairpin_angle_rad=math.radians(
+                    float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
+                ),
+            )
         planned_length = path_length(planned)
         reference_length = path_length(self.path)
         side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)

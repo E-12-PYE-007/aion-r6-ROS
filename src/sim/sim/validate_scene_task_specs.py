@@ -957,7 +957,7 @@ def fence_offset_cost_for_task(
     min_clearance_m = max(0.0, float(settings.get("planner_fence_min_clearance_m", 0.65)))
     deadband_m = max(0.0, float(settings.get("fence_offset_cost_deadband_m", 0.15)))
     max_error_m = max(deadband_m, float(settings.get("fence_offset_cost_max_error_m", 2.0)))
-    corner_relaxation_m = max(0.0, float(settings.get("fence_offset_corner_relaxation_m", 1.5)))
+    corner_relaxation_m = max(0.0, float(settings.get("fence_offset_corner_relaxation_m", 0.0)))
 
     def point_cost(point: np.ndarray) -> float:
         distance_to_fence = distance_to_nearest_segment(point, segments)
@@ -1269,12 +1269,13 @@ def planner_accepts_variant(
             settings,
             side_constraint_segments_for_task(scene, task, flip_isaac_y),
         )
-        if planned_ok and planned_path:
+        smoothing_iterations = int(settings.get("controller_path_smoothing_iterations", 0))
+        if planned_ok and planned_path and smoothing_iterations > 0:
             raw_planned_path = list(planned_path)
             planned_path = smooth_path_for_tracking(
                 planned_path,
                 collision_map.is_collision,
-                iterations=int(settings.get("controller_path_smoothing_iterations", 3)),
+                iterations=smoothing_iterations,
                 resample_spacing_m=float(settings.get("controller_path_resample_spacing_m", 0.1)),
                 max_point_shift_m=float(settings.get("controller_path_max_point_shift_m", 0.35)),
                 hairpin_angle_rad=math.radians(float(settings.get("controller_path_hairpin_angle_deg", 135.0))),

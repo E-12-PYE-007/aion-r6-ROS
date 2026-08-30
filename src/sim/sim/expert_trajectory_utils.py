@@ -327,92 +327,33 @@ def sample_path_pose(polyline: list[np.ndarray], progress: float) -> tuple[np.nd
 
 
 def reference_subgoals_for_path(reference_path: list[np.ndarray], settings: dict[str, Any]) -> list[tuple[np.ndarray, float]]:
-    """Sample planner subgoals on drivable straights, not hard corner vertices.
-
-    Sparse subgoals placed directly on sharp offset-polyline corners can force
-    Hybrid A* to invent small hooks. For sharp vertices, skip corner-adjacent
-    targets entirely and let the planner connect between straight-section goals.
-    """
+    """Sample planner subgoals from the reference driving line."""
     total_length = path_length(reference_path)
     spacing = float(settings.get("planner_subgoal_spacing_m", 3.0))
     endpoint_margin = min(float(settings.get("planner_subgoal_endpoint_margin_m", 0.5)), max(total_length * 0.25, 0.0))
     vertex_margin = float(settings.get("planner_subgoal_vertex_margin_m", 0.5))
-    corner_angle_deg = float(settings.get("planner_subgoal_corner_angle_deg", 45.0))
-    corner_exclusion_m = float(settings.get("planner_subgoal_corner_exclusion_m", max(vertex_margin, 1.0)))
     max_progress = max(total_length - endpoint_margin, 0.0)
     if spacing <= 0.0 or max_progress <= spacing:
         return [sample_path_pose(reference_path, max_progress)]
 
     vertex_progress_values: list[float] = []
-    sharp_vertex_progress_values: list[float] = []
     cumulative = 0.0
     for index in range(len(reference_path) - 1):
-        segment_length = float(np.linalg.norm(reference_path[index + 1] - reference_path[index]))
-        cumulative += segment_length
-        if index >= len(reference_path) - 2:
-            continue
-        vertex_progress_values.append(cumulative)
-        prev_vec = reference_path[index + 1] - reference_path[index]
-        next_vec = reference_path[index + 2] - reference_path[index + 1]
-        prev_len = float(np.linalg.norm(prev_vec))
-        next_len = float(np.linalg.norm(next_vec))
-        if prev_len <= 1e-9 or next_len <= 1e-9:
-            continue
-        prev_dir = prev_vec / prev_len
-        next_dir = next_vec / next_len
-        dot = float(np.clip(np.dot(prev_dir, next_dir), -1.0, 1.0))
-        turn_angle_deg = math.degrees(math.acos(dot))
-        if turn_angle_deg >= corner_angle_deg:
-            sharp_vertex_progress_values.append(cumulative)
+        cumulative += float(np.linalg.norm(reference_path[index + 1] - reference_path[index]))
+        if index < len(reference_path) - 2:
+            vertex_progress_values.append(cumulative)
 
-    blocked_intervals: list[tuple[float, float]] = []
-    for vertex_progress in sharp_vertex_progress_values:
-        blocked_intervals.append((
-            max(0.0, vertex_progress - corner_exclusion_m),
-            min(max_progress, vertex_progress + corner_exclusion_m),
-        ))
-    for vertex_progress in vertex_progress_values:
-        blocked_intervals.append((
-            max(0.0, vertex_progress - vertex_margin),
-            min(max_progress, vertex_progress + vertex_margin),
-        ))
-    blocked_intervals.sort()
-
-    merged_blocked: list[tuple[float, float]] = []
-    for start, end in blocked_intervals:
-        if end <= 0.0 or start >= max_progress:
-            continue
-        if not merged_blocked or start > merged_blocked[-1][1] + 1e-6:
-            merged_blocked.append((start, end))
-        else:
-            merged_blocked[-1] = (merged_blocked[-1][0], max(merged_blocked[-1][1], end))
-
-    safe_intervals: list[tuple[float, float]] = []
-    cursor = min(endpoint_margin, max_progress)
-    for blocked_start, blocked_end in merged_blocked:
-        if blocked_start > cursor:
-            safe_intervals.append((cursor, blocked_start))
-        cursor = max(cursor, blocked_end)
-    if cursor < max_progress:
-        safe_intervals.append((cursor, max_progress))
-
-    min_interval_m = float(settings.get("planner_subgoal_min_safe_interval_m", 0.75))
+    progress_values = list(np.arange(spacing, total_length, spacing))
+    progress_values.append(max_progress)
     adjusted_progress_values: list[float] = []
-    for interval_start, interval_end in safe_intervals:
-        interval_length = interval_end - interval_start
-        if interval_length < min_interval_m:
-            continue
-        first = max(interval_start + min(0.5 * interval_length, spacing), spacing)
-        progress = first
-        while progress < interval_end - 1e-6:
-            adjusted_progress_values.append(progress)
-            progress += spacing
-        midpoint = 0.5 * (interval_start + interval_end)
-        if not any(abs(midpoint - existing) < min(spacing * 0.35, 0.75) for existing in adjusted_progress_values):
-            adjusted_progress_values.append(midpoint)
-    if not adjusted_progress_values:
-        adjusted_progress_values = [max_progress]
-    adjusted_progress_values = sorted(set(round(float(progress), 6) for progress in adjusted_progress_values))
+    for progress in progress_values:
+        adjusted = min(float(progress), max_progress)
+        for vertex_progress in vertex_progress_values:
+            if abs(adjusted - vertex_progress) < vertex_margin:
+                adjusted = max(0.0, vertex_progress - vertex_margin)
+                break
+        if not adjusted_progress_values or adjusted > adjusted_progress_values[-1] + 1e-6:
+            adjusted_progress_values.append(adjusted)
     return [sample_path_pose(reference_path, float(progress)) for progress in adjusted_progress_values]
 
 
