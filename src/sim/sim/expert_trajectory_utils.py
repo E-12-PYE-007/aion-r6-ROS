@@ -327,19 +327,18 @@ def sample_path_pose(polyline: list[np.ndarray], progress: float) -> tuple[np.nd
 
 
 def reference_subgoals_for_path(reference_path: list[np.ndarray], settings: dict[str, Any]) -> list[tuple[np.ndarray, float]]:
-    """Sample planner subgoals while avoiding hard corner vertices.
+    """Sample planner subgoals on drivable straights, not hard corner vertices.
 
     Sparse subgoals placed directly on sharp offset-polyline corners can force
-    Hybrid A* to invent small hooks. Around sharp vertices, sample approach and
-    exit points instead so the planner connects a controller-friendly turn.
+    Hybrid A* to invent small hooks. For sharp vertices, skip corner-adjacent
+    targets entirely and let the planner connect between straight-section goals.
     """
     total_length = path_length(reference_path)
     spacing = float(settings.get("planner_subgoal_spacing_m", 3.0))
     endpoint_margin = min(float(settings.get("planner_subgoal_endpoint_margin_m", 0.5)), max(total_length * 0.25, 0.0))
     vertex_margin = float(settings.get("planner_subgoal_vertex_margin_m", 0.5))
     corner_angle_deg = float(settings.get("planner_subgoal_corner_angle_deg", 45.0))
-    corner_guard_m = float(settings.get("planner_subgoal_corner_guard_m", max(vertex_margin, 0.7)))
-    corner_exit_m = float(settings.get("planner_subgoal_corner_exit_m", max(vertex_margin, 0.7)))
+    corner_exclusion_m = float(settings.get("planner_subgoal_corner_exclusion_m", max(vertex_margin, 1.0)))
     max_progress = max(total_length - endpoint_margin, 0.0)
     if spacing <= 0.0 or max_progress <= spacing:
         return [sample_path_pose(reference_path, max_progress)]
@@ -368,20 +367,14 @@ def reference_subgoals_for_path(reference_path: list[np.ndarray], settings: dict
 
     progress_values = list(np.arange(spacing, total_length, spacing))
     progress_values.append(max_progress)
-    for vertex_progress in sharp_vertex_progress_values:
-        progress_values.append(max(0.0, vertex_progress - corner_guard_m))
-        progress_values.append(min(max_progress, vertex_progress + corner_exit_m))
 
     adjusted_progress_values: list[float] = []
     for progress in sorted(progress_values):
         adjusted = min(float(progress), max_progress)
-        for vertex_progress in vertex_progress_values:
-            if abs(adjusted - vertex_progress) < vertex_margin:
-                if adjusted <= vertex_progress:
-                    adjusted = max(0.0, vertex_progress - vertex_margin)
-                else:
-                    adjusted = min(max_progress, vertex_progress + vertex_margin)
-                break
+        if any(abs(adjusted - vertex_progress) < corner_exclusion_m for vertex_progress in sharp_vertex_progress_values):
+            continue
+        if any(abs(adjusted - vertex_progress) < vertex_margin for vertex_progress in vertex_progress_values):
+            continue
         if adjusted <= 1e-6:
             continue
         if not adjusted_progress_values or adjusted > adjusted_progress_values[-1] + 1e-6:
