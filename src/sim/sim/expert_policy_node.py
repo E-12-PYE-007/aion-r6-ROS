@@ -43,7 +43,7 @@ from sim.expert_trajectory_utils import (
 )
 from sim.collision_map import CollisionMap
 from sim.hybrid_astar import HybridAStarPlanner, Pose
-from sim.trajectory_profile import TimedTrajectory, build_timed_trajectory, resample_path, shortcut_smooth
+from sim.trajectory_profile import TimedTrajectory, build_timed_trajectory, resample_path, shortcut_smooth, smooth_path_for_tracking
 
 
 def shifted_subgoal_candidates(
@@ -131,6 +131,15 @@ def distance_to_nearest_segment(point: np.ndarray, segments: list[tuple[np.ndarr
     if not segments:
         return math.inf
     return min(point_to_segment_distance(point, start, end) for start, end in segments)
+
+
+def distance_to_nearest_segment_endpoint(point: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not segments:
+        return math.inf
+    return min(
+        min(float(np.linalg.norm(point - start)), float(np.linalg.norm(point - end)))
+        for start, end in segments
+    )
 
 
 def path_min_distance_to_segments(path: list[np.ndarray], segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
@@ -242,9 +251,14 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("fence_offset_cost_weight", 0.6)
         self.declare_parameter("fence_offset_cost_deadband_m", 0.15)
         self.declare_parameter("fence_offset_cost_max_error_m", 2.0)
+        self.declare_parameter("fence_offset_corner_relaxation_m", 1.5)
         self.declare_parameter("fence_min_clearance_cost_weight", 35.0)
         self.declare_parameter("obstacle_clearance_cost_weight", 0.5)
         self.declare_parameter("obstacle_clearance_cost_distance_m", 0.4)
+        self.declare_parameter("controller_path_smoothing_iterations", 3)
+        self.declare_parameter("controller_path_resample_spacing_m", 0.1)
+        self.declare_parameter("controller_path_max_point_shift_m", 0.35)
+        self.declare_parameter("controller_path_hairpin_angle_deg", 135.0)
         self.declare_parameter("max_speed_mps", 0.3)
         self.declare_parameter("expert_speed_limit_mps", 0.3)
         self.declare_parameter("max_yaw_rate_radps", 0.45)
@@ -648,6 +662,10 @@ class ExpertPolicyNode(Node):
             deadband_m,
             float(self.planner_setting("fence_offset_cost_max_error_m", "fence_offset_cost_max_error_m")),
         )
+        corner_relaxation_m = max(
+            0.0,
+            float(self.planner_setting("fence_offset_corner_relaxation_m", "fence_offset_corner_relaxation_m")),
+        )
 
         def point_cost(point: np.ndarray) -> float:
             distance_to_fence = distance_to_nearest_segment(point, segments)
@@ -656,10 +674,14 @@ class ExpertPolicyNode(Node):
                 danger_cost = danger_weight * (min_clearance_m - distance_to_fence + 1.0)
             if weight <= 0.0:
                 return danger_cost
+            attraction_weight = weight
+            if corner_relaxation_m > 1e-6:
+                endpoint_distance = distance_to_nearest_segment_endpoint(point, segments)
+                attraction_weight *= min(1.0, max(0.0, endpoint_distance / corner_relaxation_m))
             offset_error = abs(distance_to_fence - preferred_offset_m)
             if offset_error <= deadband_m:
                 return danger_cost
-            return danger_cost + weight * min(offset_error - deadband_m, max_error_m)
+            return danger_cost + attraction_weight * min(offset_error - deadband_m, max_error_m)
 
         return point_cost
 
@@ -782,7 +804,29 @@ class ExpertPolicyNode(Node):
         subgoals = self.reference_subgoals()
         cached_path = self.cached_validation_path()
         if cached_path is not None:
-            planned = resample_path(cached_path, max(self.waypoint_spacing_m * 0.5, 0.1))
+            planner_settings = self.variant.get("planner_settings", {})
+            collision_map = CollisionMap.from_scene(
+                self.scene,
+                self.scene_path,
+                [self.current_position] + cached_path + self.path,
+                self.flip_scene_y,
+                robot_radius_m=float(planner_settings.get("robot_radius_m", self.get_parameter("robot_radius_m").value)),
+                obstacle_padding_m=float(
+                    planner_settings.get("obstacle_padding_m", self.get_parameter("obstacle_padding_m").value)
+                ),
+            )
+            planned = smooth_path_for_tracking(
+                cached_path,
+                collision_map.is_collision,
+                iterations=int(self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")),
+                resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
+                max_point_shift_m=float(
+                    self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")
+                ),
+                hairpin_angle_rad=math.radians(
+                    float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
+                ),
+            )
             self.planned_path = planned
             self.trajectory = self.profile_path(planned)
             self.write_runtime_planned_path(
@@ -820,7 +864,16 @@ class ExpertPolicyNode(Node):
             raise RuntimeError(message)
         if not self.disable_shortcut_smoothing_for_task():
             planned = shortcut_smooth(planned, collision_map.is_collision)
-        planned = resample_path(planned, max(self.waypoint_spacing_m * 0.5, 0.1))
+        planned = smooth_path_for_tracking(
+            planned,
+            collision_map.is_collision,
+            iterations=int(self.planner_setting("controller_path_smoothing_iterations", "controller_path_smoothing_iterations")),
+            resample_spacing_m=max(self.waypoint_spacing_m * 0.5, 0.1),
+            max_point_shift_m=float(self.planner_setting("controller_path_max_point_shift_m", "controller_path_max_point_shift_m")),
+            hairpin_angle_rad=math.radians(
+                float(self.planner_setting("controller_path_hairpin_angle_deg", "controller_path_hairpin_angle_deg"))
+            ),
+        )
         planned_length = path_length(planned)
         reference_length = path_length(self.path)
         side_constraint_segments = side_constraint_segments_for_task(self.scene, self.task, self.flip_scene_y)
@@ -974,6 +1027,7 @@ class ExpertPolicyNode(Node):
             if (
                 x <= 0.10
                 or abs(y) > self.max_target_lateral_error_m
+                or abs(theta) > 1.35
                 or euclidean_distance > self.max_tracking_target_distance_m
             ):
                 continue
@@ -1076,6 +1130,7 @@ class ExpertPolicyNode(Node):
             elif self.latest_tracking_error_m > self.tracking_slowdown_error_m:
                 speed = max(self.expert_min_tracking_speed_mps, speed * self.tracking_slowdown_scale)
 
+        target_is_forward = float(relative_x) > 0.10
         heading_error = math.atan2(float(relative_y), max(float(relative_x), 0.05))
         distance_sq = max(float(relative_x * relative_x + relative_y * relative_y), 1e-5)
         curvature = 2.0 * float(relative_y) / distance_sq
@@ -1084,9 +1139,12 @@ class ExpertPolicyNode(Node):
             float(self.get_parameter("max_yaw_rate_radps").value),
         )
 
-        steering_error = wrap_to_pi(1.05 * heading_error + 0.35 * relative_theta)
-        if recovering:
+        if target_is_forward:
             steering_error = heading_error
+        else:
+            steering_error = relative_theta
+        if recovering:
+            steering_error = relative_theta if not target_is_forward else heading_error
         abs_steering_error = abs(steering_error)
         if abs_steering_error > self.expert_heading_slowdown_rad:
             slowdown_span = max(math.pi - self.expert_heading_slowdown_rad, 1e-6)
@@ -1096,12 +1154,14 @@ class ExpertPolicyNode(Node):
             )
             speed = max(self.expert_min_tracking_speed_mps, speed * slowdown)
 
-        if abs(curvature) > 1e-6:
+        if not target_is_forward:
+            speed = 0.0
+        elif abs(curvature) > 1e-6:
             speed = min(speed, max(self.expert_min_tracking_speed_mps, max_yaw_rate / abs(curvature)))
 
         yaw_rate = 0.9 * steering_error
         if abs_steering_error > 1.8:
-            speed = min(speed, self.expert_min_tracking_speed_mps)
+            speed = 0.0 if not target_is_forward else min(speed, self.expert_min_tracking_speed_mps)
 
         msg.linear.x = float(max(0.0, min(speed, max_speed)))
         command_yaw_rate = (

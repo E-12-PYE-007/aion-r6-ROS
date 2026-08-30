@@ -29,6 +29,7 @@ from sim.expert_trajectory_utils import (
     world_to_robot,
 )
 from sim.hybrid_astar import HybridAStarPlanner, Pose
+from sim.trajectory_profile import max_heading_delta, smooth_path_for_tracking
 
 
 class NoAliasDumper(yaml.SafeDumper):
@@ -918,6 +919,15 @@ def distance_to_nearest_segment(point: np.ndarray, segments: list[tuple[np.ndarr
     return min(point_to_segment_distance(point, start, end) for start, end in segments)
 
 
+def distance_to_nearest_segment_endpoint(point: np.ndarray, segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
+    if not segments:
+        return math.inf
+    return min(
+        min(float(np.linalg.norm(point - start)), float(np.linalg.norm(point - end)))
+        for start, end in segments
+    )
+
+
 def path_min_distance_to_segments(path: list[np.ndarray], segments: list[tuple[np.ndarray, np.ndarray]]) -> float:
     if not path or not segments:
         return math.inf
@@ -972,6 +982,7 @@ def fence_offset_cost_for_task(
     min_clearance_m = max(0.0, float(settings.get("planner_fence_min_clearance_m", 0.65)))
     deadband_m = max(0.0, float(settings.get("fence_offset_cost_deadband_m", 0.15)))
     max_error_m = max(deadband_m, float(settings.get("fence_offset_cost_max_error_m", 2.0)))
+    corner_relaxation_m = max(0.0, float(settings.get("fence_offset_corner_relaxation_m", 1.5)))
 
     def point_cost(point: np.ndarray) -> float:
         distance_to_fence = distance_to_nearest_segment(point, segments)
@@ -980,10 +991,14 @@ def fence_offset_cost_for_task(
             danger_cost = danger_weight * (min_clearance_m - distance_to_fence + 1.0)
         if weight <= 0.0:
             return danger_cost
+        attraction_weight = weight
+        if corner_relaxation_m > 1e-6:
+            endpoint_distance = distance_to_nearest_segment_endpoint(point, segments)
+            attraction_weight *= min(1.0, max(0.0, endpoint_distance / corner_relaxation_m))
         offset_error = abs(distance_to_fence - preferred_offset_m)
         if offset_error <= deadband_m:
             return danger_cost
-        return danger_cost + weight * min(offset_error - deadband_m, max_error_m)
+        return danger_cost + attraction_weight * min(offset_error - deadband_m, max_error_m)
 
     return point_cost
 
@@ -1279,6 +1294,29 @@ def planner_accepts_variant(
             settings,
             side_constraint_segments_for_task(scene, task, flip_isaac_y),
         )
+        if planned_ok and planned_path:
+            raw_planned_path = list(planned_path)
+            planned_path = smooth_path_for_tracking(
+                planned_path,
+                collision_map.is_collision,
+                iterations=int(settings.get("controller_path_smoothing_iterations", 3)),
+                resample_spacing_m=float(settings.get("controller_path_resample_spacing_m", 0.1)),
+                max_point_shift_m=float(settings.get("controller_path_max_point_shift_m", 0.35)),
+                hairpin_angle_rad=math.radians(float(settings.get("controller_path_hairpin_angle_deg", 135.0))),
+            )
+            metrics["controller_path_smoothing_enabled"] = True
+            metrics["raw_planned_path_length_m"] = float(path_length(raw_planned_path))
+            metrics["raw_planned_point_count"] = len(raw_planned_path)
+            metrics["raw_planned_max_heading_delta_rad"] = float(max_heading_delta(raw_planned_path))
+            metrics["planned_path_length_m"] = float(path_length(planned_path))
+            metrics["planned_point_count"] = len(planned_path)
+            metrics["planned_max_heading_delta_rad"] = float(max_heading_delta(planned_path))
+            side_segments = side_constraint_segments_for_task(scene, task, flip_isaac_y)
+            if side_segments:
+                metrics["planned_min_target_fence_distance_m"] = path_min_distance_to_segments(
+                    planned_path,
+                    side_segments,
+                )
         metrics.update(initial_metrics)
         metrics["reference_path_length_m"] = reference_length
         metrics["path_length_ratio"] = (

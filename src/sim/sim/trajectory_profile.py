@@ -205,7 +205,81 @@ def shortcut_smooth(path: list[np.ndarray], collision_fn, iterations: int = 2) -
     return smoothed
 
 
+def max_heading_delta(path: list[np.ndarray]) -> float:
+    if len(path) < 3:
+        return 0.0
+    yaws = path_yaws(path)
+    return max((abs(wrap_to_pi(float(b) - float(a))) for a, b in zip(yaws[:-1], yaws[1:])), default=0.0)
+
+
+def smooth_path_for_tracking(
+    path: list[np.ndarray],
+    collision_fn=None,
+    *,
+    iterations: int = 3,
+    resample_spacing_m: float = 0.1,
+    max_point_shift_m: float = 0.35,
+    hairpin_angle_rad: float = 2.35,
+) -> list[np.ndarray]:
+    """Make a planned path easier for a forward path follower to track.
+
+    Hybrid A* can produce tiny hooks around tight corners that are collision-free
+    but awkward for pure pursuit/direct velocity tracking. This removes local
+    hairpin points and lightly smooths internal points, accepting an edit only
+    when the adjacent replacement segments remain collision-free.
+    """
+    if len(path) < 3:
+        return list(path)
+
+    smoothed = [np.asarray(point, dtype=np.float64).copy() for point in path]
+
+    for _ in range(max(1, int(iterations))):
+        output = [smoothed[0]]
+        changed = False
+        for index in range(1, len(smoothed) - 1):
+            prev_point = output[-1]
+            point = smoothed[index]
+            next_point = smoothed[index + 1]
+            in_vec = point - prev_point
+            out_vec = next_point - point
+            if np.linalg.norm(in_vec) < 1e-6 or np.linalg.norm(out_vec) < 1e-6:
+                changed = True
+                continue
+            in_yaw = math.atan2(float(in_vec[1]), float(in_vec[0]))
+            out_yaw = math.atan2(float(out_vec[1]), float(out_vec[0]))
+            if abs(wrap_to_pi(out_yaw - in_yaw)) > hairpin_angle_rad and segment_is_free(prev_point, next_point, collision_fn):
+                changed = True
+                continue
+            output.append(point)
+        output.append(smoothed[-1])
+        smoothed = output
+
+        adjusted = [smoothed[0]]
+        for index in range(1, len(smoothed) - 1):
+            prev_point = smoothed[index - 1]
+            point = smoothed[index]
+            next_point = smoothed[index + 1]
+            candidate = 0.25 * prev_point + 0.50 * point + 0.25 * next_point
+            if (
+                float(np.linalg.norm(candidate - point)) <= max_point_shift_m
+                and segment_is_free(adjusted[-1], candidate, collision_fn)
+                and segment_is_free(candidate, next_point, collision_fn)
+            ):
+                adjusted.append(candidate)
+                changed = True
+            else:
+                adjusted.append(point)
+        adjusted.append(smoothed[-1])
+        smoothed = adjusted
+        if not changed:
+            break
+
+    return resample_path(smoothed, resample_spacing_m)
+
+
 def segment_is_free(start: np.ndarray, end: np.ndarray, collision_fn, step_m: float = 0.1) -> bool:
+    if collision_fn is None:
+        return True
     distance = float(np.linalg.norm(end - start))
     steps = max(2, int(distance / step_m) + 1)
     for i in range(steps + 1):
