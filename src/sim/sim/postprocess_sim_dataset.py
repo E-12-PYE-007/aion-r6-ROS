@@ -259,6 +259,10 @@ def choose_longest_valid_segment(
     check_black_images: bool,
     black_image_min_mean: float,
     black_image_min_max: float,
+    trim_stationary_tail: bool,
+    stationary_tail_window_s: float,
+    stationary_tail_max_progress_m: float,
+    stationary_tail_min_progress_m: float,
 ) -> SegmentSelection:
     if not enabled:
         return SegmentSelection(
@@ -339,6 +343,7 @@ def choose_longest_valid_segment(
                 "index": index,
                 "valid": reason is None,
                 "reason": reason,
+                "time_s": time_s,
                 "progress_m": progress,
                 "tracking_error_m": tracking_error,
                 "fence_distance_m": fence_distance,
@@ -346,6 +351,40 @@ def choose_longest_valid_segment(
                 "record": record,
             }
         )
+
+    stationary_tail_start_index: int | None = None
+    if trim_stationary_tail and stationary_tail_window_s > 0.0 and stationary_tail_max_progress_m >= 0.0:
+        for start_candidate in candidates:
+            start_time = finite_float(start_candidate.get("time_s"))
+            start_progress = finite_float(start_candidate.get("progress_m"))
+            if start_time is None or start_progress is None:
+                continue
+            if start_progress < stationary_tail_min_progress_m:
+                continue
+            end_candidate = None
+            for candidate in candidates:
+                candidate_time = finite_float(candidate.get("time_s"))
+                if candidate_time is None or candidate_time < start_time + stationary_tail_window_s:
+                    continue
+                end_candidate = candidate
+                break
+            if end_candidate is None:
+                continue
+            end_progress = finite_float(end_candidate.get("progress_m"))
+            if end_progress is None:
+                continue
+            if end_progress - start_progress <= stationary_tail_max_progress_m:
+                stationary_tail_start_index = int(start_candidate["index"])
+                break
+
+    if stationary_tail_start_index is not None:
+        for candidate in candidates:
+            if int(candidate["index"]) < stationary_tail_start_index:
+                continue
+            if candidate["valid"]:
+                candidate["valid"] = False
+                candidate["reason"] = "stationary_tail"
+                invalid_reasons["stationary_tail"] = invalid_reasons.get("stationary_tail", 0) + 1
 
     best: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
@@ -400,6 +439,11 @@ def choose_longest_valid_segment(
             (float(c["fence_distance_m"]) for c in best if c["fence_distance_m"] is not None),
             default=None,
         ),
+        "trim_stationary_tail": trim_stationary_tail,
+        "stationary_tail_start_index": stationary_tail_start_index,
+        "stationary_tail_window_s": stationary_tail_window_s,
+        "stationary_tail_max_progress_m": stationary_tail_max_progress_m,
+        "stationary_tail_min_progress_m": stationary_tail_min_progress_m,
     }
     return SegmentSelection(records=selected_records, diagnostics=candidates, metrics=metrics)
 
@@ -539,6 +583,10 @@ def build_labels_for_rollout(
     check_segment_black_images: bool,
     black_image_min_mean: float,
     black_image_min_max: float,
+    trim_stationary_tail: bool,
+    stationary_tail_window_s: float,
+    stationary_tail_max_progress_m: float,
+    stationary_tail_min_progress_m: float,
     image_size: int,
     resize_mode: str,
     jpeg_quality: int,
@@ -562,6 +610,10 @@ def build_labels_for_rollout(
         check_black_images=check_segment_black_images,
         black_image_min_mean=black_image_min_mean,
         black_image_min_max=black_image_min_max,
+        trim_stationary_tail=trim_stationary_tail,
+        stationary_tail_window_s=stationary_tail_window_s,
+        stationary_tail_max_progress_m=stationary_tail_max_progress_m,
+        stationary_tail_min_progress_m=stationary_tail_min_progress_m,
     )
     if segment_filter and not bool(segment.metrics.get("accepted_segment")):
         return (
@@ -864,6 +916,29 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--black-image-min-mean", type=float, default=2.0)
     parser.add_argument("--black-image-min-max", type=float, default=8.0)
+    parser.add_argument(
+        "--trim-stationary-tail",
+        action="store_true",
+        help="Crop away timeout tail frames after path progress has stopped increasing.",
+    )
+    parser.add_argument(
+        "--stationary-tail-window-s",
+        type=float,
+        default=5.0,
+        help="Window duration used to detect that the rover has stopped making useful path progress.",
+    )
+    parser.add_argument(
+        "--stationary-tail-max-progress-m",
+        type=float,
+        default=0.15,
+        help="Maximum path-progress increase over the stationary-tail window before cropping starts.",
+    )
+    parser.add_argument(
+        "--stationary-tail-min-progress-m",
+        type=float,
+        default=2.0,
+        help="Minimum path progress before stationary-tail cropping is allowed.",
+    )
     parser.add_argument("--chunk-size", type=int, default=8)
     parser.add_argument("--first-preview-m", type=float, default=0.35)
     parser.add_argument("--waypoint-spacing-m", type=float, default=0.18)
@@ -939,6 +1014,10 @@ def main() -> int:
                 check_segment_black_images=not bool(args.no_segment_black_image_check),
                 black_image_min_mean=float(args.black_image_min_mean),
                 black_image_min_max=float(args.black_image_min_max),
+                trim_stationary_tail=bool(args.trim_stationary_tail),
+                stationary_tail_window_s=float(args.stationary_tail_window_s),
+                stationary_tail_max_progress_m=float(args.stationary_tail_max_progress_m),
+                stationary_tail_min_progress_m=float(args.stationary_tail_min_progress_m),
                 image_size=int(args.image_size),
                 resize_mode=str(args.resize_mode),
                 jpeg_quality=int(args.jpeg_quality),
