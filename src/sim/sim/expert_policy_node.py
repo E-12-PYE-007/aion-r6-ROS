@@ -34,6 +34,7 @@ from sim.expert_trajectory_utils import (
     point2,
     project_progress,
     project_progress_near,
+    reference_subgoals_for_path,
     sample_path_pose,
     sample_distance_action_target,
     sample_timed_action_target,
@@ -579,36 +580,11 @@ class ExpertPolicyNode(Node):
         return planner_settings.get(name, self.get_parameter(default_parameter).value)
 
     def reference_subgoals(self) -> list[tuple[np.ndarray, float]]:
-        total_length = path_length(self.path)
-        spacing = float(self.planner_setting("planner_subgoal_spacing_m", "planner_subgoal_spacing_m"))
-        endpoint_margin = min(
-            float(self.planner_setting("planner_subgoal_endpoint_margin_m", "planner_subgoal_endpoint_margin_m")),
-            max(total_length * 0.25, 0.0),
-        )
-        vertex_margin = float(self.planner_setting("planner_subgoal_vertex_margin_m", "planner_subgoal_vertex_margin_m"))
-        max_progress = max(total_length - endpoint_margin, 0.0)
-        if spacing <= 0.0 or max_progress <= spacing:
-            return [sample_path_pose(self.path, max_progress)]
-
-        vertex_progress_values = []
-        cumulative = 0.0
-        for index in range(len(self.path) - 1):
-            cumulative += float(np.linalg.norm(self.path[index + 1] - self.path[index]))
-            if index < len(self.path) - 2:
-                vertex_progress_values.append(cumulative)
-
-        progress_values = list(np.arange(spacing, total_length, spacing))
-        progress_values.append(max_progress)
-        adjusted_progress_values = []
-        for progress in progress_values:
-            adjusted = min(float(progress), max_progress)
-            for vertex_progress in vertex_progress_values:
-                if abs(adjusted - vertex_progress) < vertex_margin:
-                    adjusted = max(0.0, vertex_progress - vertex_margin)
-                    break
-            if not adjusted_progress_values or adjusted > adjusted_progress_values[-1] + 1e-6:
-                adjusted_progress_values.append(adjusted)
-        return [sample_path_pose(self.path, float(progress)) for progress in adjusted_progress_values]
+        settings = dict(self.variant.get("planner_settings") or {})
+        settings.setdefault("planner_subgoal_spacing_m", self.get_parameter("planner_subgoal_spacing_m").value)
+        settings.setdefault("planner_subgoal_endpoint_margin_m", self.get_parameter("planner_subgoal_endpoint_margin_m").value)
+        settings.setdefault("planner_subgoal_vertex_margin_m", self.get_parameter("planner_subgoal_vertex_margin_m").value)
+        return reference_subgoals_for_path(self.path, settings)
 
     def build_planner(self, collision_map: CollisionMap) -> HybridAStarPlanner:
         return HybridAStarPlanner(

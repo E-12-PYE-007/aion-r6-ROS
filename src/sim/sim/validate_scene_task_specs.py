@@ -25,6 +25,7 @@ from sim.expert_trajectory_utils import (
     point2,
     road_by_name,
     rotate,
+    reference_subgoals_for_path,
     sample_path_pose,
     world_to_robot,
 )
@@ -841,33 +842,7 @@ def reference_path_for_task(
 
 
 def reference_subgoals(reference_path: list[np.ndarray], settings: dict[str, Any]) -> list[tuple[np.ndarray, float]]:
-    total_length = path_length(reference_path)
-    spacing = float(settings.get("planner_subgoal_spacing_m", 3.0))
-    endpoint_margin = min(float(settings.get("planner_subgoal_endpoint_margin_m", 0.5)), max(total_length * 0.25, 0.0))
-    vertex_margin = float(settings.get("planner_subgoal_vertex_margin_m", 0.5))
-    max_progress = max(total_length - endpoint_margin, 0.0)
-    if spacing <= 0.0 or max_progress <= spacing:
-        return [sample_path_pose(reference_path, max_progress)]
-
-    vertex_progress_values = []
-    cumulative = 0.0
-    for index in range(len(reference_path) - 1):
-        cumulative += float(np.linalg.norm(reference_path[index + 1] - reference_path[index]))
-        if index < len(reference_path) - 2:
-            vertex_progress_values.append(cumulative)
-
-    progress_values = list(np.arange(spacing, total_length, spacing))
-    progress_values.append(max_progress)
-    adjusted_progress_values = []
-    for progress in progress_values:
-        adjusted = min(float(progress), max_progress)
-        for vertex_progress in vertex_progress_values:
-            if abs(adjusted - vertex_progress) < vertex_margin:
-                adjusted = max(0.0, vertex_progress - vertex_margin)
-                break
-        if not adjusted_progress_values or adjusted > adjusted_progress_values[-1] + 1e-6:
-            adjusted_progress_values.append(adjusted)
-    return [sample_path_pose(reference_path, float(progress)) for progress in adjusted_progress_values]
+    return reference_subgoals_for_path(reference_path, settings)
 
 
 def build_planner(
