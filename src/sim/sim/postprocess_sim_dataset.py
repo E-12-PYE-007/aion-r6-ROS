@@ -252,6 +252,7 @@ def choose_longest_valid_segment(
     enabled: bool,
     max_tracking_error_m: float,
     min_progress_m: float,
+    max_progress_m: float | None,
     min_samples: int,
     min_target_fence_clearance_m: float | None,
     enforce_fence_side: bool,
@@ -364,6 +365,15 @@ def choose_longest_valid_segment(
         end_index = -1
         progress_delta = 0.0
     else:
+        if max_progress_m is not None and max_progress_m > 0.0:
+            start_progress = float(best[0]["progress_m"])
+            capped = [
+                candidate
+                for candidate in best
+                if float(candidate["progress_m"]) - start_progress <= float(max_progress_m)
+            ]
+            if len(capped) >= min_samples:
+                best = capped
         selected_records = [candidate["record"] for candidate in best]
         start_index = int(best[0]["index"])
         end_index = int(best[-1]["index"])
@@ -379,6 +389,7 @@ def choose_longest_valid_segment(
         "selected_end_index": end_index,
         "selected_progress_m": progress_delta,
         "min_required_progress_m": min_progress_m,
+        "max_allowed_progress_m": max_progress_m,
         "min_required_samples": min_samples,
         "max_tracking_error_m": max_tracking_error_m,
         "min_target_fence_clearance_m": min_target_fence_clearance_m,
@@ -521,6 +532,7 @@ def build_labels_for_rollout(
     waypoint_convention: str,
     segment_filter: bool,
     min_segment_progress_m: float,
+    max_segment_progress_m: float | None,
     max_segment_tracking_error_m: float,
     min_segment_target_fence_clearance_m: float | None,
     enforce_segment_fence_side: bool,
@@ -543,6 +555,7 @@ def build_labels_for_rollout(
         enabled=segment_filter,
         max_tracking_error_m=max_segment_tracking_error_m,
         min_progress_m=min_segment_progress_m,
+        max_progress_m=max_segment_progress_m,
         min_samples=min_samples,
         min_target_fence_clearance_m=min_segment_target_fence_clearance_m,
         enforce_fence_side=enforce_segment_fence_side,
@@ -822,6 +835,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum reference-path progress required for a salvaged segment.",
     )
     parser.add_argument(
+        "--max-segment-progress-m",
+        type=float,
+        default=None,
+        help="Optional cap on exported segment progress. Useful for keeping only a clean prefix from a failed rollout.",
+    )
+    parser.add_argument(
         "--max-segment-tracking-error-m",
         type=float,
         default=1.25,
@@ -907,6 +926,9 @@ def main() -> int:
                 waypoint_convention=str(args.waypoint_convention),
                 segment_filter=not bool(args.no_segment_filter),
                 min_segment_progress_m=float(args.min_segment_progress_m),
+                max_segment_progress_m=(
+                    None if args.max_segment_progress_m is None else float(args.max_segment_progress_m)
+                ),
                 max_segment_tracking_error_m=float(args.max_segment_tracking_error_m),
                 min_segment_target_fence_clearance_m=(
                     None

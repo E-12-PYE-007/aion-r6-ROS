@@ -26,6 +26,7 @@ from sim.expert_trajectory_utils import (
     get_start_pose,
     local_odom_to_world,
     load_yaml,
+    nearest_forward_path_target,
     odom_to_pose,
     orient_and_crop_path_from_start,
     orient_loop_path_from_start,
@@ -991,6 +992,20 @@ class ExpertPolicyNode(Node):
             _, position, yaw, distance = best
             return position, yaw, distance
 
+        local_target = nearest_forward_path_target(
+            trajectory,
+            self.current_position,
+            self.current_yaw,
+            progress_m,
+            min_forward_x_m=0.10,
+            max_lateral_y_m=self.max_target_lateral_error_m,
+            max_backward_m=1.0,
+            max_forward_m=max(2.0, self.max_tracking_target_distance_m),
+            search_step_m=0.10,
+        )
+        if local_target is not None:
+            return local_target
+
         position, yaw = sample_path_pose(trajectory.path, progress_m)
         return position, yaw, progress_m
 
@@ -1004,6 +1019,21 @@ class ExpertPolicyNode(Node):
         closest_progress = project_progress(trajectory.path, self.current_position)
         target_distance = min(total_distance, closest_progress + self.recovery_lookahead_m)
         position, yaw = sample_path_pose(trajectory.path, target_distance)
+        x, y, _ = world_to_robot(self.current_position, self.current_yaw, position, yaw)
+        if not (x > 0.10 and abs(y) <= self.max_target_lateral_error_m):
+            local_target = nearest_forward_path_target(
+                trajectory,
+                self.current_position,
+                self.current_yaw,
+                self.path_progress_m,
+                min_forward_x_m=0.10,
+                max_lateral_y_m=self.max_target_lateral_error_m,
+                max_backward_m=1.5,
+                max_forward_m=max(2.0, self.max_tracking_target_distance_m),
+                search_step_m=0.10,
+            )
+            if local_target is not None:
+                return local_target
         return position, yaw, target_distance
 
     def publish_expert_cmd_vel(self, trajectory: TimedTrajectory, progress_m: float) -> None:
