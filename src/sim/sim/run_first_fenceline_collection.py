@@ -906,6 +906,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--corner-duration-s", type=float, default=120.0)
     parser.add_argument("--rectangle-duration-s", type=float, default=180.0)
     parser.add_argument("--large-perimeter-duration-s", type=float, default=260.0)
+    parser.add_argument(
+        "--max-required-progress-shortfall-m",
+        type=float,
+        default=5.0,
+        help="Rollout validation tolerance for ending slightly short of required path progress.",
+    )
+    parser.add_argument("--max-final-target-distance-m", type=float, default=5.0)
     parser.add_argument("--prepare-timeout-s", type=float, default=120.0)
     parser.add_argument(
         "--validation-planner-preset",
@@ -1172,6 +1179,10 @@ def main() -> int:
             rollouts_dir.as_posix(),
             "--prepare-timeout-s",
             str(args.prepare_timeout_s),
+            "--max-required-progress-shortfall-m",
+            str(args.max_required_progress_shortfall_m),
+            "--max-final-target-distance-m",
+            str(args.max_final_target_distance_m),
             *(["--dry-run"] if args.dry_run else []),
         ],
         label="Run first-pass fenceline rollouts",
