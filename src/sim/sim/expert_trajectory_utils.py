@@ -770,19 +770,60 @@ def offset_segment_sequence(
     offset_m: float,
     side: str,
 ) -> list[np.ndarray]:
-    """Offset each segment independently, then bridge between offset endpoints."""
+    """Offset each segment and round connected joins on the driving line."""
+    def append_point(path: list[np.ndarray], point: np.ndarray) -> None:
+        if not path or float(np.linalg.norm(path[-1] - point)) > 1e-6:
+            path.append(point)
+
+    def same_point(a: np.ndarray, b: np.ndarray) -> bool:
+        return float(np.linalg.norm(a - b)) <= 1e-6
+
+    def append_corner_arc(path: list[np.ndarray], center: np.ndarray, end_point: np.ndarray) -> None:
+        if not path:
+            append_point(path, end_point)
+            return
+        start_point = path[-1]
+        radius_start = float(np.linalg.norm(start_point - center))
+        radius_end = float(np.linalg.norm(end_point - center))
+        if radius_start <= 1e-6 or radius_end <= 1e-6:
+            append_point(path, end_point)
+            return
+        radius = 0.5 * (radius_start + radius_end)
+        start_angle = math.atan2(float(start_point[1] - center[1]), float(start_point[0] - center[0]))
+        end_angle = math.atan2(float(end_point[1] - center[1]), float(end_point[0] - center[0]))
+        delta = wrap_to_pi(end_angle - start_angle)
+        if abs(delta) < math.radians(5.0) or abs(delta) > math.radians(170.0):
+            append_point(path, end_point)
+            return
+        steps = max(2, int(math.ceil(abs(delta) / math.radians(12.0))))
+        for step in range(1, steps + 1):
+            angle = start_angle + delta * (float(step) / float(steps))
+            append_point(path, center + radius * np.asarray([math.cos(angle), math.sin(angle)], dtype=np.float64))
+
     points: list[np.ndarray] = []
+    segment_paths: list[tuple[np.ndarray, np.ndarray, list[np.ndarray]]] = []
     for segment in segments:
+        original_start, original_end = segment_polyline(segment, flip_isaac_y)
         segment_path = offset_polyline(segment_polyline(segment, flip_isaac_y), offset_m, side)
         if not segment_path:
             continue
+        segment_paths.append((original_start, original_end, segment_path))
+
+    for index, (_, original_end, segment_path) in enumerate(segment_paths):
         if not points:
-            points.extend(segment_path)
+            for point in segment_path:
+                append_point(points, point)
             continue
-        if float(np.linalg.norm(points[-1] - segment_path[0])) > 1e-6:
-            points.append(segment_path[0])
-        if float(np.linalg.norm(points[-1] - segment_path[-1])) > 1e-6:
-            points.append(segment_path[-1])
+        previous_original_end = segment_paths[index - 1][1]
+        original_start = segment_paths[index][0]
+        if same_point(previous_original_end, original_start):
+            append_corner_arc(points, original_start, segment_path[0])
+        else:
+            append_point(points, segment_path[0])
+        append_point(points, segment_path[-1])
+
+    if len(segment_paths) > 2 and same_point(segment_paths[-1][1], segment_paths[0][0]) and points:
+        append_corner_arc(points, segment_paths[0][0], points[0])
     return points
 
 
