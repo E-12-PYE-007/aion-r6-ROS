@@ -270,6 +270,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_endpoint_margin_m": 0.5,
     "planner_subgoal_corner_angle_deg": 45.0,
     "planner_subgoal_corner_exclusion_m": 1.0,
+    "planner_subgoal_min_safe_interval_m": 0.75,
     "hybrid_astar_max_iterations": 20000,
     "allow_reverse": False,
     "fence_offset_cost_weight": 0.6,

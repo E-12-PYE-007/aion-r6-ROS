@@ -365,20 +365,54 @@ def reference_subgoals_for_path(reference_path: list[np.ndarray], settings: dict
         if turn_angle_deg >= corner_angle_deg:
             sharp_vertex_progress_values.append(cumulative)
 
-    progress_values = list(np.arange(spacing, total_length, spacing))
-    progress_values.append(max_progress)
+    blocked_intervals: list[tuple[float, float]] = []
+    for vertex_progress in sharp_vertex_progress_values:
+        blocked_intervals.append((
+            max(0.0, vertex_progress - corner_exclusion_m),
+            min(max_progress, vertex_progress + corner_exclusion_m),
+        ))
+    for vertex_progress in vertex_progress_values:
+        blocked_intervals.append((
+            max(0.0, vertex_progress - vertex_margin),
+            min(max_progress, vertex_progress + vertex_margin),
+        ))
+    blocked_intervals.sort()
 
+    merged_blocked: list[tuple[float, float]] = []
+    for start, end in blocked_intervals:
+        if end <= 0.0 or start >= max_progress:
+            continue
+        if not merged_blocked or start > merged_blocked[-1][1] + 1e-6:
+            merged_blocked.append((start, end))
+        else:
+            merged_blocked[-1] = (merged_blocked[-1][0], max(merged_blocked[-1][1], end))
+
+    safe_intervals: list[tuple[float, float]] = []
+    cursor = min(endpoint_margin, max_progress)
+    for blocked_start, blocked_end in merged_blocked:
+        if blocked_start > cursor:
+            safe_intervals.append((cursor, blocked_start))
+        cursor = max(cursor, blocked_end)
+    if cursor < max_progress:
+        safe_intervals.append((cursor, max_progress))
+
+    min_interval_m = float(settings.get("planner_subgoal_min_safe_interval_m", 0.75))
     adjusted_progress_values: list[float] = []
-    for progress in sorted(progress_values):
-        adjusted = min(float(progress), max_progress)
-        if any(abs(adjusted - vertex_progress) < corner_exclusion_m for vertex_progress in sharp_vertex_progress_values):
+    for interval_start, interval_end in safe_intervals:
+        interval_length = interval_end - interval_start
+        if interval_length < min_interval_m:
             continue
-        if any(abs(adjusted - vertex_progress) < vertex_margin for vertex_progress in vertex_progress_values):
-            continue
-        if adjusted <= 1e-6:
-            continue
-        if not adjusted_progress_values or adjusted > adjusted_progress_values[-1] + 1e-6:
-            adjusted_progress_values.append(adjusted)
+        first = max(interval_start + min(0.5 * interval_length, spacing), spacing)
+        progress = first
+        while progress < interval_end - 1e-6:
+            adjusted_progress_values.append(progress)
+            progress += spacing
+        midpoint = 0.5 * (interval_start + interval_end)
+        if not any(abs(midpoint - existing) < min(spacing * 0.35, 0.75) for existing in adjusted_progress_values):
+            adjusted_progress_values.append(midpoint)
+    if not adjusted_progress_values:
+        adjusted_progress_values = [max_progress]
+    adjusted_progress_values = sorted(set(round(float(progress), 6) for progress in adjusted_progress_values))
     return [sample_path_pose(reference_path, float(progress)) for progress in adjusted_progress_values]
 
 
@@ -763,7 +797,7 @@ def offset_segment_sequence(
     offset_m: float,
     side: str,
 ) -> list[np.ndarray]:
-    """Offset each segment and round connected joins on the driving line."""
+    """Offset connected segments onto the driving line with mitered joins."""
     def append_point(path: list[np.ndarray], point: np.ndarray) -> None:
         if not path or float(np.linalg.norm(path[-1] - point)) > 1e-6:
             path.append(point)
@@ -771,52 +805,69 @@ def offset_segment_sequence(
     def same_point(a: np.ndarray, b: np.ndarray) -> bool:
         return float(np.linalg.norm(a - b)) <= 1e-6
 
-    def append_corner_arc(path: list[np.ndarray], center: np.ndarray, end_point: np.ndarray) -> None:
-        if not path:
-            append_point(path, end_point)
-            return
-        start_point = path[-1]
-        radius_start = float(np.linalg.norm(start_point - center))
-        radius_end = float(np.linalg.norm(end_point - center))
-        if radius_start <= 1e-6 or radius_end <= 1e-6:
-            append_point(path, end_point)
-            return
-        radius = 0.5 * (radius_start + radius_end)
-        start_angle = math.atan2(float(start_point[1] - center[1]), float(start_point[0] - center[0]))
-        end_angle = math.atan2(float(end_point[1] - center[1]), float(end_point[0] - center[0]))
-        delta = wrap_to_pi(end_angle - start_angle)
-        if abs(delta) < math.radians(5.0) or abs(delta) > math.radians(170.0):
-            append_point(path, end_point)
-            return
-        steps = max(2, int(math.ceil(abs(delta) / math.radians(12.0))))
-        for step in range(1, steps + 1):
-            angle = start_angle + delta * (float(step) / float(steps))
-            append_point(path, center + radius * np.asarray([math.cos(angle), math.sin(angle)], dtype=np.float64))
+    def shifted_segment(segment: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        original_start, original_end = segment_polyline(segment, flip_isaac_y)
+        direction = original_end - original_start
+        length = float(np.linalg.norm(direction))
+        if length <= 1e-9:
+            return original_start, original_end, original_start, original_end
+        unit = direction / length
+        left_normal = np.asarray([-unit[1], unit[0]], dtype=np.float64)
+        normal = left_normal if side == "left" else -left_normal
+        return original_start, original_end, original_start + offset_m * normal, original_end + offset_m * normal
+
+    def line_intersection(
+        point_a: np.ndarray,
+        point_b: np.ndarray,
+        point_c: np.ndarray,
+        point_d: np.ndarray,
+    ) -> np.ndarray | None:
+        direction_a = point_b - point_a
+        direction_b = point_d - point_c
+        cross = float(direction_a[0] * direction_b[1] - direction_a[1] * direction_b[0])
+        if abs(cross) <= 1e-9:
+            return None
+        delta = point_c - point_a
+        t = float((delta[0] * direction_b[1] - delta[1] * direction_b[0]) / cross)
+        return point_a + t * direction_a
 
     points: list[np.ndarray] = []
-    segment_paths: list[tuple[np.ndarray, np.ndarray, list[np.ndarray]]] = []
-    for segment in segments:
-        original_start, original_end = segment_polyline(segment, flip_isaac_y)
-        segment_path = offset_polyline(segment_polyline(segment, flip_isaac_y), offset_m, side)
-        if not segment_path:
-            continue
-        segment_paths.append((original_start, original_end, segment_path))
+    shifted_segments = [shifted_segment(segment) for segment in segments]
+    shifted_segments = [
+        item
+        for item in shifted_segments
+        if float(np.linalg.norm(item[1] - item[0])) > 1e-9
+    ]
+    if not shifted_segments:
+        return points
 
-    for index, (_, original_end, segment_path) in enumerate(segment_paths):
-        if not points:
-            for point in segment_path:
-                append_point(points, point)
-            continue
-        previous_original_end = segment_paths[index - 1][1]
-        original_start = segment_paths[index][0]
-        if same_point(previous_original_end, original_start):
-            append_corner_arc(points, original_start, segment_path[0])
-        else:
-            append_point(points, segment_path[0])
-        append_point(points, segment_path[-1])
+    count = len(shifted_segments)
+    closed = count >= 3 and same_point(shifted_segments[-1][1], shifted_segments[0][0])
 
-    if len(segment_paths) > 2 and same_point(segment_paths[-1][1], segment_paths[0][0]) and points:
-        append_corner_arc(points, segment_paths[0][0], points[0])
+    def offset_start_for(index: int) -> np.ndarray:
+        original_start, _, shifted_start, _ = shifted_segments[index]
+        if index > 0 and same_point(shifted_segments[index - 1][1], original_start):
+            intersection = line_intersection(shifted_segments[index - 1][2], shifted_segments[index - 1][3], shifted_start, shifted_segments[index][3])
+            return intersection if intersection is not None else shifted_start
+        if index == 0 and closed:
+            intersection = line_intersection(shifted_segments[-1][2], shifted_segments[-1][3], shifted_start, shifted_segments[index][3])
+            return intersection if intersection is not None else shifted_start
+        return shifted_start
+
+    def offset_end_for(index: int) -> np.ndarray:
+        _, original_end, _, shifted_end = shifted_segments[index]
+        next_index = (index + 1) % count
+        if (index < count - 1 or closed) and same_point(original_end, shifted_segments[next_index][0]):
+            intersection = line_intersection(shifted_segments[index][2], shifted_end, shifted_segments[next_index][2], shifted_segments[next_index][3])
+            return intersection if intersection is not None else shifted_end
+        return shifted_end
+
+    for index in range(count):
+        append_point(points, offset_start_for(index))
+        append_point(points, offset_end_for(index))
+
+    if closed and points and not same_point(points[0], points[-1]):
+        append_point(points, points[0])
     return points
 
 
