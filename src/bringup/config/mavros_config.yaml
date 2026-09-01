@@ -1,0 +1,19 @@
+# aion_bringup/config/mavros_config.yaml
+/**/mavros_fcu:
+  ros__parameters:
+    cmd:
+      use_comp_id_system_control: true
+    imu:
+      frame_id: 'base_link'
+      # Use data_raw (unfused IMU) -- data includes PX4's own attitude fusion,
+      # which you don't want double-counted against the Jetson EKF.
+      linear_acceleration_stdev: 0.0003
+      angular_velocity_stdev: 0.0003
+    global_position:
+      frame_id: 'map'
+      child_frame_id: 'base_link'
+      # Use the raw/fix topic, not the fused global_position/global,
+      # for the same reason as above.
+      use_relative_alt: true
+      tf:
+        send: false   # Jetson EKF publishes the map->base_link tf, not MAVROS
