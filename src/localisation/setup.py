@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'encoder_localisation = localisation.encoder_localisation:main',
+            'cam_slam_bridge = localisation.cam_slam_bridge:main',
         ],
     },
 )
