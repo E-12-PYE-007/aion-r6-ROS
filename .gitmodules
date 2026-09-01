@@ -2,3 +2,6 @@
 	path = src/px4_msgs
 	url = https://github.com/PX4/px4_msgs
 	branch = release/1.17
+[submodule "src/OrbbecSDK_ROS2"]
+	path = src/OrbbecSDK_ROS2
+	url = https://github.com/orbbec/OrbbecSDK_ROS2.git
