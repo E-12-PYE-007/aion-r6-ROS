@@ -260,7 +260,7 @@ DEFAULT_PLANNER_SETTINGS = {
     "planner_subgoal_search_step_m": 0.5,
     "planner_subgoal_max_candidates": 48,
     "planner_subgoal_min_clearance_m": 0.15,
-    "planner_fence_min_clearance_m": 0.65,
+    "planner_fence_min_clearance_m": 0.5,
     "planner_subgoal_vertex_margin_m": 0.5,
     "planner_subgoal_endpoint_margin_m": 0.5,
     "hybrid_astar_max_iterations": 20000,
@@ -561,17 +561,17 @@ def trajectory_variants_for_task(
                 offset_cost_weight = 0.8
             elif is_nominal:
                 target_offset_m = 0.8
-                min_fence_clearance_m = 0.65
+                min_fence_clearance_m = 0.5
                 fence_cost_weight = 35.0
                 offset_cost_weight = 1.0
             elif variant_type == "recovery":
                 target_offset_m = max(float(variant.get("preferred_offset_m", 0.8)), 0.9)
-                min_fence_clearance_m = 0.75
+                min_fence_clearance_m = 0.5
                 fence_cost_weight = 60.0
                 offset_cost_weight = 1.25
             else:
                 target_offset_m = max(float(variant.get("preferred_offset_m", 0.8)), 0.8)
-                min_fence_clearance_m = 0.65
+                min_fence_clearance_m = 0.5
                 fence_cost_weight = 35.0
                 offset_cost_weight = 1.0
             variant["preferred_offset_m"] = target_offset_m
