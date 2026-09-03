@@ -595,7 +595,7 @@ recovery_right_offset
 
 recovery_wrong_heading
   recovery_case: wrong_heading
-  start_pose_delta: x=0.0, y=0.0, yaw=0.85 rad
+  start_pose_delta: x=0.0, y=0.0, yaw=0.45 rad
   max_speed_mps: 0.25
   max_yaw_rate_radps: 0.35
 
@@ -610,12 +610,6 @@ recovery_too_far
   start_pose_delta: x=0.0, y=0.45, yaw=-0.20 rad
   max_speed_mps: 0.25
   max_yaw_rate_radps: 0.35
-
-recovery_bad_approach_heading
-  recovery_case: bad_approach_heading
-  start_pose_delta: x=-0.25, y=0.0, yaw=1.20 rad
-  max_speed_mps: 0.20
-  max_yaw_rate_radps: 0.40
 ```
 
 The `start_pose_delta` can be applied at the Isaac layout YAML level with `expand_pose_variants`. This avoids needing a runtime reset service in Isaac. The expert node still reads planner and speed settings from the selected variant.
@@ -633,12 +627,11 @@ ros2 run sim generate_scene_task_specs <isaac_yaml_or_dir> \
 This adds extra variants named like `recovery_too_far_jitter_01`. The fixed variants remain in the spec, and each jittered variant records `source_variant_id`, `jitter_index`, and a sampled `start_pose_delta`. The sampled ranges are:
 
 ```text
-recovery_left_offset: y=0.10..0.25, yaw=0.20..0.50
-recovery_right_offset: y=-0.25..-0.10, yaw=-0.50..-0.20
-recovery_wrong_heading: yaw=0.60..1.00
-recovery_too_close: y=-0.50..-0.25, yaw=0.10..0.35
-recovery_too_far: y=0.30..0.70, yaw=-0.35..0.10
-recovery_bad_approach_heading: x=-0.50..-0.15, yaw=0.80..1.40
+recovery_left_offset: y=0.10..0.25, yaw=0.15..0.40
+recovery_right_offset: y=-0.25..-0.10, yaw=-0.40..-0.15
+recovery_wrong_heading: yaw=0.25..0.55
+recovery_too_close: y=-0.40..-0.20, yaw=0.10..0.30
+recovery_too_far: y=0.25..0.55, yaw=-0.30..0.10
 ```
 
 The default `--recovery-jitter-count 0` keeps task generation unchanged for small tests.

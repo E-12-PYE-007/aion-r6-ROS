@@ -39,32 +39,27 @@ RECOVERY_JITTER_RANGES = {
     "recovery_left_offset": {
         "x_m": (0.0, 0.0),
         "y_m": (0.10, 0.25),
-        "yaw_rad": (0.20, 0.50),
+        "yaw_rad": (0.15, 0.40),
     },
     "recovery_right_offset": {
         "x_m": (0.0, 0.0),
         "y_m": (-0.25, -0.10),
-        "yaw_rad": (-0.50, -0.20),
+        "yaw_rad": (-0.40, -0.15),
     },
     "recovery_wrong_heading": {
         "x_m": (0.0, 0.0),
         "y_m": (0.0, 0.0),
-        "yaw_rad": (0.60, 1.00),
+        "yaw_rad": (0.25, 0.55),
     },
     "recovery_too_close": {
         "x_m": (0.0, 0.0),
-        "y_m": (-0.50, -0.25),
-        "yaw_rad": (0.10, 0.35),
+        "y_m": (-0.40, -0.20),
+        "yaw_rad": (0.10, 0.30),
     },
     "recovery_too_far": {
         "x_m": (0.0, 0.0),
-        "y_m": (0.30, 0.70),
-        "yaw_rad": (-0.35, 0.10),
-    },
-    "recovery_bad_approach_heading": {
-        "x_m": (-0.50, -0.15),
-        "y_m": (0.0, 0.0),
-        "yaw_rad": (0.80, 1.40),
+        "y_m": (0.25, 0.55),
+        "yaw_rad": (-0.30, 0.10),
     },
 }
 
@@ -521,7 +516,7 @@ def trajectory_variants_for_task(
             "recovery",
             0.8,
             speed_overrides={"max_speed_mps": 0.25, "max_yaw_rate_radps": 0.35},
-            start_pose_delta={"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.85},
+            start_pose_delta={"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.45},
             recovery_case="wrong_heading",
             data_category="recovery",
             scenario_tags=unique_tags(base_tags, ["recovery", "wrong_heading"]),
@@ -545,16 +540,6 @@ def trajectory_variants_for_task(
             recovery_case="start_too_far",
             data_category="recovery",
             scenario_tags=unique_tags(base_tags, ["recovery", "start_too_far"]),
-        ),
-        variant_settings(
-            "recovery_bad_approach_heading",
-            "recovery",
-            0.8,
-            speed_overrides={"max_speed_mps": 0.2, "max_yaw_rate_radps": 0.4},
-            start_pose_delta={"x_m": -0.25, "y_m": 0.0, "yaw_rad": 1.2},
-            recovery_case="bad_approach_heading",
-            data_category="recovery",
-            scenario_tags=unique_tags(base_tags, ["recovery", "bad_approach", "wrong_heading"]),
         ),
     ])
     if task_type == "follow_fence_sequence":
@@ -595,7 +580,7 @@ def trajectory_variants_for_task(
                 "planner_subgoal_longitudinal_search_m": 2.5,
                 "min_turn_radius_m": max(
                     float(variant["planner_settings"].get("min_turn_radius_m", 0.75)),
-                    1.0 if is_nominal or is_tight else 1.2,
+                    1.3,
                 ),
                 "obstacle_padding_m": max(
                     float(variant["planner_settings"].get("obstacle_padding_m", 0.08)),
@@ -606,15 +591,12 @@ def trajectory_variants_for_task(
                     0.20 if is_nominal or is_tight else 0.25,
                 ),
                 "planner_fence_min_clearance_m": min_fence_clearance_m,
-                "obstacle_clearance_cost_distance_m": 0.75,
+                "obstacle_clearance_cost_distance_m": 1.1,
                 "obstacle_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("obstacle_clearance_cost_weight", 0.5)),
-                    0.8,
+                    1.8,
                 ),
-                "fence_offset_cost_weight": max(
-                    float(variant["planner_settings"].get("fence_offset_cost_weight", 0.6)),
-                    offset_cost_weight,
-                ),
+                "fence_offset_cost_weight": min(offset_cost_weight, 0.45),
                 "fence_min_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("fence_min_clearance_cost_weight", 35.0)),
                     fence_cost_weight,
