@@ -580,7 +580,7 @@ def trajectory_variants_for_task(
                 "planner_subgoal_longitudinal_search_m": 2.5,
                 "min_turn_radius_m": max(
                     float(variant["planner_settings"].get("min_turn_radius_m", 0.75)),
-                    1.3,
+                    1.05 if is_nominal or is_tight else 1.15,
                 ),
                 "obstacle_padding_m": max(
                     float(variant["planner_settings"].get("obstacle_padding_m", 0.08)),
@@ -591,12 +591,15 @@ def trajectory_variants_for_task(
                     0.20 if is_nominal or is_tight else 0.25,
                 ),
                 "planner_fence_min_clearance_m": min_fence_clearance_m,
-                "obstacle_clearance_cost_distance_m": 1.1,
+                "obstacle_clearance_cost_distance_m": 0.95 if is_nominal or is_tight else 1.05,
                 "obstacle_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("obstacle_clearance_cost_weight", 0.5)),
-                    1.8,
+                    1.25 if is_nominal or is_tight else 1.45,
                 ),
-                "fence_offset_cost_weight": min(offset_cost_weight, 0.45),
+                "fence_offset_cost_weight": max(
+                    float(variant["planner_settings"].get("fence_offset_cost_weight", 0.6)),
+                    offset_cost_weight,
+                ),
                 "fence_min_clearance_cost_weight": max(
                     float(variant["planner_settings"].get("fence_min_clearance_cost_weight", 35.0)),
                     fence_cost_weight,
