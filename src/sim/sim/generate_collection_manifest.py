@@ -261,6 +261,48 @@ def select_visual_usds(
     return selected or visuals[:max_visuals_per_task_variant]
 
 
+def target_segment_length_m(segment: dict[str, Any]) -> float:
+    start = segment.get("start")
+    end = segment.get("end")
+    if not isinstance(start, (list, tuple)) or not isinstance(end, (list, tuple)) or len(start) < 2 or len(end) < 2:
+        return 0.0
+    dx = float(end[0]) - float(start[0])
+    dy = float(end[1]) - float(start[1])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def short_episode_duration_s(layout: dict[str, Any], fallback_duration_s: float | None) -> float:
+    metadata = layout.get("episode_metadata")
+    if not isinstance(metadata, dict):
+        return float(fallback_duration_s or 45.0)
+
+    tracking = metadata.get("target_tracking") if isinstance(metadata.get("target_tracking"), dict) else {}
+    nominal_speed_mps = max(float(tracking.get("nominal_speed_mps", 0.35)), 0.05)
+    target_segments = metadata.get("target_offset_segments")
+    target_length_m = 0.0
+    if isinstance(target_segments, list):
+        target_length_m = sum(target_segment_length_m(segment) for segment in target_segments if isinstance(segment, dict))
+
+    family = str(metadata.get("episode_family") or layout.get("episode_family") or "")
+    role = str(metadata.get("episode_role") or layout.get("episode_role") or "")
+    buffer_s = 8.0
+    min_duration_s = 30.0
+    max_duration_s = 45.0
+    if "gap" in family:
+        buffer_s = 10.0
+        min_duration_s = 40.0
+        max_duration_s = 60.0 if role == "obstacle" else 50.0
+    elif "corner" in family:
+        buffer_s = 10.0
+        min_duration_s = 40.0
+        max_duration_s = 55.0
+
+    if target_length_m <= 1e-6:
+        return float(fallback_duration_s or min_duration_s)
+    estimated_s = target_length_m / nominal_speed_mps + buffer_s
+    return float(max(min_duration_s, min(max_duration_s, round(estimated_s))))
+
+
 def build_rollouts_for_spec(
     spec_path: Path,
     spec: dict[str, Any],
@@ -272,6 +314,7 @@ def build_rollouts_for_spec(
     max_visuals_per_task_variant: int | None,
     visual_sample_seed: int,
     task_family: str,
+    use_short_episode_durations: bool,
 ) -> list[dict[str, Any]]:
     scene = spec.get("scene", {})
     collection = spec.get("collection", {})
@@ -282,6 +325,13 @@ def build_rollouts_for_spec(
         spec_path.parent,
     )
     base_usd = resolve_path(scene.get("generated_usd"), isaac_root, spec_path.parent)
+    base_layout_data = load_yaml(base_layout) if use_short_episode_durations and base_layout and base_layout.exists() else None
+    base_duration_s = collection.get("duration_s")
+    duration_s = (
+        short_episode_duration_s(base_layout_data, float(base_duration_s) if base_duration_s is not None else None)
+        if isinstance(base_layout_data, dict)
+        else base_duration_s
+    )
 
     rows: list[dict[str, Any]] = []
     for task in spec.get("tasks", []):
@@ -347,7 +397,7 @@ def build_rollouts_for_spec(
                     "instruction": task.get("instruction", ""),
                     "collection": {
                         "base_dir": collection.get("base_dir"),
-                        "duration_s": collection.get("duration_s"),
+                        "duration_s": duration_s,
                         "camera_topic": collection.get("camera_topic", "/vla/cam"),
                         "odom_topic": collection.get("odom_topic", "/sim_odom"),
                         "cmd_vel_topic": collection.get("cmd_vel_topic", "/cmd_vel"),
@@ -395,6 +445,11 @@ def parse_args() -> argparse.Namespace:
             "skips stop, hold, gap-pass, switch-side, and approach-target tasks."
         ),
     )
+    parser.add_argument(
+        "--short-episode-durations",
+        action="store_true",
+        help="Set each row's collection.duration_s from short-episode layout metadata and target path length.",
+    )
     return parser.parse_args()
 
 
@@ -426,6 +481,7 @@ def main() -> None:
                 max_visuals_per_task_variant=max_visuals_per_task_variant,
                 visual_sample_seed=int(args.visual_sample_seed),
                 task_family=args.task_family,
+                use_short_episode_durations=bool(args.short_episode_durations),
             )
         )
 
@@ -440,6 +496,7 @@ def main() -> None:
         "max_visuals_per_task_variant": max_visuals_per_task_variant,
         "visual_sample_seed": int(args.visual_sample_seed),
         "task_family": args.task_family,
+        "short_episode_durations": bool(args.short_episode_durations),
         "counts": {
             "specs": len(spec_paths),
             "rollouts": len(rollouts),
@@ -459,6 +516,16 @@ def main() -> None:
             f"pose_variants={counts['pose_variant_rollouts']} "
             f"missing_pose_variants={counts['missing_pose_variant_rollouts']}"
         )
+        durations = sorted(
+            {
+                float(row["collection"]["duration_s"])
+                for row in rollouts
+                if isinstance(row.get("collection"), dict) and row["collection"].get("duration_s") is not None
+            }
+        )
+        if durations:
+            formatted = ", ".join(f"{duration:g}s" for duration in durations)
+            print(f"duration_s values: {formatted}")
 
 
 if __name__ == "__main__":
