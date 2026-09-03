@@ -1,0 +1,9 @@
+# aion_bringup/config/mavros_pluginlists.yaml
+/**/mavros_fcu:
+  ros__parameters:
+    plugin_allowlist:
+      - 'sys_status'        # required: heartbeat / connection health
+      - 'sys_time'          # required: time sync, keeps IMU stamps sane
+      - 'imu'                # publishes /mavros/imu/*
+      - 'global_position'   # publishes /mavros/global_position/*
+      - 'command'

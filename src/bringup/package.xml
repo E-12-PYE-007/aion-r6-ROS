@@ -11,6 +11,9 @@
   <exec_depend>localisation</exec_depend>
   <exec_depend>debug</exec_depend>
 
+  <exec_depend>mavros</exec_depend>
+  <exec_depend>mavros_extras</exec_depend>
+
   <export>
     <build_type>ament_python</build_type>
   </export>
