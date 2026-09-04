@@ -4,9 +4,9 @@ install/
 log/
 
 # ROS bag recordings
-*.bag
-*.mcap
-rosbag2_*/
+# *.bag
+# *.mcap
+# rosbag2_*/
 
 # Python cache artifacts
 __pycache__/
