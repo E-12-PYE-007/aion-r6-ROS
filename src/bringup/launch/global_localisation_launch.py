@@ -16,7 +16,7 @@ LOCAL_EKF_CONFIG_FILE = os.path.join(
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf_local_gps.yaml',
+        'global_ekf.yaml',
     )
 
 NAVSAT_CONFIG_FILE = os.path.join(
@@ -45,7 +45,7 @@ def generate_launch_description():
         )
     )
 
-    
+
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
@@ -81,7 +81,7 @@ def generate_launch_description():
             GLOBAL_EKF_CONFIG_FILE,
             {
                 'use_sim_time': use_sim_time,
-            },  
+            },
         ],
         remappings=[
             ('odometry/filtered', '/odometry/global'),

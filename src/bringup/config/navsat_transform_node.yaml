@@ -7,7 +7,6 @@ navsat_transform_node:
     yaw_offset: 0.0
 
     use_odometry_yaw: false
-
     zero_altitude: true
     publish_filtered_gps: true
 
