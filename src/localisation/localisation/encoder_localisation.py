@@ -22,9 +22,9 @@ METERS_PER_TICK = (2.0 * math.pi * WHEEL_RADIUS_M) / ENCODER_COUNTS_PER_WHEEL_RE
 ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; replace with EKF Odom later
 
 # for covariance
-vx_std = 0.02       # m/s
-vy_std = 0.02       # m/s
-yaw_rate_std = 0.05 # rad/s
+# vx_std = 0.02       # m/s
+# vy_std = 0.02       # m/s
+# yaw_rate_std = 0.05 # rad/s
 
 
 
