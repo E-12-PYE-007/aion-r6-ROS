@@ -21,6 +21,12 @@ METERS_PER_TICK = (2.0 * math.pi * WHEEL_RADIUS_M) / ENCODER_COUNTS_PER_WHEEL_RE
 
 ODOM_TOPIC = '/odometry/wheel'  # Raw wheel-odometry source; replace with EKF Odom later
 
+# for covariance
+vx_std = 0.02       # m/s
+vy_std = 0.02       # m/s
+yaw_rate_std = 0.05 # rad/s
+
+
 
 class EncoderLocalisationNode(Node):
     def __init__(self):
@@ -71,6 +77,12 @@ class EncoderLocalisationNode(Node):
 
         odom.twist.twist.linear.x = linear_vel
         odom.twist.twist.angular.z = angular_vel
+
+        # set covariance
+        # odom.twist.covariance[0] = vx_std ** 2
+        # odom.twist.covariance[7] = vy_std ** 2
+        # odom.twist.covariance[35] = yaw_rate_std ** 2
+
 
         self.odom_publisher.publish(odom)
 
