@@ -6,16 +6,17 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-
-def generate_launch_description():
-    use_sim_time = LaunchConfiguration('use_sim_time', default='false')
-
-    ekf_config_file = os.path.join(
+EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
         'local_ekf.yaml',
     )
 
+
+def generate_launch_description():
+    use_sim_time = LaunchConfiguration('use_sim_time')
+
+    
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
@@ -32,7 +33,7 @@ def generate_launch_description():
         name='ekf_filter_node',
         output='screen',
         parameters=[
-            ekf_config_file,
+            EKF_CONFIG_FILE,
             {
                 'use_sim_time': use_sim_time,
             },
