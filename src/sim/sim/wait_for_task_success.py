@@ -53,7 +53,7 @@ class TaskSuccessWaiter(Node):
         self.declare_parameter("variant_id", "nominal")
         self.declare_parameter("odom_topic", "/sim_odom")
         self.declare_parameter("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
-        self.declare_parameter("use_isaac_camera_pose_debug", False)
+        self.declare_parameter("use_isaac_camera_pose_debug", True)
         self.declare_parameter("max_duration_s", 60.0)
         self.declare_parameter("fallback_duration_s", 20.0)
         self.declare_parameter("wall_timeout_s", 900.0)

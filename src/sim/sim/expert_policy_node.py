@@ -204,7 +204,7 @@ class ExpertPolicyNode(Node):
         self.declare_parameter("expert_cmd_vel_topic", "/expert/cmd_vel")
         self.declare_parameter("frame_debug_topic", "/expert/frame_debug")
         self.declare_parameter("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
-        self.declare_parameter("use_isaac_camera_pose_debug", False)
+        self.declare_parameter("use_isaac_camera_pose_debug", True)
         self.declare_parameter("runtime_planned_path_output", "")
         self.declare_parameter("waypoint_spacing_m", 0.18)
         self.declare_parameter("first_preview_m", 0.9)

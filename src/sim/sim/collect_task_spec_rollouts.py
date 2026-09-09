@@ -172,7 +172,7 @@ def command_for_expert(
         "expert_cmd_vel_topic": drive_cmd_vel_topic or collection.get("expert_cmd_vel_topic", "/expert/cmd_vel"),
         "frame_debug_topic": collection.get("frame_debug_topic", "/expert/frame_debug"),
         "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
-        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", False)),
+        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", True)),
         "runtime_planned_path_output": (rollout_dir / "runtime_planned_path.json").as_posix(),
         "waypoint_spacing_m": expert.get("waypoint_spacing_m", 0.18),
         "publish_rate_hz": expert.get("publish_rate_hz", 3.0),
@@ -271,7 +271,7 @@ def command_for_task_success_wait(
         "variant_id": rollout.variant.get("variant_id", "nominal"),
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
         "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
-        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", False)),
+        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", True)),
         "max_duration_s": max_duration_s,
         "fallback_duration_s": max_duration_s,
         "wall_timeout_s": wall_timeout_s,
@@ -506,8 +506,8 @@ def parse_args() -> argparse.Namespace:
         "--use-isaac-camera-pose-debug",
         action="store_true",
         help=(
-            "Diagnostic mode: drive the expert from camera_world_pose in "
-            "/isaac/scene_pose_debug instead of /sim_odom."
+            "Drive the expert from camera_world_pose in /isaac/scene_pose_debug. "
+            "This is now the default for sim collection."
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
@@ -519,6 +519,8 @@ def main() -> int:
     task_spec_path = args.task_spec.resolve()
     task_spec = load_yaml(task_spec_path)
     collection = dict(task_spec.get("collection", {}))
+    collection.setdefault("use_isaac_camera_pose_debug", True)
+    collection.setdefault("isaac_pose_debug_topic", "/isaac/scene_pose_debug")
     if args.use_isaac_camera_pose_debug:
         collection["use_isaac_camera_pose_debug"] = True
     task_spec["collection"] = collection
