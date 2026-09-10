@@ -10,6 +10,7 @@ runtime planned path and the recorded pose at each image timestamp.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import shutil
@@ -49,6 +50,15 @@ class SegmentSelection:
     records: list[dict[str, Any]]
     diagnostics: list[dict[str, Any]]
     metrics: dict[str, Any]
+
+
+@dataclass
+class PoseSourceSelection:
+    records: list[dict[str, Any]]
+    source: str
+    diagnostics_pose_count: int = 0
+    diagnostics_max_sync_error_s: float | None = None
+    warning: str | None = None
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -104,6 +114,159 @@ def record_pose(record: dict[str, Any]) -> tuple[np.ndarray, float] | None:
 def record_time(record: dict[str, Any]) -> float | None:
     value = record.get("img_time", record.get("anchor_time"))
     return finite_float(value)
+
+
+def diagnostics_pose_time(row: dict[str, str]) -> float | None:
+    for key in ("camera_stamp_s", "sim_elapsed_s", "elapsed_s"):
+        value = finite_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def diagnostics_world_pose(row: dict[str, str]) -> tuple[np.ndarray, float] | None:
+    for prefix in ("current_world", "world"):
+        x = finite_float(row.get(f"{prefix}_x"))
+        y = finite_float(row.get(f"{prefix}_y"))
+        yaw = finite_float(row.get(f"{prefix}_yaw"))
+        if x is not None and y is not None and yaw is not None:
+            return np.asarray([x, y], dtype=np.float64), yaw
+    return None
+
+
+def load_diagnostics_pose_records(rollout_dir: Path) -> list[dict[str, Any]]:
+    path = rollout_dir / "diagnostics.csv"
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            time_s = diagnostics_pose_time(row)
+            pose = diagnostics_world_pose(row)
+            if time_s is None or pose is None:
+                continue
+            position, yaw = pose
+            pose_source = str(row.get("pose_source") or "").strip() or "diagnostics_csv"
+            records.append(
+                {
+                    "time_s": float(time_s),
+                    "pose": (float(time_s), float(position[0]), float(position[1]), float(yaw)),
+                    "pose_source": pose_source,
+                }
+            )
+    records.sort(key=lambda item: item["time_s"])
+    return [
+        record for record in records if record.get("pose_source") == "isaac_camera_pose_debug"
+    ]
+
+
+def nearest_diagnostics_pose(
+    diagnostics_records: list[dict[str, Any]],
+    time_s: float,
+) -> tuple[dict[str, Any], float] | None:
+    if not diagnostics_records:
+        return None
+    best = min(diagnostics_records, key=lambda item: abs(float(item["time_s"]) - time_s))
+    return best, abs(float(best["time_s"]) - time_s)
+
+
+def apply_diagnostics_pose_source(
+    rollout_dir: Path,
+    records: list[dict[str, Any]],
+    *,
+    max_sync_error_s: float,
+) -> PoseSourceSelection:
+    diagnostics_records = load_diagnostics_pose_records(rollout_dir)
+    if not diagnostics_records:
+        converted = []
+        for record in records:
+            copied = dict(record)
+            copied.pop("pose", None)
+            copied["pose_source"] = "diagnostics_csv_missing_camera_pose"
+            converted.append(copied)
+        return PoseSourceSelection(
+            records=converted,
+            source="diagnostics_csv",
+            warning="diagnostics.csv did not contain isaac_camera_pose_debug world pose records",
+        )
+
+    converted: list[dict[str, Any]] = []
+    sync_errors: list[float] = []
+    for record in records:
+        time_s = record_time(record)
+        if time_s is None:
+            converted.append(record)
+            continue
+        nearest = nearest_diagnostics_pose(diagnostics_records, time_s)
+        if nearest is None:
+            converted.append(record)
+            continue
+        diagnostic_record, sync_error_s = nearest
+        if sync_error_s > max_sync_error_s:
+            copied = dict(record)
+            copied.pop("pose", None)
+            copied["pose_source"] = "diagnostics_csv_sync_miss"
+            copied["diagnostics_pose_sync_error_s"] = float(sync_error_s)
+            converted.append(copied)
+            sync_errors.append(float(sync_error_s))
+            continue
+        copied = dict(record)
+        copied["pose"] = diagnostic_record["pose"]
+        copied["pose_source"] = diagnostic_record["pose_source"]
+        copied["diagnostics_pose_source"] = "diagnostics_csv"
+        copied["diagnostics_pose_time_s"] = float(diagnostic_record["time_s"])
+        copied["diagnostics_pose_sync_error_s"] = float(sync_error_s)
+        converted.append(copied)
+        sync_errors.append(float(sync_error_s))
+
+    return PoseSourceSelection(
+        records=converted,
+        source="diagnostics_csv",
+        diagnostics_pose_count=len(diagnostics_records),
+        diagnostics_max_sync_error_s=max(sync_errors) if sync_errors else None,
+    )
+
+
+def select_label_pose_source(
+    rollout_dir: Path,
+    records: list[dict[str, Any]],
+    *,
+    label_pose_source: str,
+    diagnostics_max_sync_error_s: float,
+) -> PoseSourceSelection:
+    if label_pose_source == "poses_jsonl":
+        return PoseSourceSelection(records=records, source="poses_jsonl")
+    if label_pose_source == "diagnostics_csv":
+        return apply_diagnostics_pose_source(
+            rollout_dir,
+            records,
+            max_sync_error_s=diagnostics_max_sync_error_s,
+        )
+    pose_sources = {
+        str(record.get("pose_source"))
+        for record in records
+        if isinstance(record.get("pose_source"), str) and record.get("pose_source")
+    }
+    if pose_sources == {"isaac_camera_pose_debug"}:
+        return PoseSourceSelection(records=records, source="poses_jsonl")
+    diagnostics_records = load_diagnostics_pose_records(rollout_dir)
+    diagnostics_sources = {
+        str(record.get("pose_source"))
+        for record in diagnostics_records
+        if isinstance(record.get("pose_source"), str) and record.get("pose_source")
+    }
+    if "isaac_camera_pose_debug" in diagnostics_sources:
+        return apply_diagnostics_pose_source(
+            rollout_dir,
+            records,
+            max_sync_error_s=diagnostics_max_sync_error_s,
+        )
+    return apply_diagnostics_pose_source(
+        rollout_dir,
+        records,
+        max_sync_error_s=diagnostics_max_sync_error_s,
+    )
 
 
 def image_exists(rollout_dir: Path, record: dict[str, Any]) -> bool:
@@ -455,6 +618,27 @@ def segment_score(segment: list[dict[str, Any]]) -> tuple[float, int]:
     return (progress, len(segment))
 
 
+def clean_export_record(record: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(record)
+    cleaned.pop("local_pose", None)
+    cleaned.pop("velocity", None)
+    cleaned.pop("action_chunk", None)
+    return cleaned
+
+
+def clean_export_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(metadata)
+    for key in (
+        "odom_topic",
+        "flip_runtime_odom_y",
+        "flip_runtime_odom_yaw",
+    ):
+        cleaned.pop(key, None)
+    cleaned["pose_source"] = "isaac_camera_pose_debug"
+    cleaned["label_pose_source"] = "isaac_camera_pose_debug"
+    return cleaned
+
+
 def copy_clean_rollout(
     source_rollout_dir: Path,
     export_rollout_dir: Path,
@@ -475,7 +659,8 @@ def copy_clean_rollout(
     if metadata_source.exists():
         metadata_destination = export_rollout_dir / "metadata.json"
         if overwrite or not metadata_destination.exists():
-            shutil.copy2(metadata_source, metadata_destination)
+            metadata = clean_export_metadata(load_json(metadata_source))
+            metadata_destination.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     if records is None:
         poses_source = source_rollout_dir / "poses.jsonl"
@@ -488,7 +673,7 @@ def copy_clean_rollout(
         if overwrite or not poses_destination.exists():
             with poses_destination.open("w", encoding="utf-8") as f:
                 for record in records:
-                    f.write(json.dumps(record) + "\n")
+                    f.write(json.dumps(clean_export_record(record)) + "\n")
 
     source_img_dir = source_rollout_dir / "img"
     if not source_img_dir.exists():
@@ -587,6 +772,8 @@ def build_labels_for_rollout(
     stationary_tail_window_s: float,
     stationary_tail_max_progress_m: float,
     stationary_tail_min_progress_m: float,
+    label_pose_source: str,
+    diagnostics_max_sync_error_s: float,
     image_size: int,
     resize_mode: str,
     jpeg_quality: int,
@@ -594,6 +781,13 @@ def build_labels_for_rollout(
     output_dir = output_rollout_dir or rollout_dir
     metadata = load_json(rollout_dir / "metadata.json")
     records = load_jsonl(rollout_dir / "poses.jsonl")
+    pose_selection = select_label_pose_source(
+        rollout_dir,
+        records,
+        label_pose_source=label_pose_source,
+        diagnostics_max_sync_error_s=diagnostics_max_sync_error_s,
+    )
+    records = pose_selection.records
     trajectory = load_runtime_trajectory(rollout_dir)
     segment = choose_longest_valid_segment(
         rollout_dir,
@@ -711,6 +905,13 @@ def build_labels_for_rollout(
         spacing_m=async_action_spacing_m,
         convention=waypoint_convention,
     )
+    pose_sources = sorted(
+        {
+            str(record.get("pose_source"))
+            for record in records
+            if isinstance(record.get("pose_source"), str) and record.get("pose_source")
+        }
+    )
 
     outputs = {
         "target_waypoints.npy": waypoint_array,
@@ -730,6 +931,11 @@ def build_labels_for_rollout(
 
     label_summary = {
         "label_source": "runtime_planned_path",
+        "label_pose_source_requested": label_pose_source,
+        "label_pose_record_source": pose_selection.source,
+        "diagnostics_pose_count": pose_selection.diagnostics_pose_count,
+        "diagnostics_max_sync_error_s": pose_selection.diagnostics_max_sync_error_s,
+        "pose_source_warning": pose_selection.warning,
         "runtime_planned_path": "runtime_planned_path.json",
         "sample_count": len(waypoints),
         "skipped_samples": skipped,
@@ -739,6 +945,8 @@ def build_labels_for_rollout(
         "waypoint_spacing_m": waypoint_spacing_m,
         "async_action_spacing_m": async_action_spacing_m,
         "waypoint_convention": waypoint_convention,
+        "pose_sources": pose_sources,
+        "label_pose_source": pose_sources[0] if len(pose_sources) == 1 else "mixed_or_unknown",
         "target_waypoints_shape": list(waypoint_array.shape),
         "target_async_actions_shape": list(async_actions.shape),
         "image_export": {
@@ -788,6 +996,9 @@ def build_labels_for_rollout(
             "recovery_case": metadata.get("recovery_case"),
             "source_format": metadata.get("format", "stream_jsonl"),
             "label_source": "runtime_planned_path",
+            "label_pose_source_requested": label_pose_source,
+            "label_pose_record_source": pose_selection.source,
+            "label_pose_source": pose_sources[0] if len(pose_sources) == 1 else "mixed_or_unknown",
             "raw_waypoint_format": "x_forward_m_y_left_m_yaw_rad",
             "async_action_format": "x_over_spacing_y_over_spacing_cos_yaw_sin_yaw",
             "async_action_spacing_m": float(async_action_spacing_m),
@@ -946,6 +1157,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--waypoint-spacing-m", type=float, default=0.18)
     parser.add_argument("--async-action-spacing-m", type=float, default=0.125)
     parser.add_argument(
+        "--label-pose-source",
+        choices=("auto", "poses_jsonl", "diagnostics_csv"),
+        default="diagnostics_csv",
+        help=(
+            "Pose stream used to regenerate target waypoints. diagnostics_csv uses nearest "
+            "diagnostics.csv current_world/world pose for each image."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostics-max-sync-error-s",
+        type=float,
+        default=0.35,
+        help="Maximum allowed image-to-diagnostics timestamp error when --label-pose-source diagnostics_csv/auto uses diagnostics.",
+    )
+    parser.add_argument(
         "--waypoint-convention",
         choices=WAYPOINT_CONVENTIONS,
         default="x_forward_y_left",
@@ -1020,6 +1246,8 @@ def main() -> int:
                 stationary_tail_window_s=float(args.stationary_tail_window_s),
                 stationary_tail_max_progress_m=float(args.stationary_tail_max_progress_m),
                 stationary_tail_min_progress_m=float(args.stationary_tail_min_progress_m),
+                label_pose_source=str(args.label_pose_source),
+                diagnostics_max_sync_error_s=float(args.diagnostics_max_sync_error_s),
                 image_size=int(args.image_size),
                 resize_mode=str(args.resize_mode),
                 jpeg_quality=int(args.jpeg_quality),

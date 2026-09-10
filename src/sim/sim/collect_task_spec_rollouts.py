@@ -211,6 +211,8 @@ def command_for_collector(
         "odom_topic": collection.get("odom_topic", "/sim_odom"),
         "cmd_vel_topic": collection.get("cmd_vel_topic", "/cmd_vel"),
         "action_chunk_topic": collection.get("action_chunk_topic", "/vla/action_chunk"),
+        "isaac_pose_debug_topic": collection.get("isaac_pose_debug_topic", "/isaac/scene_pose_debug"),
+        "use_isaac_camera_pose_debug": bool(collection.get("use_isaac_camera_pose_debug", True)),
         "sample_frequency_hz": collection.get("sample_frequency_hz", 3.0),
         "flip_isaac_y": False,
         "flip_scene_y": False,

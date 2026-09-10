@@ -257,6 +257,10 @@ def get_by_name(items: list[dict[str, Any]], name: str) -> dict[str, Any] | None
     return None
 
 
+def task_fences(scene: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(scene.get("task_fences") or scene.get("fences") or [])
+
+
 def connected_segment_pair(
     first: dict[str, Any],
     second: dict[str, Any],
@@ -328,7 +332,7 @@ def validate_follow_fence(
     max_start_distance_m: float,
 ) -> list[str]:
     errors = []
-    fence = get_by_name(scene.get("fences") or [], str(task.get("target_fence")))
+    fence = get_by_name(task_fences(scene), str(task.get("target_fence")))
     if fence is None:
         return [f"target_fence {task.get('target_fence')!r} not found"]
 
@@ -375,8 +379,9 @@ def validate_follow_and_turn(
     target_segments = task.get("target_fences") or task.get("target_roads")
     if not isinstance(target_segments, list) or len(target_segments) != 2:
         return ["follow_and_turn requires exactly two target_fences or target_roads"]
-    first = get_by_name(scene.get("fences") or scene.get("roads") or [], target_segments[0])
-    second = get_by_name(scene.get("fences") or scene.get("roads") or [], target_segments[1])
+    task_segments = task_fences(scene) if scene.get("fences") else scene.get("roads") or []
+    first = get_by_name(task_segments, target_segments[0])
+    second = get_by_name(task_segments, target_segments[1])
     if first is None or second is None:
         return [f"target segments {target_segments!r} not found"]
 
@@ -407,7 +412,7 @@ def validate_follow_fence_sequence(
     target_fences = task.get("target_fences")
     if not isinstance(target_fences, list) or len(target_fences) < 2:
         return ["follow_fence_sequence requires at least two target_fences"]
-    fences = scene.get("fences") or []
+    fences = task_fences(scene)
     resolved = [get_by_name(fences, name) for name in target_fences]
     if any(fence is None for fence in resolved):
         return [f"target_fences {target_fences!r} not found"]
@@ -430,7 +435,7 @@ def validate_follow_corridor(
     corridor_fences = task.get("corridor_fences")
     if not isinstance(corridor_fences, list) or len(corridor_fences) != 2:
         return ["follow_corridor requires exactly two corridor_fences"]
-    fences = scene.get("fences") or []
+    fences = task_fences(scene)
     first = get_by_name(fences, corridor_fences[0])
     second = get_by_name(fences, corridor_fences[1])
     if first is None or second is None:
@@ -474,8 +479,8 @@ def validate_gap_task(
     target_gap = task.get("target_gap")
     if not isinstance(target_gap, dict):
         return ["gap task requires target_gap"]
-    before = get_by_name(scene.get("fences") or [], str(target_gap.get("before_fence")))
-    after = get_by_name(scene.get("fences") or [], str(target_gap.get("after_fence")))
+    before = get_by_name(task_fences(scene), str(target_gap.get("before_fence")))
+    after = get_by_name(task_fences(scene), str(target_gap.get("after_fence")))
     if before is None or after is None:
         return [f"gap fences {target_gap!r} not found"]
 

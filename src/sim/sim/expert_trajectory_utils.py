@@ -703,7 +703,7 @@ def sample_timed_action_target(
 
 
 def fence_by_name(scene: dict[str, Any], name: str) -> dict[str, Any]:
-    for fence in scene.get("fences", []):
+    for fence in list(scene.get("task_fences", [])) + list(scene.get("fences", [])):
         if fence.get("name") == name:
             return fence
     raise ValueError(f"Fence {name!r} not found.")

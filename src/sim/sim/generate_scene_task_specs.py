@@ -852,7 +852,7 @@ def add_sequence_tasks(tasks: list[dict[str, Any]], fences: list[dict[str, Any]]
 
 
 def generate_fenceline_tasks(scene: dict[str, Any]) -> list[dict[str, Any]]:
-    fences = scene.get("fences") or []
+    fences = scene.get("task_fences") or scene.get("fences") or []
     starts = get_start_poses(scene)
     tasks: list[dict[str, Any]] = []
     prefer_sequence_tasks = any(len(chain) >= 2 for chain in ordered_connected_chains(fences))

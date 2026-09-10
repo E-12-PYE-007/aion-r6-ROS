@@ -20,6 +20,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 import yaml
 
 
@@ -112,9 +113,12 @@ class SimDatasetCollectorNode(Node):
         self.previous_img_time = 0
         self.current_pose = None
         self.current_local_pose = None
+        self.current_pose_source = None
         self.current_velocity = None
         self.current_cmd_vel = None
         self.current_action_chunk = None
+        self.initial_camera_debug_position = None
+        self.initial_camera_debug_yaw = None
 
         self.declare_parameter('base_dir', Parameter.Type.STRING)
         self.declare_parameter('dataset_name', 'sim_fenceline')
@@ -138,6 +142,8 @@ class SimDatasetCollectorNode(Node):
         self.declare_parameter('flip_scene_y', False)
         self.declare_parameter('flip_runtime_odom_y', False)
         self.declare_parameter('flip_runtime_odom_yaw', True)
+        self.declare_parameter('isaac_pose_debug_topic', '/isaac/scene_pose_debug')
+        self.declare_parameter('use_isaac_camera_pose_debug', True)
 
         base_dir = self.get_parameter('base_dir').get_parameter_value().string_value
         if not base_dir:
@@ -161,6 +167,9 @@ class SimDatasetCollectorNode(Node):
         self.flip_scene_y = self.get_parameter('flip_scene_y').get_parameter_value().bool_value
         self.flip_runtime_odom_y = self.get_parameter('flip_runtime_odom_y').get_parameter_value().bool_value
         self.flip_runtime_odom_yaw = self.get_parameter('flip_runtime_odom_yaw').get_parameter_value().bool_value
+        self.use_isaac_camera_pose_debug = (
+            self.get_parameter('use_isaac_camera_pose_debug').get_parameter_value().bool_value
+        )
         self.world_start_pose = load_world_start_pose(self.task_spec_path, self.task_id, self.flip_scene_y)
         self.planner_settings = parse_optional_json(self.planner_settings_json, "planner_settings_json")
         self.speed_profile = parse_optional_json(self.speed_profile_json, "speed_profile_json")
@@ -190,6 +199,13 @@ class SimDatasetCollectorNode(Node):
             self.odom_callback,
             qos_profile_sensor_data,
         )
+        if self.use_isaac_camera_pose_debug:
+            self.isaac_pose_debug_subscriber = self.create_subscription(
+                String,
+                self.get_parameter('isaac_pose_debug_topic').get_parameter_value().string_value,
+                self.isaac_pose_debug_callback,
+                qos_profile_sensor_data,
+            )
 
         self.cmd_vel_subscriber = self.create_subscription(
             Twist,
@@ -246,9 +262,43 @@ class SimDatasetCollectorNode(Node):
 
         local_pose = (msg_time, x, y, heading)
         world_x, world_y, world_heading = local_odom_to_world(local_pose, self.world_start_pose)
-        self.current_pose = (msg_time, world_x, world_y, world_heading)
+        if not self.use_isaac_camera_pose_debug:
+            self.current_pose = (msg_time, world_x, world_y, world_heading)
+            self.current_pose_source = "sim_odom"
         self.current_local_pose = local_pose
         self.current_velocity = (msg_time, vx, vy, yaw_rate)
+
+    def isaac_pose_debug_callback(self, msg):
+        if not self.use_isaac_camera_pose_debug:
+            return
+        msg_time = self.get_clock().now().nanoseconds * 1e-9
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Ignoring malformed /isaac/scene_pose_debug JSON")
+            return
+        camera_pose = data.get("camera_world_pose")
+        if not isinstance(camera_pose, dict):
+            return
+        try:
+            camera_x = float(camera_pose["x"])
+            camera_y = float(camera_pose["y"])
+            camera_yaw = float(camera_pose["yaw"])
+        except (KeyError, TypeError, ValueError):
+            return
+
+        if self.initial_camera_debug_position is None or self.initial_camera_debug_yaw is None:
+            self.initial_camera_debug_position = (camera_x, camera_y)
+            self.initial_camera_debug_yaw = camera_yaw
+
+        start_x, start_y, start_yaw = self.world_start_pose
+        delta_x = camera_x - self.initial_camera_debug_position[0]
+        delta_y = camera_y - self.initial_camera_debug_position[1]
+        world_x = start_x + delta_x
+        world_y = start_y + delta_y
+        world_yaw = wrap_to_pi(start_yaw + wrap_to_pi(camera_yaw - self.initial_camera_debug_yaw))
+        self.current_pose = (msg_time, world_x, world_y, world_yaw)
+        self.current_pose_source = "isaac_camera_pose_debug"
 
     def cmd_vel_callback(self, msg):
         msg_time = self.get_clock().now().nanoseconds * 1e-9
@@ -304,7 +354,7 @@ class SimDatasetCollectorNode(Node):
             "image": image_path.name,
             "img_time": img_time,
             "pose": self.current_pose,
-            "local_pose": self.current_local_pose,
+            "pose_source": self.current_pose_source,
             "velocity": self.current_velocity,
             "cmd_vel": self.current_cmd_vel,
             "action_chunk": self.current_action_chunk,
@@ -342,6 +392,8 @@ class SimDatasetCollectorNode(Node):
             "odom_topic": self.get_parameter('odom_topic').get_parameter_value().string_value,
             "cmd_vel_topic": self.get_parameter('cmd_vel_topic').get_parameter_value().string_value,
             "action_chunk_topic": self.get_parameter('action_chunk_topic').get_parameter_value().string_value,
+            "isaac_pose_debug_topic": self.get_parameter('isaac_pose_debug_topic').get_parameter_value().string_value,
+            "use_isaac_camera_pose_debug": self.use_isaac_camera_pose_debug,
             "world_start_pose": self.world_start_pose,
             "sample_frequency_hz": self.get_parameter('sample_frequency_hz').get_parameter_value().double_value,
             "jpeg_quality": self.jpeg_quality,
