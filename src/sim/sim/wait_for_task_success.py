@@ -179,6 +179,16 @@ class TaskSuccessWaiter(Node):
             self.get_logger().warn(f"Could not resolve reference path for success progress: {exc}")
         success_condition = task.get("success_condition")
         if not isinstance(success_condition, dict):
+            if reference_path is not None and len(reference_path) >= 2:
+                required = max(path_length(reference_path) - 0.25 - self.success_margin_m, 0.0)
+                return (
+                    required,
+                    "reference_path_end",
+                    None,
+                    world_start_position,
+                    world_start_yaw,
+                    reference_path,
+                )
             return None, None, None, world_start_position, world_start_yaw, reference_path
         success_type = str(success_condition.get("type", ""))
         if success_type in {"reach_path_end", "pass_point", "pass_point_and_continue"}:
@@ -358,16 +368,24 @@ class TaskSuccessWaiter(Node):
         return max(0.0, self.latest_stamp_s - self.start_stamp_s)
 
     def summary(self) -> dict[str, Any]:
+        progress_shortfall_m = (
+            max(float(self.required_distance_m) - float(self.path_progress_m), 0.0)
+            if self.required_distance_m is not None
+            else None
+        )
         return {
             "task_spec": self.task_spec_path.as_posix(),
             "task_id": self.task_id,
             "success_type": self.success_type,
             "required_distance_m": self.required_distance_m,
+            "required_path_progress_m": self.required_distance_m,
             "distance_travelled_m": self.distance_travelled_m,
             "path_progress_m": self.path_progress_m,
+            "progress_shortfall_m": progress_shortfall_m,
             "reference_path_length_m": self.reference_path_length_m,
             "target_tolerance_m": self.target_tolerance_m if self.target_position is not None else None,
             "target_distance_m": self.latest_target_distance_m,
+            "final_target_distance_m": self.latest_target_distance_m,
             "latest_tracking_error_m": self.latest_tracking_error_m,
             "max_tracking_error_m": self.max_tracking_error_m,
             "max_success_tracking_error_m": self.max_success_tracking_error_m,
