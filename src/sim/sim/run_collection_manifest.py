@@ -297,7 +297,11 @@ def run_claimed_row(
     )
     collection = runtime_spec.get("collection", {})
     base_dir = effective_base_dir(args, collection)
-    duration_s = float(args.duration_s if args.duration_s is not None else collection.get("duration_s", 20.0))
+    duration_s = float(
+        args.duration_s
+        if args.duration_s is not None
+        else row.get("duration_s", collection.get("duration_s", 20.0))
+    )
     rollout_dir = base_dir / rollout.trajectory_name
     bridge_prepare = None
     if args.use_isaac_bridge:
