@@ -48,6 +48,8 @@ def ros_param_args(params: dict[str, Any]) -> list[str]:
             continue
         if isinstance(value, bool):
             value = "true" if value else "false"
+        elif isinstance(value, str):
+            value = json.dumps(value)
         result.extend(["-p", f"{key}:={value}"])
     return result
 
