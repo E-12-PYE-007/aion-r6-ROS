@@ -10,6 +10,9 @@
   <exec_depend>control</exec_depend>
   <exec_depend>localisation</exec_depend>
   <exec_depend>debug</exec_depend>
+  <exec_depend>data_collection</exec_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>teleop_twist_joy</exec_depend>
 
   <exec_depend>mavros</exec_depend>
   <exec_depend>mavros_extras</exec_depend>

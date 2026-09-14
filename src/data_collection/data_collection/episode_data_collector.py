@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
     Data collection node for Aion R6. Collects a continuous stream of image
-    and current pose at a rate of 3Hz
+    and current pose at a rate of 3Hz, gated into named episodes that are
+    started/stopped via service calls rather than the node's own lifetime.
 """
 
+import re
 from datetime import datetime
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
@@ -15,20 +17,23 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from nav_msgs.msg import Odometry
+from std_srvs.srv import Trigger
+from aion_msgs.srv import StartEpisode
 import math
 
 # Define constants
 
 DT = 1/3 # Sample rate
+EPISODE_NAME_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 class ImageEncodeError(Exception):
     pass
 
 
-class StreamDataCollectionNode(Node):
+class EpisodeDataCollectionNode(Node):
     def __init__(self):
-        super().__init__('stream_data_collector')
+        super().__init__('episode_data_collector')
 
         self.bridge = CvBridge()
 
@@ -36,39 +41,105 @@ class StreamDataCollectionNode(Node):
         self.current_pose = None
         self.current_vel = None
 
+        self.episode_dir = None
+        self.img_dir = None
+        self.poses_path = None
+        self.episode_name = None
+        self.frame_count = 0
+
         self.declare_parameter('base_dir', Parameter.Type.STRING)
         base_dir = self.get_parameter('base_dir').get_parameter_value().string_value
         if not base_dir:
             raise RuntimeError(
                 "base_dir parameter is required, e.g. --ros-args -p base_dir:=/path/to/trajectories"
             )
+        self.base_dir = Path(base_dir)
 
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.traj_dir = Path(base_dir) / f"{stamp}_{self.get_name()}"
-        self.img_dir = self.traj_dir / "img"
-        self.img_dir.mkdir(parents=True, exist_ok=True)
-        self.poses_path = self.traj_dir / "poses.jsonl"
+        cam_topic = self.declare_parameter('cam_topic', '/camera/color/image_raw').value
+        odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
 
         self.cam_subscriber = self.create_subscription(
             Image,
-            "/camera/color/image_raw",
+            cam_topic,
             self.cam_callback,
             qos_profile_sensor_data,
         )
 
         self.odom_subscriber = self.create_subscription(
             Odometry,
-            "/odometry/filtered",
+            odom_topic,
             self.odom_callback,
             qos_profile_sensor_data
         )
 
+        self.start_episode_srv = self.create_service(
+            StartEpisode, '~/start_episode', self.start_episode_cb
+        )
+        self.stop_episode_srv = self.create_service(
+            Trigger, '~/stop_episode', self.stop_episode_cb
+        )
+
+    def start_episode_cb(self, request, response):
+        if self.episode_dir is not None:
+            response.success = False
+            response.message = f"Already recording episode '{self.episode_name}'"
+            response.episode_dir = str(self.episode_dir)
+            return response
+
+        name = request.name.strip() or datetime.now().strftime('%Y%m%d_%H%M%S')
+        if not EPISODE_NAME_PATTERN.match(name):
+            response.success = False
+            response.message = f"Invalid episode name '{name}': only letters, digits, '_' and '-' allowed"
+            response.episode_dir = ''
+            return response
+
+        episode_dir = self.base_dir / name
+        if episode_dir.exists():
+            response.success = False
+            response.message = f"Episode directory already exists: {episode_dir}"
+            response.episode_dir = ''
+            return response
+
+        img_dir = episode_dir / "img"
+        img_dir.mkdir(parents=True, exist_ok=True)
+
+        self.episode_dir = episode_dir
+        self.img_dir = img_dir
+        self.poses_path = episode_dir / "poses.jsonl"
+        self.episode_name = name
+        self.frame_count = 0
+        self.previous_img_time = 0
+
+        response.success = True
+        response.message = f"Started episode '{name}'"
+        response.episode_dir = str(episode_dir)
+        return response
+
+    def stop_episode_cb(self, request, response):
+        if self.episode_dir is None:
+            response.success = False
+            response.message = "No episode in progress"
+            return response
+
+        response.success = True
+        response.message = f"Stopped episode '{self.episode_name}' ({self.frame_count} frames)"
+
+        self.episode_dir = None
+        self.img_dir = None
+        self.poses_path = None
+        self.episode_name = None
+        self.frame_count = 0
+        return response
+
     def cam_callback(self, msg):
-        img_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 # image capture time in seconds
+        if self.episode_dir is None:
+            return # No episode in progress
 
         if self.current_pose is None:
             self.get_logger().warn('No starting pose available')
-            return # Cannot start logging chunks without a starting pose
+            return # Cannot start logging without a starting pose
+
+        img_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 # image capture time in seconds
 
         if img_time - self.previous_img_time > DT:
             try:
@@ -86,7 +157,7 @@ class StreamDataCollectionNode(Node):
         theta = self.yaw_from_quat(msg.pose.pose.orientation)
 
         self.current_pose = (
-            t, 
+            t,
             x,
             y,
             theta
@@ -114,7 +185,7 @@ class StreamDataCollectionNode(Node):
         )
         return ok, encoded
 
-    def log_img_pose_pair(self,msg):
+    def log_img_pose_pair(self, msg):
 
         img_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
@@ -127,18 +198,21 @@ class StreamDataCollectionNode(Node):
         image_path.write_bytes(img.tobytes())
 
         record = {
+            "episode": self.episode_name,
             "image": image_path.name,
-            "img_time": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+            "img_time": img_time,
             "pose": self.current_pose,
             "velocity": self.current_vel
         }
         with open(self.poses_path, "a") as f:
             f.write(json.dumps(record) + "\n")
+
+        self.frame_count += 1
         return
 
 def main(args=None):
     rclpy.init(args=args)
-    node = StreamDataCollectionNode()
+    node = EpisodeDataCollectionNode()
     try:
         rclpy.spin(node)
     finally:

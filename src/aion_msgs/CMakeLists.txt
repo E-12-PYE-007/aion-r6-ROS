@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ActionChunk.msg"
   "msg/LeftRightFloat32.msg"
   "msg/LeftRightInt32.msg"
+  "srv/StartEpisode.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 
