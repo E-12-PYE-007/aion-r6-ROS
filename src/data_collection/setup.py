@@ -24,9 +24,11 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'chunk_data_collector = data_collection.chunk_data_collector:main',
             'stream_data_collector = data_collection.stream_data_collector:main',
             'mocap_data_collector = data_collection.mocap_data_collector:main',
+            'episode_data_collector = data_collection.episode_data_collector:main',
+            'episode_recorder = data_collection.episode_recorder:main',
+
         ],
     },
 )
