@@ -45,7 +45,7 @@ def ros_param_args(params: dict[str, Any]) -> list[str]:
     result = ["--ros-args"]
     for key, value in params.items():
         if value is None:
-            value = ""
+            continue
         if isinstance(value, bool):
             value = "true" if value else "false"
         result.extend(["-p", f"{key}:={value}"])
