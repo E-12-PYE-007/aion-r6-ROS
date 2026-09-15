@@ -58,6 +58,14 @@ def generate_launch_description():
             'enable_sync_output_accel_gyro': 'true',
             'accel_rate': '200hz',
             'gyro_rate': '200hz',
+
+            # laser
+            'interleave_ae_mode': 'laser',
+            'interleave_frame_enable': 'true',
+            'interleave_skip_enable': 'true',
+            'interleave_skip_index': '0',        # drop laser-on frames from IR topics
+            'laser_index0_laser_control': '1',   # slot 0: laser on  -> depth
+            'laser_index1_laser_control': '0',   # slot 1: laser off -> VSLAM
         }.items(),
     )
 
