@@ -1,0 +1,49 @@
+Test: mocap_pilot_straight_0.3/t1
+
+Steady state velocity error statistics (between 14.0 and 24.0 seconds):
+Mean encoder speed error: 0.01230320683 m/s
+Mean mocap speed: 0.2876183874 m/s
+Steady bias (Mean encoder speed error): 0.01230320683 m/s
+Steady variance (variance of speed error): 0.0001549572777 (m/s)^2
+Steady standard deviation (standard deviation of speed error): 0.01244818371 m/s
+Encoder/mocap speed ratio: 1.042776148
+
+Test: mocap_pilot_straight_0.3/t2
+
+Steady state velocity error statistics (between 14.0 and 22.0 seconds):
+Mean encoder speed error: 0.01232487515 m/s
+Mean mocap speed: 0.2877498983 m/s
+Steady bias (Mean encoder speed error): 0.01232487515 m/s
+Steady variance (variance of speed error): 0.0001206275898 (m/s)^2
+Steady standard deviation (standard deviation of speed error): 0.01098305922 m/s
+Encoder/mocap speed ratio: 1.042831901
+
+Test: mocap_pilot_straight_0.3/t3
+
+Steady state velocity error statistics (between 38.0 and 45.0 seconds):
+Mean encoder speed error: 0.01220676076 m/s
+Mean mocap speed: 0.2878082485 m/s
+Steady bias (Mean encoder speed error): 0.01220676076 m/s
+Steady variance (variance of speed error): 9.482051417e-05 (m/s)^2
+Steady standard deviation (standard deviation of speed error): 0.009737582563 m/s
+Encoder/mocap speed ratio: 1.042412825
+
+Test: mocap_pilot_straight_0.3/t4
+
+Steady state velocity error statistics (between 34.0 and 40.0 seconds):
+Mean encoder speed error: 0.01236595752 m/s
+Mean mocap speed: 0.2876830677 m/s
+Steady bias (Mean encoder speed error): 0.01236595752 m/s
+Steady variance (variance of speed error): 0.0001455527902 (m/s)^2
+Steady standard deviation (standard deviation of speed error): 0.01206452611 m/s
+Encoder/mocap speed ratio: 1.042984655
+
+Test: mocap_pilot_straight_0.3/t5
+
+Steady state velocity error statistics (between 32.0 and 38.0 seconds):
+Mean encoder speed error: 0.01226867411 m/s
+Mean mocap speed: 0.28774851 m/s
+Steady bias (Mean encoder speed error): 0.01226867411 m/s
+Steady variance (variance of speed error): 0.0001118418253 (m/s)^2
+Steady standard deviation (standard deviation of speed error): 0.01057552955 m/s
+Encoder/mocap speed ratio: 1.042636795
