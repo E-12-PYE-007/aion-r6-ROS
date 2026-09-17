@@ -66,6 +66,9 @@ def generate_launch_description():
             'interleave_skip_index': '0',        # drop laser-on frames from IR topics
             'laser_index0_laser_control': '1',   # slot 0: laser on  -> depth
             'laser_index1_laser_control': '0',   # slot 1: laser off -> VSLAM
+            
+            'left_ir_fps': '60',
+            'right_ir_fps': '60',
         }.items(),
     )
 
