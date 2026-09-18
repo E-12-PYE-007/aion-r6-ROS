@@ -66,7 +66,9 @@ def generate_launch_description():
             'interleave_skip_index': '0',        # drop laser-on frames from IR topics
             'laser_index0_laser_control': '1',   # slot 0: laser on  -> depth
             'laser_index1_laser_control': '0',   # slot 1: laser off -> VSLAM
-            
+            'laser_index1_ir_brightness': '100',       # default 60 -- brighten passive IR
+            'laser_index1_ir_ae_max_exposure': '30000',  # default 17000 -- raise AE ceiling
+
             'left_ir_fps': '90',
             'right_ir_fps': '90',
             'depth_fps': '90',
