@@ -67,7 +67,8 @@ def generate_launch_description():
             'laser_index0_laser_control': '1',   # slot 0: laser on  -> depth
             'laser_index1_laser_control': '0',   # slot 1: laser off -> VSLAM
             'laser_index1_ir_brightness': '100',       # default 60 -- brighten passive IR
-            'laser_index1_ir_ae_max_exposure': '30000',  # default 17000 -- raise AE ceiling
+            'laser_index1_ir_ae_max_exposure': '11000',  # default 17000 -- kept under the 90fps frame period (~11.1ms); higher gets clamped anyway
+            'laser_index1_depth_gain': '48',           # default 16 -- gain isn't limited by frame period like exposure is
 
             'left_ir_fps': '90',
             'right_ir_fps': '90',
