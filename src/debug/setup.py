@@ -27,6 +27,9 @@ setup(
             'simulate_action_chunk = debug.simulate_action_chunk:main',
             'roboclaw_tests = debug.roboclaw_tests:main',
             'path_plotter = debug.path_plotter:main',
+            'sim_robot = debug.mpc_imp_test.sim_robot:main',
+            'chunk_generator = debug.mpc_imp_test.chunk_generator:main',
+            'mpc_plotter = debug.mpc_imp_test.mpc_plotter:main',
         ],
     },
 )

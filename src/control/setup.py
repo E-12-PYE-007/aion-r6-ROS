@@ -27,6 +27,7 @@ setup(
             'roboclaw_for_motors = control.roboclaw_for_motors:main',
             'pure_pursuit_controller = control.pure_pursuit_controller:main',
             'cmd_vel_to_roboclaw = control.cmd_vel_to_roboclaw:main',
+            'mpc_path_follower = control.mpc_imp.mpc_path_follower:main',
         ],
     },
 )

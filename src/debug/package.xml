@@ -11,6 +11,7 @@
   <depend>aion_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
   <depend>python3-matplotlib</depend>
 
   <test_depend>ament_copyright</test_depend>
