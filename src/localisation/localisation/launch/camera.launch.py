@@ -69,6 +69,7 @@ def generate_launch_description():
             
             'left_ir_fps': '90',
             'right_ir_fps': '90',
+            'depth_fps': '90',
         }.items(),
     )
 
