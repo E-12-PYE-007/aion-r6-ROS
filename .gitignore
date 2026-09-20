@@ -41,3 +41,10 @@ Thumbs.db
 # Environment / secrets
 .env
 .env.*
+
+# Personal analysis data and tuning artifacts
+/private_tools/
+/rosbag/
+/ekf_trials/
+/matlab scripts/
+/scripts/tmp_wheel_covariance_relay.py

@@ -2,20 +2,21 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 LOCAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'local_ekf.yaml',
+        'local_ekf_wheel_imu.yaml',
     )
 
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf.yaml',
+        'global_ekf_local_gps.yaml',
     )
 
 NAVSAT_CONFIG_FILE = os.path.join(
@@ -26,6 +27,23 @@ NAVSAT_CONFIG_FILE = os.path.join(
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
+
+    roboclaw_node = Node(
+        package='control',
+        executable='roboclaw_for_motors',
+        name='roboclaw_for_motors',
+        output='screen',
+    )
+
+    mavros_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('bringup'),
+                'launch',
+                'mavros-test.py',
+            )
+        )
+    )
 
     
     encoder_node = Node(
@@ -83,7 +101,7 @@ def generate_launch_description():
             ('imu', '/mavros_fcu/mavros_fcu/data'),
             ('gps/fix',
             '/mavros_fcu/mavros_fcu/global_position/raw/fix'),
-            ('odometry/filtered', '/odometry/global'),
+            ('odometry/filtered', '/odometry/local'),
             ('odometry/gps', '/odometry/gps'),
         ],
     )
@@ -93,6 +111,8 @@ def generate_launch_description():
             'use_sim_time',
             default_value='false',
         ),
+        roboclaw_node,
+        mavros_launch,
         encoder_node,
         local_ekf_node,
         global_ekf_node,

@@ -26,6 +26,8 @@ vx_std = 2e-4       # m/s
 vy_std = 2e-4       # m/s
 yaw_rate_std = 0.05 # rad/s
 
+yaw_variance_multiplier = 0.05
+
 
 
 class EncoderLocalisationNode(Node):
@@ -81,7 +83,7 @@ class EncoderLocalisationNode(Node):
         # set covariance
         odom.twist.covariance[0] = vx_std ** 2
         odom.twist.covariance[7] = vy_std ** 2
-        odom.twist.covariance[35] = yaw_rate_std ** 2
+        odom.twist.covariance[35] = yaw_variance_multiplier * yaw_rate_std ** 2
 
 
         self.odom_publisher.publish(odom)

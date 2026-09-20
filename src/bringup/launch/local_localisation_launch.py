@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'local_ekf.yaml',
+        'local_ekf_wheel_imu.yaml',
     )
 
 
