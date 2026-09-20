@@ -1,0 +1,4 @@
+#!/home/asc/venvs/asclinic_vla_action_head/bin/python3
+import sys
+from ag_vla.sys1 import main
+sys.exit(main())

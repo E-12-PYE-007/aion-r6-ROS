@@ -2,14 +2,14 @@
 """Pure-pursuit controller node for the Aion R6.
 
 Subscribes to ODOM_TOPIC (nav_msgs/Odometry) for the current pose and to
-/vla/action_chunk (aion_msgs/ActionChunk) for the target motion, and
+/agvla/action_chunk (custom_msgs/ActionChunk) for the target motion, and
 publishes body velocity commands on cmd_vel (geometry_msgs/Twist).
 """
 
 import math
 
 import rclpy
-from aion_msgs.msg import ActionChunk
+from custom_msgs.msg import ActionChunk
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -118,7 +118,7 @@ class PurePursuitControllerNode(Node):
         self._odom_subscription = self.create_subscription(
             Odometry, ODOM_TOPIC, self.odom_callback, 10)
         self._action_chunk_subscription = self.create_subscription(
-            ActionChunk, '/vla/action_chunk', self.action_chunk_callback, 10)
+            ActionChunk, '/agvla/action_chunk', self.action_chunk_callback, 10)
         self._cmd_vel_publisher = self.create_publisher(Twist, 'cmd_vel', 10)
 
         self._control_timer = self.create_timer(CONTROL_PERIOD_SEC, self.control_loop)
@@ -143,13 +143,13 @@ class PurePursuitControllerNode(Node):
         self._cmd_vel_publisher.publish(cmd)
 
     def compute_command(self, action_chunk, current_pose):
-        if self._last_chunk_seq is None or action_chunk.seq_num != self._last_chunk_seq:
+        if self._last_chunk_seq is None or action_chunk.old_img_seq_num != self._last_chunk_seq:
             # Anchor to current_pose here since the message doesn't carry the pose it was
             # actually conditioned on - approximates away VLA inference/transport latency.
             self._anchor_pose = current_pose
             self._waypoints = generate_waypoints(action_chunk.relative_poses)
             self._waypoint_idx = 0
-            self._last_chunk_seq = action_chunk.seq_num
+            self._last_chunk_seq = action_chunk.old_img_seq_num
 
         anchor_x, anchor_y, anchor_theta = self._anchor_pose
         current_x, current_y, current_theta = current_pose

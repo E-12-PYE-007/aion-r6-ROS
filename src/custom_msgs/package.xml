@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>aion_msgs</name>
+  <name>custom_msgs</name>
   <version>0.0.0</version>
   <description>Message types for Aion R6 ROS2 Stack</description>
   <maintainer email="dan.strahan08@gmail.com">dstrahan</maintainer>
@@ -12,6 +12,7 @@
 
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 

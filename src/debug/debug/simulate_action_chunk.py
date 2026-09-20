@@ -10,11 +10,11 @@ simulator motion path can be tested without changing those nodes.
 import math
 
 import rclpy
-from aion_msgs.msg import ActionChunk
+from custom_msgs.msg import ActionChunk
 from geometry_msgs.msg import Pose2D
 from rclpy.node import Node
 
-ACTION_TOPIC = '/vla/action_chunk'
+ACTION_TOPIC = '/agvla/action_chunk'
 PUBLISH_RATE_HZ = 3.0
 STEP_DISTANCE = 0.12
 TURN_PER_STEP = 0.08
@@ -69,7 +69,8 @@ class FakeActionChunkPublisherNode(Node):
         msg = ActionChunk()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.seq_num = self.seq_num
+        msg.old_img_seq_num = self.seq_num
+        msg.curr_img_seq_num = self.seq_num
 
         for index in range(1, len(msg.relative_poses) + 1):
             x, y, theta = self.build_pose(index)

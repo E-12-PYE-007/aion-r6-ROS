@@ -2,14 +2,14 @@
 """cmd_vel-to-Roboclaw adapter for the Aion R6.
 
 Subscribes to cmd_vel (geometry_msgs/Twist) and converts body velocity into
-per-wheel Roboclaw velocity commands, published as aion_msgs/LeftRightFloat32
+per-wheel Roboclaw velocity commands, published as custom_msgs/LeftRightFloat32
 on set_motor_velocity.
 """
 
 import math
 
 import rclpy
-from aion_msgs.msg import LeftRightFloat32
+from custom_msgs.msg import LeftRightFloat32
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 

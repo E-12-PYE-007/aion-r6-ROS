@@ -8,7 +8,7 @@ Must have basicmicro installed via pip-install basicmicro
 """
 
 import rclpy
-from aion_msgs.msg import LeftRightFloat32, LeftRightInt32
+from custom_msgs.msg import LeftRightFloat32, LeftRightInt32
 from rclpy.node import Node
 
 PERCENT_TO_ROBOCLAW = 327.67  # = 32767 / 100; int16 duty range per percent.
