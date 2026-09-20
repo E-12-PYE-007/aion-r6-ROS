@@ -10,6 +10,7 @@ import rclpy
 from aion_msgs.msg import ActionChunk
 from geometry_msgs.msg import Pose, Twist
 from nav_msgs.msg import Odometry
+from nvblox_msgs.msg import DistanceMapSlice
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_geometry_msgs import do_transform_pose
@@ -17,18 +18,14 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+from .constants import (
+    ACTION_CHUNK_TOPIC, ODOM_TOPIC, ODOM_FRAME, BASE_FRAME, CMD_VEL_TOPIC, ESDF_TOPIC,
+    WAYPOINT_DT, MAX_CONSECUTIVE_SOLVE_FAILURES, CONTROL_LOOP_DT, PATCH_RESOLUTION,
+)
+from .esdf_map import EsdfMap
 from .solver_setup import UnicycleMPC
 
-ACTION_CHUNK_TOPIC = '/vla/action_chunk'
-ODOM_TOPIC = '/odom'  # published by the EKF - pose of base_link in the odom frame; used for x0
-ODOM_FRAME = 'odom'   # tf frame pair used to transform the VLA chunk into the odom frame
-BASE_FRAME = 'base_link'
-CMD_VEL_TOPIC = 'cmd_vel'
-
-N_WAYPOINTS = 8            # fixed by aion_msgs/ActionChunk.msg (Pose2D[8] relative_poses)
-WAYPOINT_DT = 1.0 / 3.0    # spacing between waypoints within a chunk [s]
-
-MAX_CONSECUTIVE_SOLVE_FAILURES = 3  # stop publishing solver output after this many failed ticks in a row
+N_WAYPOINTS = 8  # fixed by aion_msgs/ActionChunk.msg (Pose2D[8] relative_poses) - not a tuning knob
 
 
 def yaw_from_quaternion(q):
@@ -76,7 +73,12 @@ class MpcPathFollowerNode(Node):
         self._consecutive_solve_failures = 0
         self._interpolated_path = None     # (n, 3) odom-frame poses, resampled to mpc.dt
 
-        self._mpc = UnicycleMPC()
+        # Overridable so a test can match a real ESDF source's actual resolution
+        # (e.g. a recorded bag) without changing the production default in constants.py.
+        self.declare_parameter('patch_resolution', PATCH_RESOLUTION)
+        patch_resolution = float(self.get_parameter('patch_resolution').value)
+        self._mpc = UnicycleMPC(patch_resolution=patch_resolution)
+        self._esdf_map = EsdfMap()
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -85,13 +87,18 @@ class MpcPathFollowerNode(Node):
             Odometry, ODOM_TOPIC, self.odom_callback, 10)
         self._action_chunk_subscription = self.create_subscription(
             ActionChunk, ACTION_CHUNK_TOPIC, self.action_chunk_callback, 10)
+        self._esdf_subscription = self.create_subscription(
+            DistanceMapSlice, ESDF_TOPIC, self.esdf_callback, 10)
         self._cmd_vel_publisher = self.create_publisher(Twist, CMD_VEL_TOPIC, 10)
 
-        self._control_timer = self.create_timer(self._mpc.dt, self.control_loop)
+        self._control_timer = self.create_timer(CONTROL_LOOP_DT, self.control_loop)
 
     def odom_callback(self, msg):
         p = msg.pose.pose.position
         self._current_pose = np.array([p.x, p.y, yaw_from_quaternion(msg.pose.pose.orientation)])
+
+    def esdf_callback(self, msg):
+        self._esdf_map.store(msg)
 
     # On reception of an action chunk, transforms into world coordinates (odom) and interpolates
     # to provide sampling at the same dt as the MPC.
@@ -133,6 +140,22 @@ class MpcPathFollowerNode(Node):
 
         return x0, x_ref
 
+    def build_esdf_inputs(self, x0):
+        """(psi, esdf_patch) for the obstacle constraint, or None if the ESDF or
+        transform isn't available yet. Looked up against esdf_map.frame_id rather
+        than a hardcoded 'map', since these test bags have no separate map frame."""
+        if self._esdf_map.vals is None:
+            return None
+        try:
+            tf = self._tf_buffer.lookup_transform(self._esdf_map.frame_id, ODOM_FRAME, Time())
+        except TransformException as ex:
+            self.get_logger().warn(f'Could not look up {ODOM_FRAME} -> {self._esdf_map.frame_id}: {ex}')
+            return None
+
+        x_esdf, y_esdf, _ = transform_pose_2d(x0[0], x0[1], x0[2], tf)
+        psi = yaw_from_quaternion(tf.transform.rotation)
+        return psi, self._esdf_map.get_patch([x_esdf, y_esdf])
+
     def build_uref(self, x_ref):
         """(N, 2) [v, omega] recovered by finite-differencing consecutive x_ref samples -
         the chunk only ever gives poses, the solver's cost function also wants inputs.
@@ -153,9 +176,15 @@ class MpcPathFollowerNode(Node):
             return
         x0, x_ref = result
 
+        esdf_result = self.build_esdf_inputs(x0)
+        if esdf_result is None:
+            self.get_logger().warn('No ESDF/transform available yet, skipping tick')
+            return
+        psi, esdf_patch = esdf_result
+
         u_ref = self.build_uref(x_ref)
 
-        u0, _, solved_ok = self._mpc.solve(x0, x_ref, u_ref)
+        u0, _, solved_ok = self._mpc.solve(x0, x_ref, u_ref, psi, esdf_patch)
 
         if solved_ok:
             self._consecutive_solve_failures = 0
