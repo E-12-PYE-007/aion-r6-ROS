@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Fake VLA for testing mpc_path_follower: publishes action chunks that follow a chicane path.
+"""Fake VLA for testing mpc_path_follower: publishes action chunks that point from the
+robot's current position back toward a straight reference line.
 
-Assumes the robot starts on the reference path - no correction-from-a-large-offset logic.
-That's a real, harder problem (see the MPC_testing history for why it was deliberately
-descoped), not something silently handled here.
+Each chunk's waypoints are spaced by fixed DISTANCE (WAYPOINT_SPACING_M), not time - they
+run from the robot's current position to a point on the reference line exactly LOOKAHEAD_M
+away (by straight-line norm, picked ahead along the line's own direction, not the closest
+point). WAYPOINT_SPACING_M * N_WAYPOINTS == LOOKAHEAD_M by construction (0.1m * 8 = 0.8m),
+so the final waypoint always lands exactly on the reference line when one exists at that
+distance (see StraightPath.lookahead_point for the fallback when the robot has drifted
+further than LOOKAHEAD_M off the line).
 
-All 8 relative poses are future deltas - one waypoint_dt through 8*waypoint_dt ahead of the
-current pose - never the current pose itself, matching aion_msgs/ActionChunk's wire format.
+All 8 relative poses are future deltas - never the current pose itself, matching
+aion_msgs/ActionChunk's wire format.
 """
 import math
 
@@ -18,15 +23,15 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from std_msgs.msg import Header
 
-from .chicane_path import ChicanePath
+from .straight_path import StraightPath, PATH_ORIGIN, PATH_HEADING
 
 ODOM_TOPIC = '/odom'
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
 
 N_WAYPOINTS = 8            # fixed by aion_msgs/ActionChunk.msg (Pose2D[8] relative_poses)
-WAYPOINT_DT = 1.0 / 3.0    # spacing between waypoints within a chunk [s]
-CHUNK_RATE_HZ = 8.0        # action-chunk publish rate [Hz]
-V_REF = 0.25               # nominal path-following speed [m/s]
+WAYPOINT_SPACING_M = 0.1   # distance between consecutive chunk waypoints
+LOOKAHEAD_M = N_WAYPOINTS * WAYPOINT_SPACING_M  # 0.8m - point on the line the chunk aims at
+CHUNK_RATE_HZ = 8.0
 
 
 def yaw_from_quaternion(q):
@@ -54,7 +59,7 @@ class ChunkGeneratorNode(Node):
         super().__init__('chunk_generator')
 
         self._current_pose = None
-        self._path = ChicanePath()
+        self._path = StraightPath(PATH_ORIGIN, PATH_HEADING)
         self._seq_num = 0
 
         self.create_subscription(Odometry, ODOM_TOPIC, self._odom_callback, 10)
@@ -70,13 +75,17 @@ class ChunkGeneratorNode(Node):
             self.get_logger().warn('No odometry yet, skipping chunk publish')
             return
 
-        # N_WAYPOINTS future path poses, one waypoint_dt through N_WAYPOINTS*waypoint_dt ahead
-        # of the current pose - none of them the current pose itself.
-        s0 = self._path.nearest_arclength(self._current_pose[:2])
+        target_xy = self._path.lookahead_point(self._current_pose[:2], LOOKAHEAD_M)
+        seg = target_xy - self._current_pose[:2]
+        seg_dist = np.linalg.norm(seg)
+        seg_dir = seg / seg_dist if seg_dist > 1e-9 else np.array([1.0, 0.0])
+        heading = math.atan2(seg_dir[1], seg_dir[0])
+
         relative_poses = []
         for i in range(1, N_WAYPOINTS + 1):
-            target = self._path.pose_at_arclength(s0 + V_REF * i * WAYPOINT_DT)
-            rel_x, rel_y, rel_theta = pose_to_relative(target, self._current_pose)
+            world_xy = self._current_pose[:2] + i * WAYPOINT_SPACING_M * seg_dir
+            world_pose = np.array([world_xy[0], world_xy[1], heading])
+            rel_x, rel_y, rel_theta = pose_to_relative(world_pose, self._current_pose)
             relative_poses.append(Pose2D(x=rel_x, y=rel_y, theta=rel_theta))
 
         msg = ActionChunk()

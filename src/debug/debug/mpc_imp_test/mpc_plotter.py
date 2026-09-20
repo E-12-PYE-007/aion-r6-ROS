@@ -18,18 +18,22 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from aion_msgs.msg import ActionChunk
+from nvblox_msgs.msg import DistanceMapSlice
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
 from matplotlib.patches import Polygon
 
-from .chicane_path import ChicanePath
+from .straight_path import StraightPath, PATH_ORIGIN, PATH_HEADING
 
 ODOM_TOPIC = '/odom'
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
 CMD_VEL_TOPIC = 'cmd_vel'
+ESDF_TOPIC = '/nvblox_node/static_map_slice'
+NVBLOX_MAX_DISTANCE_M = 2.0
 
 
 def yaw_from_quaternion(q):
@@ -75,10 +79,12 @@ class MpcPlotterNode(Node):
         self._cmd_times = []
         self._cmds = []         # (v, omega)
         self._last_seq = None
+        self._esdf_msg = None   # latest DistanceMapSlice, drawn as a static background
 
         self.create_subscription(Odometry, ODOM_TOPIC, self._odom_callback, 10)
         self.create_subscription(ActionChunk, ACTION_CHUNK_TOPIC, self._chunk_callback, 10)
         self.create_subscription(Twist, CMD_VEL_TOPIC, self._cmd_vel_callback, 10)
+        self.create_subscription(DistanceMapSlice, ESDF_TOPIC, self._esdf_callback, 10)
 
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -101,6 +107,9 @@ class MpcPlotterNode(Node):
         self._cmd_times.append(self._now())
         self._cmds.append((msg.linear.x, msg.angular.z))
 
+    def _esdf_callback(self, msg):
+        self._esdf_msg = msg
+
     def save_animation(self):
         if len(self._poses) < 2:
             self.get_logger().warn('Not enough odometry data collected; skipping animation')
@@ -110,7 +119,7 @@ class MpcPlotterNode(Node):
         pose_times = np.array(self._pose_times) - self._pose_times[0]
         dt = float(np.median(np.diff(pose_times))) if len(pose_times) > 1 else 1.0 / 15.0
 
-        fig, ax = plt.subplots(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(9, 6))
         ax.set_aspect('equal')
         ax.grid(True, linewidth=0.3)
         ax.set_xlabel('x [m]')
@@ -120,11 +129,23 @@ class MpcPlotterNode(Node):
         ax.set_xlim(poses[:, 0].min() - margin, poses[:, 0].max() + margin)
         ax.set_ylim(poses[:, 1].min() - margin, poses[:, 1].max() + margin)
 
+        if self._esdf_msg is not None:
+            msg = self._esdf_msg
+            vals = np.array(msg.data).reshape(msg.height, msg.width)
+            vals = np.where(vals == msg.unknown_value, np.nan, vals)
+            cmap = LinearSegmentedColormap.from_list('esdf_diverging', ['#0072B2', '#999999', '#27AE60'])
+            cmap.set_bad(alpha=0)
+            norm = TwoSlopeNorm(vmin=-NVBLOX_MAX_DISTANCE_M, vcenter=0.0, vmax=NVBLOX_MAX_DISTANCE_M)
+            extent = [msg.origin.x, msg.origin.x + msg.width * msg.resolution,
+                      msg.origin.y, msg.origin.y + msg.height * msg.resolution]
+            ax.set_facecolor('#e6e6e6')
+            ax.imshow(vals, origin='lower', extent=extent, cmap=cmap, norm=norm, zorder=0)
+
         if self.get_parameter('show_reference_path').value:
-            path = ChicanePath()
-            s_samples = np.linspace(0, path.total_length, 300)
+            path = StraightPath(PATH_ORIGIN, PATH_HEADING)
+            s_samples = np.linspace(-1.0, 6.0, 300)
             ref_xy = np.array([path.pose_at_arclength(s)[:2] for s in s_samples])
-            ax.plot(ref_xy[:, 0], ref_xy[:, 1], '--', color='gray', label='Reference path')
+            ax.plot(ref_xy[:, 0], ref_xy[:, 1], '--', color='dimgray', label='Reference path')
 
         ax.plot(poses[0, 0], poses[0, 1], 'go', label='Start')
         actual_line, = ax.plot([], [], '-', color='tab:blue', label='Actual path')
@@ -132,7 +153,8 @@ class MpcPlotterNode(Node):
         robot_patch = Polygon(robot_triangle(poses[0]), closed=True, color='tab:red', zorder=5)
         ax.add_patch(robot_patch)
         info_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, va='top')
-        ax.legend(loc='upper right', fontsize=8)
+        fig.subplots_adjust(right=0.72)
+        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize=8)
 
         chunk_times_rel = np.array(self._chunk_times) - self._pose_times[0] if self._chunk_times else np.array([])
         cmd_times_rel = np.array(self._cmd_times) - self._pose_times[0] if self._cmd_times else np.array([])

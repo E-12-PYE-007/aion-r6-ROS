@@ -30,6 +30,7 @@ setup(
             'sim_robot = debug.mpc_imp_test.sim_robot:main',
             'chunk_generator = debug.mpc_imp_test.chunk_generator:main',
             'mpc_plotter = debug.mpc_imp_test.mpc_plotter:main',
+            'static_esdf_publisher = debug.mpc_imp_test.static_esdf_publisher:main',
         ],
     },
 )
