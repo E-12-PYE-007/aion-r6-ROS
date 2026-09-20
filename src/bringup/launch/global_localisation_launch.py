@@ -16,7 +16,7 @@ LOCAL_EKF_CONFIG_FILE = os.path.join(
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf.yaml',
+        'global_ekf_local_gps.yaml',
     )
 
 NAVSAT_CONFIG_FILE = os.path.join(
