@@ -25,7 +25,7 @@ ros2 launch bringup teleop_launch.py
 
 Controller: Xbox One (`teleop_twist_joy`'s `xbox.config.yaml` layout — left stick drives, left trigger is the deadman, turbo disabled). Verify axis/button numbers with `ros2 topic echo /joy` on first connect if using Bluetooth, since enumeration can differ from wired.
 
-**Jetson** — `cmd_vel_to_roboclaw` → `roboclaw_for_motors`, plus `episode_data_collector` logging alongside. Does **not** start the camera driver or localisation/EKF chain — run those separately until they're merged into `main`. Does not start `collection_interface` — see below for why.
+**Jetson** — `cmd_vel_to_roboclaw` → `roboclaw_for_motors`, the RGB-only camera stream (`camera_launch.py`), plus `episode_data_collector` logging alongside. Does **not** start the localisation/EKF chain — run that separately. Does not start `collection_interface` — see below for why.
 
 ```
 ros2 launch bringup teleop_data_collection_launch.py base_dir:=/path/to/trajectories
@@ -72,5 +72,5 @@ Image filenames are only unique within an episode — join on `(episode, image)`
 
 `episode_data_collector` takes these as ROS params (`cam_topic`, `odom_topic`), settable via the launch args above or `--ros-args -p`. `stream_data_collector` has them hardcoded to the same defaults.
 
-- `/camera/color/image_raw` (`sensor_msgs/Image`) — Orbbec Gemini 330 driver, `camera_name:=camera` (see `visual_odom` branch, not yet merged)
+- `/camera/color/image_raw` (`sensor_msgs/Image`) — Orbbec Gemini 330 driver (`camera_launch.py`, `camera_name:=camera`), RGB only — depth/IR/point cloud/TF are disabled since nothing here needs them
 - `/odometry/local` (`nav_msgs/Odometry`) — `robot_localization` EKF output, single-EKF/no-GPS (`local_localisation_launch.py`). The GPS-fused setup (`global_localisation_launch.py`) also publishes `/odometry/global`; pass that as `odom_topic` instead if using it.
