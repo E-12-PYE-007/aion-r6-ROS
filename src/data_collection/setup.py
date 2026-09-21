@@ -26,7 +26,7 @@ setup(
         'console_scripts': [
             'chunk_data_collector = data_collection.chunk_data_collector:main',
             'stream_data_collector = data_collection.stream_data_collector:main',
-
+            'mocap_data_collector = data_collection.mocap_data_collector:main',
         ],
     },
 )
