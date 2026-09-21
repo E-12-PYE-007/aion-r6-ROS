@@ -34,9 +34,6 @@ ekf_filter_node_local:
         base_link_frame: base_link  # Defaults to "base_link" if unspecified
         world_frame: odom           # Defaults to the value of odom_frame if unspecified
 
-        # prevent VSLAM transform competing with ekf transform
-        publish_odom_to_base_tf: false
-        publish_map_to_odom_tf: false
 
         odom0: /odometry/wheel
         odom0_config: [false, false, false,
