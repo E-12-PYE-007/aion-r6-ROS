@@ -25,7 +25,7 @@ ros2 launch bringup teleop_launch.py
 
 Controller: Xbox One (`teleop_twist_joy`'s `xbox.config.yaml` layout — left stick drives, left trigger is the deadman, turbo disabled). Verify axis/button numbers with `ros2 topic echo /joy` on first connect if using Bluetooth, since enumeration can differ from wired.
 
-**Jetson** — `cmd_vel_to_roboclaw` → `roboclaw_for_motors`, the RGB-only camera stream (`camera_launch.py`), plus `episode_data_collector` logging alongside. Does **not** start the localisation/EKF chain — run that separately. Does not start `collection_interface` — see below for why.
+**Jetson** — `cmd_vel_to_roboclaw`, the RGB-only camera stream (`camera_launch.py`), `local_localisation_launch.py` (which owns `roboclaw_for_motors`, mavros, wheel-encoder localisation, and the EKF), plus `episode_data_collector` logging alongside. Does not start `collection_interface` — see below for why. Uses `local_localisation_launch.py` (no GPS) hardcoded, not `global_localisation_launch.py` — swap the include in the launch file itself if you need the GPS-fused setup, there's no launch arg for it yet.
 
 ```
 ros2 launch bringup teleop_data_collection_launch.py base_dir:=/path/to/trajectories

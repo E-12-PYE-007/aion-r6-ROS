@@ -2,7 +2,11 @@
 Jetson -- the controller/joystick machinery lives on the workstation instead
 (see teleop_launch.py) and reaches this over the network via /cmd_vel.
 
-cmd_vel_to_roboclaw -> roboclaw_for_motors
+cmd_vel_to_roboclaw converts /cmd_vel into roboclaw commands.
+local_localisation_launch.py brings up roboclaw_for_motors (the other half
+of motor control), mavros, wheel-encoder localisation, and the EKF -- it
+owns roboclaw_for_motors itself, so it's included here rather than launching
+a second, conflicting instance of that node.
 camera_launch.py brings up the RGB-only camera stream.
 episode_data_collector logs camera + odometry into named episodes.
 
@@ -10,9 +14,6 @@ Does not launch collection_interface (the start/stop/prompt keyboard client)
 -- it needs a real attached terminal, which ros2 launch doesn't reliably
 provide. Run it by hand instead, e.g. over its own SSH session into the
 Jetson: `ros2 run data_collection collection_interface`.
-
-Also does not bring up the localisation/EKF chain -- run that separately for
-now.
 """
 
 import os
@@ -51,6 +52,16 @@ def generate_launch_description():
         )
     )
 
+    localisation_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('bringup'),
+                'launch',
+                'local_localisation_launch.py',
+            )
+        )
+    )
+
     episode_data_collector_node = Node(
         package='data_collection',
         executable='episode_data_collector',
@@ -70,19 +81,12 @@ def generate_launch_description():
         output='screen',
     )
 
-    roboclaw_for_motors_node = Node(
-        package='control',
-        executable='roboclaw_for_motors',
-        name='roboclaw_for_motors',
-        output='screen',
-    )
-
     return LaunchDescription([
         base_dir_arg,
         cam_topic_arg,
         odom_topic_arg,
         cmd_vel_to_roboclaw_node,
-        roboclaw_for_motors_node,
+        localisation_launch,
         camera_launch,
         episode_data_collector_node,
     ])
