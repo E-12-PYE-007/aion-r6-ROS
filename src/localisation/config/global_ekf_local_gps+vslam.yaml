@@ -32,7 +32,7 @@ ekf_filter_node_global:
     odom1_relative: false
     odom1_queue_size: 10
 
-    odom2: /odometry/vslam??
+    odom2: /visual_slam/tracking/odometry
     odom2_config: [true,  true,  false,
                    false, false, false,
                    false, false, false,
@@ -41,3 +41,4 @@ ekf_filter_node_global:
     odom2_differential: false
     odom2_relative: false
     odom2_queue_size: 10
+
