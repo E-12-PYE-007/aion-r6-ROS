@@ -44,6 +44,20 @@ def generate_launch_description():
         }],
     )
 
+    vo_pose_relay_node = Node(
+        package='localisation',
+        executable='vo_pose_relay',
+        name='vo_pose_relay',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'vo_topic': '/visual_slam/tracking/vo_pose_covariance',
+            'reference_topic': '/odometry/wheel',
+            'output_topic': '/odometry/vo_pose_odom',
+            'output_frame': 'odom',
+        }],
+    )
+
     ekf_node = Node(
         package='robot_localization',
         executable='ekf_node',
@@ -66,5 +80,6 @@ def generate_launch_description():
         roboclaw_node,
         mavros_launch,
         encoder_node,
+        vo_pose_relay_node,
         ekf_node,
     ])

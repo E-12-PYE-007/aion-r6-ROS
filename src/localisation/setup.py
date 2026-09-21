@@ -29,6 +29,7 @@ setup(
         'console_scripts': [
             'encoder_localisation = localisation.encoder_localisation:main',
             'test_vo = localisation.test_vo:main',
+            'vo_pose_relay = localisation.vo_pose_relay:main',
         ],
     },
 )
