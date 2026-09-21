@@ -35,6 +35,15 @@ CMD_VEL_TOPIC = 'cmd_vel'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
 NVBLOX_MAX_DISTANCE_M = 2.0
 
+# Fixed plot extent instead of auto-fitting to the collected poses - a run that diverges
+# (solver failure, runaway velocity, etc.) produces an extreme pose range that, combined
+# with the equal-aspect axes, rendered as an unreadable sliver. Centered on a point along
+# the reference path (CENTER_ARCLENGTH_M from PATH_ORIGIN, in PATH_HEADING's direction,
+# not assumed to be along world x) rather than around wherever the robot ends up.
+X_RANGE_M = 6.0
+Y_RANGE_M = 4.0
+CENTER_ARCLENGTH_M = 2.0
+
 
 def yaw_from_quaternion(q):
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
@@ -125,9 +134,9 @@ class MpcPlotterNode(Node):
         ax.set_xlabel('x [m]')
         ax.set_ylabel('y [m]')
 
-        margin = 0.3
-        ax.set_xlim(poses[:, 0].min() - margin, poses[:, 0].max() + margin)
-        ax.set_ylim(poses[:, 1].min() - margin, poses[:, 1].max() + margin)
+        x_center, y_center, _ = StraightPath(PATH_ORIGIN, PATH_HEADING).pose_at_arclength(CENTER_ARCLENGTH_M)
+        ax.set_xlim(x_center - X_RANGE_M / 2, x_center + X_RANGE_M / 2)
+        ax.set_ylim(y_center - Y_RANGE_M / 2, y_center + Y_RANGE_M / 2)
 
         if self._esdf_msg is not None:
             msg = self._esdf_msg

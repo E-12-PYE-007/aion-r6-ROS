@@ -3,10 +3,13 @@ ChicanePath for this test (no benefit to exercising curves right now). Test fixt
 """
 import numpy as np
 
-# Chosen against esdf_single_obs's recorded ESDF: checked directly that this line
-# crosses real (non-sentinel) negative values around x=4.1-4.4, not just the known-cell
-# boundary or the single-voxel noise spike found earlier.
-PATH_ORIGIN = (2.0, -3.5)
+# Chosen against esdf_single_obs's recorded ESDF: PATH_ORIGIN sits at the sensed cone's
+# apex (the sensor origin itself), PATH_HEADING=0 runs straight down the cone's own central
+# axis. A small, shallow obstacle (negative cells only down to about -0.18, not the deep
+# saturated core of the map's other blob) sits almost exactly on that axis at x~2.0-2.1,
+# about 1.8m out - close enough to reach quickly, and small enough (a fraction of a metre
+# across) to test avoidance against a compact obstacle rather than a large one.
+PATH_ORIGIN = (0.25, 0.0)
 PATH_HEADING = 0.0
 
 

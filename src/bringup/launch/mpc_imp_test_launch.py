@@ -11,8 +11,9 @@ real VLA model, and a live nvblox, respectively, until those exist - swap any of
 independently, nothing else in the graph depends on how they're implemented, only on the
 topics/frames they produce.
 
-Robot starts at (2.0, -3.5) heading +x - chosen (checked directly against the bag) so the
-straight reference line crosses a real obstacle around x=4.1-4.4, not just open space.
+Robot starts at PATH_ORIGIN heading PATH_HEADING (see straight_path.py) - the ESDF cone's
+own apex, heading straight down its central axis, where esdf_single_obs's small obstacle
+sits almost exactly on-axis a short distance out.
 `static_esdf_publisher`'s bag is recorded at 0.05m resolution, not the 0.1m production
 default in constants.py - mpc_path_follower's patch_resolution parameter is overridden here
 to match it for this test only.
@@ -49,7 +50,7 @@ def generate_launch_description():
             executable='sim_robot',
             name='sim_robot',
             output='screen',
-            parameters=[{'initial_x': 2.0, 'initial_y': -3.5, 'initial_theta': 0.0}],
+            parameters=[{'initial_x': 0.25, 'initial_y': 0.0, 'initial_theta': 0.0}],
         ),
         Node(
             package='debug',

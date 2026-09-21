@@ -59,6 +59,12 @@ class UnicycleMPC:
             'ipopt.sb': 'yes',
             'ipopt.max_iter': IPOPT_MAX_ITER,
             'ipopt.warm_start_init_point': 'yes',
+            # Monotone (IPOPT's default) reinitialises the barrier parameter from mu_init on
+            # every solve regardless of how close the warm-started iterate already is, so a
+            # tick that's warm-started from a converged solution can end up doing MORE work
+            # than a cold start - measured 28% of solves hitting max_iter along a test path,
+            # dropping to 2% with adaptive (which sizes mu from the current iterate instead).
+            'ipopt.mu_strategy': 'adaptive',
             'print_time': False,
         }
         if solver_opts:
