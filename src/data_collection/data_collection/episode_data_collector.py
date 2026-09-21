@@ -57,7 +57,7 @@ class EpisodeDataCollectionNode(Node):
         self.base_dir = Path(base_dir)
 
         cam_topic = self.declare_parameter('cam_topic', '/camera/color/image_raw').value
-        odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
+        odom_topic = self.declare_parameter('odom_topic', '/odometry/local').value
 
         self.cam_subscriber = self.create_subscription(
             Image,

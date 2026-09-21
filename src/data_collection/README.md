@@ -35,7 +35,7 @@ ros2 launch bringup teleop_data_collection_launch.py base_dir:=/path/to/trajecto
 |---|---|---|
 | `base_dir` | *(required)* | where episodes get written |
 | `cam_topic` | `/camera/color/image_raw` | |
-| `odom_topic` | `/odometry/filtered` | assumes `local_localisation_launch.py` (single EKF, no GPS). Pass `/odometry/global` if using the GPS-fused setup instead |
+| `odom_topic` | `/odometry/local` | assumes `local_localisation_launch.py` (single EKF, no GPS). Pass `/odometry/global` if using the GPS-fused setup instead |
 
 In a **separate terminal on the Jetson** (e.g. its own SSH session from the workstation), once the above is running:
 
@@ -73,4 +73,4 @@ Image filenames are only unique within an episode — join on `(episode, image)`
 `episode_data_collector` takes these as ROS params (`cam_topic`, `odom_topic`), settable via the launch args above or `--ros-args -p`. `stream_data_collector` has them hardcoded to the same defaults.
 
 - `/camera/color/image_raw` (`sensor_msgs/Image`) — Orbbec Gemini 330 driver, `camera_name:=camera` (see `visual_odom` branch, not yet merged)
-- `/odometry/filtered` (`nav_msgs/Odometry`) — `robot_localization` EKF output. This is the single-EKF, no-GPS topic name (`local_localisation_launch.py`); the GPS-fused setup (`global_localisation_launch.py`) publishes `/odometry/local` and `/odometry/global` instead (see `robot-localization-ekf` branch, not yet merged)
+- `/odometry/local` (`nav_msgs/Odometry`) — `robot_localization` EKF output, single-EKF/no-GPS (`local_localisation_launch.py`). The GPS-fused setup (`global_localisation_launch.py`) also publishes `/odometry/global`; pass that as `odom_topic` instead if using it.
