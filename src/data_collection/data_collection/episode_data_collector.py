@@ -125,6 +125,11 @@ class EpisodeDataCollectionNode(Node):
 
         response.success = True
         response.message = f"Stopped episode '{self.episode_name}' ({self.frame_count} frames)"
+        if self.frame_count == 0:
+            self.get_logger().error(
+                f"Episode '{self.episode_name}' stopped with 0 frames logged -- "
+                "check that both cam_topic and odom_topic are actually publishing"
+            )
 
         self.episode_dir = None
         self.img_dir = None
@@ -139,7 +144,7 @@ class EpisodeDataCollectionNode(Node):
             return # No episode in progress
 
         if self.current_pose is None:
-            self.get_logger().warn('No starting pose available')
+            self.get_logger().warn('No starting pose available -- no odometry received yet', throttle_duration_sec=5.0)
             return # Cannot start logging without a starting pose
 
         img_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 # image capture time in seconds
