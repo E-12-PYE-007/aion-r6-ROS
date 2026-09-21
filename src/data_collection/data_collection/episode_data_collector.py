@@ -57,7 +57,7 @@ class EpisodeDataCollectionNode(Node):
         self.base_dir = Path(base_dir)
 
         cam_topic = self.declare_parameter('cam_topic', '/camera/color/image_raw').value
-        odom_topic = self.declare_parameter('odom_topic', '/odometry/local').value
+        odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
 
         self.cam_subscriber = self.create_subscription(
             Image,
@@ -163,6 +163,8 @@ class EpisodeDataCollectionNode(Node):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         theta = self.yaw_from_quat(msg.pose.pose.orientation)
+
+        #self.get_logger().info(f'Received odom msg on {odom_topic}')
 
         self.current_pose = (
             t,

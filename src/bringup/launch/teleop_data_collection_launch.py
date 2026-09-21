@@ -38,7 +38,7 @@ def generate_launch_description():
     )
     odom_topic_arg = DeclareLaunchArgument(
         'odom_topic',
-        default_value='/odometry/local',
+        default_value='/odometry/filtered',
         description='Odometry topic to log (default assumes local_localisation_launch.py, no GPS)',
     )
 
