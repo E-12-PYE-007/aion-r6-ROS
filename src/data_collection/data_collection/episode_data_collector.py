@@ -45,6 +45,7 @@ class EpisodeDataCollectionNode(Node):
         self.img_dir = None
         self.poses_path = None
         self.episode_name = None
+        self.episode_prompt = None
         self.frame_count = 0
 
         self.declare_parameter('base_dir', Parameter.Type.STRING)
@@ -107,6 +108,7 @@ class EpisodeDataCollectionNode(Node):
         self.img_dir = img_dir
         self.poses_path = episode_dir / "poses.jsonl"
         self.episode_name = name
+        self.episode_prompt = request.prompt.strip()
         self.frame_count = 0
         self.previous_img_time = 0
 
@@ -128,6 +130,7 @@ class EpisodeDataCollectionNode(Node):
         self.img_dir = None
         self.poses_path = None
         self.episode_name = None
+        self.episode_prompt = None
         self.frame_count = 0
         return response
 
@@ -199,6 +202,7 @@ class EpisodeDataCollectionNode(Node):
 
         record = {
             "episode": self.episode_name,
+            "prompt": self.episode_prompt,
             "image": image_path.name,
             "img_time": img_time,
             "pose": self.current_pose,

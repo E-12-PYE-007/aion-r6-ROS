@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
     Keyboard-driven client for episode_data_collector's start/stop services.
+    Mirrors stream_data_collector, but using services and keyboard input.
     Run alongside teleop; prompts for an episode name and manages naming
     collisions by auto-incrementing a numeric suffix.
 """
 
+import shutil
 import sys
 import termios
 import tty
+from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
@@ -30,12 +33,13 @@ def read_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-class EpisodeRecorderClient(Node):
+class CollectionInterfaceClient(Node):
     def __init__(self):
-        super().__init__('episode_recorder_client')
+        super().__init__('collection_interface')
         self.start_cli = self.create_client(StartEpisode, f'/{COLLECTOR_NODE}/start_episode')
         self.stop_cli = self.create_client(Trigger, f'/{COLLECTOR_NODE}/stop_episode')
         self.recording = False
+        self.episode_dir = None
 
     def wait_for_services(self, timeout_sec=5.0):
         for cli, name in ((self.start_cli, 'start_episode'), (self.stop_cli, 'stop_episode')):
@@ -44,18 +48,20 @@ class EpisodeRecorderClient(Node):
                     f"Service '{name}' not available - is {COLLECTOR_NODE} running?"
                 )
 
-    def start_episode(self, base_name):
+    def start_episode(self, base_name, prompt):
         name = base_name
         suffix = 1
         while True:
             req = StartEpisode.Request()
             req.name = name
+            req.prompt = prompt
             future = self.start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, future)
             resp = future.result()
 
             if resp.success:
                 self.recording = True
+                self.episode_dir = Path(resp.episode_dir)
                 print(f"[recording] {resp.message} -> {resp.episode_dir}")
                 return
 
@@ -74,11 +80,23 @@ class EpisodeRecorderClient(Node):
         if resp.success:
             self.recording = False
         print(f"[{'stopped' if resp.success else 'error'}] {resp.message}")
+        return resp.success
+
+    def confirm_save(self):
+        if self.episode_dir is None:
+            return
+        answer = input('Save episode? [y/n]: ').strip().lower()
+        if answer.startswith('n'):
+            shutil.rmtree(self.episode_dir, ignore_errors=True)
+            print(f'[discarded] {self.episode_dir}')
+        else:
+            print(f'[saved] {self.episode_dir}')
+        self.episode_dir = None
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = EpisodeRecorderClient()
+    node = CollectionInterfaceClient()
 
     try:
         node.wait_for_services()
@@ -95,8 +113,8 @@ def main(args=None):
             key = read_key()
 
             if key in QUIT_KEYS:
-                if node.recording:
-                    node.stop_episode()
+                if node.recording and node.stop_episode():
+                    node.confirm_save()
                 break
 
             elif key == START_KEY:
@@ -107,13 +125,18 @@ def main(args=None):
                 if not name:
                     print('[warn] empty name, cancelled')
                     continue
-                node.start_episode(name)
+                prompt = input('Prompt describing this episode: ').strip()
+                if not prompt:
+                    print('[warn] empty prompt, cancelled')
+                    continue
+                node.start_episode(name, prompt)
 
             elif key == STOP_KEY:
                 if not node.recording:
                     print('[warn] not currently recording')
                     continue
-                node.stop_episode()
+                if node.stop_episode():
+                    node.confirm_save()
     finally:
         node.destroy_node()
         rclpy.shutdown()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
     Data collection node for Aion R6. Collects a continuous stream of image
-    and current pose at a rate of 3Hz
+    and current pose at a rate of 3Hz. Built for autonomous data collection.
 """
 
 from datetime import datetime

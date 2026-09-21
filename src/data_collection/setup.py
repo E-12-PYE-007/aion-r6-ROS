@@ -27,7 +27,7 @@ setup(
             'stream_data_collector = data_collection.stream_data_collector:main',
             'mocap_data_collector = data_collection.mocap_data_collector:main',
             'episode_data_collector = data_collection.episode_data_collector:main',
-            'episode_recorder = data_collection.episode_recorder:main',
+            'collection_interface = data_collection.collection_interface:main',
 
         ],
     },
