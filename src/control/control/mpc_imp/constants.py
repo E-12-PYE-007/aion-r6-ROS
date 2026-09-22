@@ -22,10 +22,15 @@ SLACK_WEIGHT = 1000.0
 # lets the horizon cover the full ~2.67s VLA chunk (N_WAYPOINTS * WAYPOINT_DT)
 # without the NLP growing to match a much finer step.
 PREDICTION_DT = 0.2          # [s] solver's internal shooting-step spacing
-CONTROL_HORIZON_M = 14       # number of free control decision variables
-PREDICTION_HORIZON_N = 14    # steps * PREDICTION_DT ~ 2.8s, covers the full VLA chunk
-V_MAX = 0.6                  # [m/s]
-OMEGA_MAX = 1.0              # [rad/s]
+CONTROL_HORIZON_M = 50       # number of free control decision variables
+PREDICTION_HORIZON_N = 50    # steps * PREDICTION_DT ~ 10s - see mpc_replay.py sweep notes:
+# the dead-on obstacle case needs N>=~44 (>3x the ~2.67s VLA chunk span) to reliably
+# converge to a clean detour rather than deadlock; below that (through the low 40s) the
+# transition is noisy, not a clean threshold. N=14 (matching the chunk span) is the
+# original, architecturally-preferred value - this is deliberately testing whether a
+# longer horizon alone resolves the dead-on case, at the cost of a much bigger NLP.
+V_MAX = 0.3                  # [m/s] real platform limit - matches pure_pursuit_controller.py
+OMEGA_MAX = 0.3              # [rad/s] real platform limit - matches pure_pursuit_controller.py
 
 # How often the node actually re-solves and refreshes cmd_vel - independent of
 # PREDICTION_DT. Must stay <= 0.125s to hold the 8Hz floor (so VLA updates aren't missed).

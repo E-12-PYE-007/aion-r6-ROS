@@ -4,7 +4,7 @@ import numpy as np
 from .constants import (
     PATCH_SIZE, PATCH_RESOLUTION, SPLINE_DEGREE, SAFETY_MARGIN_M, SLACK_WEIGHT,
     PREDICTION_DT, CONTROL_HORIZON_M, PREDICTION_HORIZON_N, V_MAX, OMEGA_MAX,
-    Q_DIAG, R_DIAG, TERMINAL_COST_Q, IPOPT_MAX_ITER,
+    Q_DIAG, R_DIAG, TERMINAL_COST_Q, IPOPT_MAX_ITER, NVBLOX_MAX_DISTANCE_M,
 )
 
 
@@ -87,7 +87,15 @@ class UnicycleMPC:
     def _query_distance(self, X_k, p_x0_xy, psi, coeffs):
         """Bicubic ESDF lookup at X_k. Only the odom-frame offset from p_x0 gets
         rotated into map frame - translation cancels out of a difference of two
-        odom-frame points. Requires esdf_patch to be centred on this same x0."""
+        odom-frame points. Requires esdf_patch to be centred on this same x0.
+
+        `coeffs` arrives pre-shifted by -NVBLOX_MAX_DISTANCE_M (see pack_params) -
+        ca.bspline returns exactly 0 for a query outside the knot domain regardless
+        of the coefficient values there (verified empirically), so shifting back
+        here makes an out-of-patch query read as free space instead of as sitting
+        exactly on an obstacle surface. In-domain queries are unaffected: B-spline
+        interpolation is affine in the coefficients, so the shift in and back out
+        exactly cancel."""
         offset_odom = X_k[0:2] - p_x0_xy
         c, s = ca.cos(psi), ca.sin(psi)
         R = ca.vertcat(ca.horzcat(c, -s), ca.horzcat(s, c))
@@ -95,7 +103,7 @@ class UnicycleMPC:
         centre = self.half_patch * self.patch_resolution
         query = ca.vertcat(centre + offset_map[0], centre + offset_map[1])
         knots = self._esdf_knots
-        return ca.bspline(query, coeffs, [knots, knots], [self.spline_degree] * 2, 1, {})
+        return ca.bspline(query, coeffs, [knots, knots], [self.spline_degree] * 2, 1, {}) + NVBLOX_MAX_DISTANCE_M
 
     def _build_nlp(self):
         N, M = self.N, self.M
@@ -203,9 +211,13 @@ class UnicycleMPC:
         x_ref = np.asarray(x_ref, dtype=float).reshape(self.N + 1, 3)
         u_ref = np.asarray(u_ref, dtype=float).reshape(self.N, 2)
         esdf_patch = np.asarray(esdf_patch, dtype=float).reshape(self.patch_size, self.patch_size)
+        # Shifted by -NVBLOX_MAX_DISTANCE_M here, shifted back in _query_distance -
+        # see that docstring for why this makes an out-of-domain query read as free
+        # space rather than as touching an obstacle.
+        shifted_patch = esdf_patch - NVBLOX_MAX_DISTANCE_M
         return np.concatenate([
             np.asarray(x0, dtype=float), x_ref.flatten(), u_ref.flatten(),
-            [psi], esdf_patch.ravel(order='C'),
+            [psi], shifted_patch.ravel(order='C'),
         ])
 
     def extract_predicted_states(self, w_opt):

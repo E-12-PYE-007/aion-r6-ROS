@@ -4,11 +4,20 @@ ChicanePath for this test (no benefit to exercising curves right now). Test fixt
 import numpy as np
 
 # Chosen against esdf_single_obs's recorded ESDF: PATH_ORIGIN sits at the sensed cone's
-# apex (the sensor origin itself), PATH_HEADING=0 runs straight down the cone's own central
-# axis. A small, shallow obstacle (negative cells only down to about -0.18, not the deep
-# saturated core of the map's other blob) sits almost exactly on that axis at x~2.0-2.1,
-# about 1.8m out - close enough to reach quickly, and small enough (a fraction of a metre
-# across) to test avoidance against a compact obstacle rather than a large one.
+# apex (the sensor origin itself). A small, shallow obstacle (negative cells only down to
+# about -0.18, not the deep saturated core of the map's other blob) occupies roughly
+# x=[2.0,2.2], y=[-0.05,0.3], about 1.8m out - close enough to reach quickly, and small
+# enough (a fraction of a metre across) to test avoidance against a compact obstacle
+# rather than a large one.
+#
+# PATH_HEADING=0.0 runs dead-on through the obstacle's own edge (min ESDF distance
+# along it: -0.05, i.e. inside the solid obstacle, not just inside the margin) - a
+# near-worst-case, almost-exactly-on-axis scenario. Tilting the line by about -4.6
+# degrees from the same origin (PATH_HEADING = -0.080904) instead sits it at y~-0.15
+# by the obstacle's x-range - clear of the solid obstacle but inside SAFETY_MARGIN_M
+# by about 0.10m: a near-miss needing a small correction, not a full detour discovery.
+# The plain (unshaped) MPC formulation handles that case cleanly; this dead-on value
+# is the harder scenario used to test whether a longer horizon can resolve it too.
 PATH_ORIGIN = (0.25, 0.0)
 PATH_HEADING = 0.0
 
