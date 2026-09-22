@@ -31,7 +31,7 @@ IMAGE_BUFFER_SIZE = 80  # 8 secs worth of data
 SYS1_RATE_HZ = 8.0
 NUM_ACTIONS_CHUNK = 8
 
-SHEAD_PATH = "/home/asc/asyncvla-test/AsyncVLA/AsyncVLA_release" #TODO: Fill this in
+SHEAD_PATH = "/home/vla-cap/AsyncVLA_release"
 
 
 _normalise = transforms.Normalize(
