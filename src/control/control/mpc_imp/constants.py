@@ -5,7 +5,7 @@ solver_setup.py / mpc_path_follower.py."""
 # --- ESDF patch geometry ---
 # PATCH_SIZE/PATCH_RESOLUTION fix the solver's NLP structure, so they must match
 # what EsdfMap actually produces.
-PATCH_SIZE = 22
+PATCH_SIZE = 44
 PATCH_RESOLUTION = 0.1
 SPLINE_DEGREE = 3
 NVBLOX_MAX_DISTANCE_M = 2.0
@@ -24,8 +24,8 @@ SLACK_WEIGHT = 1000.0
 PREDICTION_DT = 0.2          # [s] solver's internal shooting-step spacing
 CONTROL_HORIZON_M = 14       # number of free control decision variables
 PREDICTION_HORIZON_N = 14    # steps * PREDICTION_DT ~ 2.8s, covers the full VLA chunk
-V_MAX = 0.3                  # [m/s]
-OMEGA_MAX = 0.3              # [rad/s]
+V_MAX = 0.6                  # [m/s]
+OMEGA_MAX = 1.0              # [rad/s]
 
 # How often the node actually re-solves and refreshes cmd_vel - independent of
 # PREDICTION_DT. Must stay <= 0.125s to hold the 8Hz floor (so VLA updates aren't missed).
@@ -43,11 +43,13 @@ R_DIAG = [0.1, 0.1]          # stage cost weights on [v, omega] control effort
 #   A = I + PREDICTION_DT * [[0,0,0],[0,0,V_MAX],[0,0,0]]
 #   B = PREDICTION_DT * [[1,0],[0,0],[0,1]]
 #   scipy.linalg.solve_discrete_are(A, B, diag(Q_DIAG), diag(R_DIAG))
-TERMINAL_COST_Q = [
+QF = [
     [2.1583123952, 0.0, 0.0],
     [0.0, 10.0137468867, 1.8745080614],
     [0.0, 1.8745080614, 1.0137804721],
 ]
+QF_MULTIPLIER = 1.0
+TERMINAL_COST_Q = [[element * QF_MULTIPLIER for element in row] for row in QF]
 
 # --- IPOPT ---
 # 100 was too tight for the 2.8s/N=14 horizon: a dumped real failure needed 112
@@ -65,6 +67,7 @@ ODOM_FRAME = 'odom'
 BASE_FRAME = 'base_link'
 CMD_VEL_TOPIC = 'cmd_vel'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
+MAX_SLACK_TOPIC = 'mpc/max_slack'  # debug: max S_k over the horizon, one per solve
 
 # --- Node behaviour ---
 WAYPOINT_DT = 1.0 / 3.0             # spacing between waypoints within a VLA action chunk [s]

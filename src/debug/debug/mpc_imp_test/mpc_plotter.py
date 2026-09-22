@@ -17,6 +17,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32
 from aion_msgs.msg import ActionChunk
 from nvblox_msgs.msg import DistanceMapSlice
 
@@ -33,6 +34,7 @@ ODOM_TOPIC = '/odom'
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
 CMD_VEL_TOPIC = 'cmd_vel'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
+MAX_SLACK_TOPIC = 'mpc/max_slack'
 NVBLOX_MAX_DISTANCE_M = 2.0
 
 # Fixed plot extent instead of auto-fitting to the collected poses - a run that diverges
@@ -87,6 +89,8 @@ class MpcPlotterNode(Node):
         self._chunks = []       # world-frame waypoints, one entry per received chunk
         self._cmd_times = []
         self._cmds = []         # (v, omega)
+        self._slack_times = []
+        self._slacks = []       # max S_k over the horizon, one per solve
         self._last_seq = None
         self._esdf_msg = None   # latest DistanceMapSlice, drawn as a static background
 
@@ -94,6 +98,7 @@ class MpcPlotterNode(Node):
         self.create_subscription(ActionChunk, ACTION_CHUNK_TOPIC, self._chunk_callback, 10)
         self.create_subscription(Twist, CMD_VEL_TOPIC, self._cmd_vel_callback, 10)
         self.create_subscription(DistanceMapSlice, ESDF_TOPIC, self._esdf_callback, 10)
+        self.create_subscription(Float32, MAX_SLACK_TOPIC, self._max_slack_callback, 10)
 
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -118,6 +123,10 @@ class MpcPlotterNode(Node):
 
     def _esdf_callback(self, msg):
         self._esdf_msg = msg
+
+    def _max_slack_callback(self, msg):
+        self._slack_times.append(self._now())
+        self._slacks.append(msg.data)
 
     def save_animation(self):
         if len(self._poses) < 2:
@@ -167,6 +176,7 @@ class MpcPlotterNode(Node):
 
         chunk_times_rel = np.array(self._chunk_times) - self._pose_times[0] if self._chunk_times else np.array([])
         cmd_times_rel = np.array(self._cmd_times) - self._pose_times[0] if self._cmd_times else np.array([])
+        slack_times_rel = np.array(self._slack_times) - self._pose_times[0] if self._slack_times else np.array([])
 
         def update(frame):
             t = pose_times[frame]
@@ -185,7 +195,14 @@ class MpcPlotterNode(Node):
                 if idx >= 0:
                     v, omega = self._cmds[idx]
                     cmd_str = f"\nv={v:+.2f} m/s, omega={omega:+.2f} rad/s"
-            info_text.set_text(f"t = {t:5.2f} s{cmd_str}")
+
+            slack_str = ''
+            if len(slack_times_rel):
+                idx = min(bisect.bisect_right(slack_times_rel, t) - 1, len(self._slacks) - 1)
+                if idx >= 0:
+                    slack_str = f"\nmax S_k={self._slacks[idx]:.3f} m"
+
+            info_text.set_text(f"t = {t:5.2f} s{cmd_str}{slack_str}")
 
             return actual_line, chunk_scatter, robot_patch, info_text
 

@@ -220,6 +220,23 @@ class UnicycleMPC:
             idx += 1  # skip S_k
         return np.array(states)
 
+    def extract_slacks(self, w_opt):
+        """S_k for k=1..N (one per obstacle constraint - X_0 has none). At the solver's
+        optimum S_k == max(0, safety_margin - dist_k) exactly, since S_k appears nowhere
+        else in the NLP: this is the constraint violation in metres, not just a proxy for
+        it. Nonzero here means the obstacle constraint is being paid through rather than
+        respected - cross-check against safety_margin to judge whether that's negligible
+        numerical slop or the solver actually cutting the corner."""
+        idx = 3
+        slacks = []
+        for k in range(self.N):
+            if k < self.M:
+                idx += 2  # skip U_k
+            idx += 3  # skip X_{k+1}
+            slacks.append(w_opt[idx])
+            idx += 1
+        return np.array(slacks)
+
     def solve(self, x0, x_ref, u_ref, psi, esdf_patch, warm_start=True):
         """Solve one MPC step. Returns (u0, predicted_states, solved_ok)."""
         p = self.pack_params(x0, x_ref, u_ref, psi, esdf_patch)

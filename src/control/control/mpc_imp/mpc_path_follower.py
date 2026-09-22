@@ -13,6 +13,7 @@ from nav_msgs.msg import Odometry
 from nvblox_msgs.msg import DistanceMapSlice
 from rclpy.node import Node
 from rclpy.time import Time
+from std_msgs.msg import Float32
 from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
@@ -20,7 +21,7 @@ from tf2_ros.transform_listener import TransformListener
 
 from .constants import (
     ACTION_CHUNK_TOPIC, ODOM_TOPIC, ODOM_FRAME, BASE_FRAME, CMD_VEL_TOPIC, ESDF_TOPIC,
-    WAYPOINT_DT, MAX_CONSECUTIVE_SOLVE_FAILURES, CONTROL_LOOP_DT, PATCH_RESOLUTION,
+    MAX_SLACK_TOPIC, WAYPOINT_DT, MAX_CONSECUTIVE_SOLVE_FAILURES, CONTROL_LOOP_DT, PATCH_RESOLUTION,
 )
 from .esdf_map import EsdfMap
 from .solver_setup import UnicycleMPC
@@ -90,6 +91,7 @@ class MpcPathFollowerNode(Node):
         self._esdf_subscription = self.create_subscription(
             DistanceMapSlice, ESDF_TOPIC, self.esdf_callback, 10)
         self._cmd_vel_publisher = self.create_publisher(Twist, CMD_VEL_TOPIC, 10)
+        self._max_slack_publisher = self.create_publisher(Float32, MAX_SLACK_TOPIC, 10)
 
         self._control_timer = self.create_timer(CONTROL_LOOP_DT, self.control_loop)
 
@@ -123,7 +125,12 @@ class MpcPathFollowerNode(Node):
     def build_xref(self):
         """Returns (x0, x_ref) for the current tick, or None if there's nothing to solve against yet.
         x_ref is (N+1, 3): the interpolated chunk path, indexed from wherever "now" falls in its
-        own timeline. Past the chunk's own span, the last sample is held rather than extrapolated.
+        own timeline. Past the chunk's own span, linearly extrapolates position from the last two
+        samples' delta (heading recomputed from that same delta, not extrapolated independently -
+        raw angles don't wrap) rather than holding the final sample - a static terminal target can
+        sit at or on an obstacle (chunk_generator aims at a fixed lookahead point with no obstacle
+        awareness), which removes any incentive to detour since the terminal cost then can't be
+        reduced by routing around it either.
         """
         if self._current_pose is None or self._interpolated_path is None:
             return None
@@ -135,8 +142,18 @@ class MpcPathFollowerNode(Node):
         idx0 = max(round(elapsed / self._mpc.dt), 0)
 
         last_idx = len(self._interpolated_path) - 1
-        idxs = np.clip(idx0 + np.arange(self._mpc.N + 1), 0, last_idx)
-        x_ref = self._interpolated_path[idxs]
+        raw_idxs = idx0 + np.arange(self._mpc.N + 1)
+        x_ref = self._interpolated_path[np.clip(raw_idxs, 0, last_idx)].copy()
+
+        overflow = raw_idxs > last_idx
+        if np.any(overflow) and last_idx >= 1:
+            last, prev = self._interpolated_path[last_idx], self._interpolated_path[last_idx - 1]
+            step = last[:2] - prev[:2]
+            heading = math.atan2(step[1], step[0]) if np.linalg.norm(step) > 1e-9 else last[2]
+            steps_beyond = (raw_idxs[overflow] - last_idx).astype(float)
+            x_ref[overflow, 0] = last[0] + steps_beyond * step[0]
+            x_ref[overflow, 1] = last[1] + steps_beyond * step[1]
+            x_ref[overflow, 2] = heading
 
         return x0, x_ref
 
@@ -185,6 +202,11 @@ class MpcPathFollowerNode(Node):
         u_ref = self.build_uref(x_ref)
 
         u0, _, solved_ok = self._mpc.solve(x0, x_ref, u_ref, psi, esdf_patch)
+
+        slacks = self._mpc.extract_slacks(self._mpc._w_guess)
+        self._max_slack_publisher.publish(Float32(data=float(slacks.max())))
+        if slacks.max() > 1e-4:
+            self.get_logger().warn(f'obstacle slack in use: max S_k={slacks.max():.4f} m over horizon')
 
         if solved_ok:
             self._consecutive_solve_failures = 0
