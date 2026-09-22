@@ -1,6 +1,6 @@
 """Robot-side bringup for teleop-driven episode data collection. Run on the
-Jetson -- the controller/joystick machinery lives on the workstation instead
-(see teleop_launch.py) and reaches this over the network via /cmd_vel.
+Jetson, then use `ros2 run data_collection collection_interface` in a separate
+attached SSH terminal to drive with arrow keys and start/stop episodes.
 
 cmd_vel_to_roboclaw converts /cmd_vel into roboclaw commands.
 local_localisation_launch.py brings up roboclaw_for_motors (the other half
@@ -12,8 +12,7 @@ episode_data_collector logs camera + odometry into named episodes.
 
 Does not launch collection_interface (the start/stop/prompt keyboard client)
 -- it needs a real attached terminal, which ros2 launch doesn't reliably
-provide. Run it by hand instead, e.g. over its own SSH session into the
-Jetson: `ros2 run data_collection collection_interface`.
+provide. Run it by hand after this launch is up.
 """
 
 import os

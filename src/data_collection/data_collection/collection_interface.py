@@ -1,34 +1,76 @@
 #!/usr/bin/env python3
 """
-    Keyboard-driven client for episode_data_collector's start/stop services.
-    Mirrors stream_data_collector, but using services and keyboard input.
-    Run alongside teleop; prompts for an episode name and manages naming
-    collisions by auto-incrementing a numeric suffix.
+Keyboard console for teleop-driven episode data collection.
+
+Runs in one attached terminal on the Jetson:
+  arrow keys drive the rover by publishing /cmd_vel
+  x starts an episode
+  s stops the episode and asks whether to save it
+  q quits
+
+The arrow-key teleop behavior mirrors key_teleop's simple mobile-base model:
+recent arrow presses map to fixed linear/angular rates, and commands return
+to zero when keys stop repeating.
 """
 
+import select
 import shutil
 import sys
 import termios
 import tty
 from pathlib import Path
+
 import rclpy
+from aion_msgs.srv import StartEpisode
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from std_srvs.srv import Trigger
-from aion_msgs.srv import StartEpisode
 
 COLLECTOR_NODE = 'episode_data_collector'
 START_KEY = 'x'
 STOP_KEY = 's'
-QUIT_KEYS = {'q', '\x03'} # 'q' or Ctrl+C
-NAME_HINT = 'e.g. <target>_<follow_side>_turn_<turns>'
+QUIT_KEYS = {'q', '\x03'}  # 'q' or Ctrl+C
+NAME_HINT = 'e.g. fls, fro, fltr, frtl'
+FENCE_PROMPTS = {
+    'fl': 'follow the fence on your left',
+    'fr': 'follow the fence on your right',
+}
+
+KEY_UP = '\x1b[A'
+KEY_DOWN = '\x1b[B'
+KEY_RIGHT = '\x1b[C'
+KEY_LEFT = '\x1b[D'
 
 
-def read_key():
+def prompt_from_episode_name(name):
+    descriptor = name.lower()
+    for prefix, prompt in FENCE_PROMPTS.items():
+        if descriptor.startswith(prefix):
+            return prompt
+    return None
+
+
+def read_key(timeout_sec):
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        return sys.stdin.read(1)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout_sec)
+        if not ready:
+            return None
+
+        key = sys.stdin.read(1)
+        if key != '\x1b':
+            return key
+
+        # Arrow keys arrive as three-byte escape sequences.
+        sequence = [key]
+        for _ in range(2):
+            ready, _, _ = select.select([sys.stdin], [], [], 0.01)
+            if not ready:
+                break
+            sequence.append(sys.stdin.read(1))
+        return ''.join(sequence)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -36,10 +78,21 @@ def read_key():
 class CollectionInterfaceClient(Node):
     def __init__(self):
         super().__init__('collection_interface')
+
+        cmd_vel_topic = self.declare_parameter('cmd_vel_topic', '/cmd_vel').value
+        self.forward_rate = float(self.declare_parameter('forward_rate', 0.3).value)
+        self.backward_rate = float(self.declare_parameter('backward_rate', 0.3).value)
+        self.rotation_rate = float(self.declare_parameter('rotation_rate', 0.3).value)
+        self.hz = float(self.declare_parameter('hz', 10.0).value)
+        self.key_timeout = float(self.declare_parameter('key_timeout', 0.5).value)
+
         self.start_cli = self.create_client(StartEpisode, f'/{COLLECTOR_NODE}/start_episode')
         self.stop_cli = self.create_client(Trigger, f'/{COLLECTOR_NODE}/stop_episode')
+        self.cmd_vel_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
+
         self.recording = False
         self.episode_dir = None
+        self.last_pressed = {}
 
     def wait_for_services(self, timeout_sec=5.0):
         for cli, name in ((self.start_cli, 'start_episode'), (self.stop_cli, 'stop_episode')):
@@ -93,6 +146,56 @@ class CollectionInterfaceClient(Node):
             print(f'[saved] {self.episode_dir}')
         self.episode_dir = None
 
+    def handle_drive_key(self, key):
+        if key in {KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT}:
+            self.last_pressed[key] = self.get_clock().now()
+            return True
+        return False
+
+    def publish_drive_command(self):
+        now = self.get_clock().now()
+        active_keys = [
+            key for key, stamp in self.last_pressed.items()
+            if (now - stamp).nanoseconds / 1e9 < self.key_timeout
+        ]
+        self.last_pressed = {key: self.last_pressed[key] for key in active_keys}
+
+        linear = 0.0
+        angular = 0.0
+        if KEY_UP in active_keys:
+            linear += self.forward_rate
+        if KEY_DOWN in active_keys:
+            linear -= self.backward_rate
+        if KEY_LEFT in active_keys:
+            angular += self.rotation_rate
+        if KEY_RIGHT in active_keys:
+            angular -= self.rotation_rate
+
+        cmd = Twist()
+        cmd.linear.x = linear
+        cmd.angular.z = angular
+        self.cmd_vel_pub.publish(cmd)
+
+    def stop_drive(self):
+        self.last_pressed.clear()
+        self.cmd_vel_pub.publish(Twist())
+
+
+def prompt_for_episode(node):
+    node.stop_drive()
+    name = input(f"Episode name ({NAME_HINT}): ").strip()
+    if not name:
+        print('[warn] empty name, cancelled')
+        return
+
+    prompt = prompt_from_episode_name(name)
+    if prompt is None:
+        print('[warn] name must start with fl or fr, cancelled')
+        return
+
+    print(f'[prompt] {prompt}')
+    node.start_episode(name, prompt)
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -106,38 +209,43 @@ def main(args=None):
         rclpy.shutdown()
         return
 
-    print(f"Ready. [{START_KEY}] start episode  [{STOP_KEY}] stop episode  [q] quit")
+    print(
+        f"Ready. arrow keys drive  [{START_KEY}] start episode  "
+        f"[{STOP_KEY}] stop episode  [q] quit"
+    )
+    print(
+        f"Drive rates: forward={node.forward_rate:.2f} m/s  "
+        f"backward={node.backward_rate:.2f} m/s  turn={node.rotation_rate:.2f} rad/s"
+    )
 
     try:
         while rclpy.ok():
-            key = read_key()
+            rclpy.spin_once(node, timeout_sec=0.0)
+            key = read_key(1.0 / node.hz)
 
             if key in QUIT_KEYS:
+                node.stop_drive()
                 if node.recording and node.stop_episode():
                     node.confirm_save()
                 break
 
-            elif key == START_KEY:
+            if key == START_KEY:
                 if node.recording:
                     print('[warn] already recording, stop it first')
-                    continue
-                name = input(f"Episode name ({NAME_HINT}): ").strip()
-                if not name:
-                    print('[warn] empty name, cancelled')
-                    continue
-                prompt = input('Prompt describing this episode: ').strip()
-                if not prompt:
-                    print('[warn] empty prompt, cancelled')
-                    continue
-                node.start_episode(name, prompt)
-
+                else:
+                    prompt_for_episode(node)
             elif key == STOP_KEY:
+                node.stop_drive()
                 if not node.recording:
                     print('[warn] not currently recording')
-                    continue
-                if node.stop_episode():
+                elif node.stop_episode():
                     node.confirm_save()
+            elif key is not None:
+                node.handle_drive_key(key)
+
+            node.publish_drive_command()
     finally:
+        node.stop_drive()
         node.destroy_node()
         rclpy.shutdown()
 

@@ -1,8 +1,12 @@
-"""Controller teleop machinery, meant for the workstation (joystick attached
-here), not the Jetson.
+"""Standalone arrow-key teleop using key_teleop.
 
-joy_node -> teleop_twist_joy, publishing /cmd_vel for the robot-side bringup
-(teleop_data_collection_launch.py) to consume over the network.
+For real data-collection runs, prefer:
+
+    ros2 run data_collection collection_interface
+
+That combined interface drives with the same arrow-key velocity model while
+also starting/stopping episodes in one terminal. This launch file is kept as
+a simple drive-only test wrapper around the standard key_teleop package.
 """
 
 from launch import LaunchDescription
@@ -13,46 +17,49 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    max_linear_speed_arg = DeclareLaunchArgument(
-        'max_linear_speed',
-        default_value='0.4',
-        description='Max linear speed in m/s (teleop_twist_joy scale_linear.x) -- conservative default, tune before real runs',
+    forward_rate_arg = DeclareLaunchArgument(
+        'forward_rate',
+        default_value='0.3',
+        description='Forward speed in m/s for the up arrow',
     )
-    max_yaw_rate_arg = DeclareLaunchArgument(
-        'max_yaw_rate',
-        default_value='0.4',
-        description='Max yaw rate in rad/s (teleop_twist_joy scale_angular.yaw)',
+    backward_rate_arg = DeclareLaunchArgument(
+        'backward_rate',
+        default_value='0.3',
+        description='Reverse speed in m/s for the down arrow',
+    )
+    rotation_rate_arg = DeclareLaunchArgument(
+        'rotation_rate',
+        default_value='0.3',
+        description='Yaw rate in rad/s for left/right arrows',
+    )
+    hz_arg = DeclareLaunchArgument(
+        'hz',
+        default_value='10.0',
+        description='Command publish rate in Hz',
     )
 
-    joy_node = Node(
-        package='joy',
-        executable='joy_node',
-        name='joy_node',
+    key_teleop_node = Node(
+        package='key_teleop',
+        executable='key_teleop',
+        name='key_teleop',
         output='screen',
-    )
-
-    teleop_twist_joy_node = Node(
-        package='teleop_twist_joy',
-        executable='teleop_node',
-        name='teleop_twist_joy',
-        output='screen',
+        emulate_tty=True,
         parameters=[{
-            # Xbox One controller layout (teleop_twist_joy's xbox.config.yaml preset).
-            # Verify with `ros2 topic echo /joy` on first connect -- wired vs Bluetooth
-            # enumeration can differ.
-            'axis_linear.x': 1,        # left stick vertical
-            'axis_angular.yaw': 0,     # left stick horizontal
-            'enable_button': 5,        # RB (deadman) -- left trigger didn't register as a button on this controller
-            'enable_turbo_button': -1, # disabled -- no turbo tier
-            'require_enable_button': False,
-            'scale_linear.x': ParameterValue(LaunchConfiguration('max_linear_speed'), value_type=float),
-            'scale_angular.yaw': ParameterValue(LaunchConfiguration('max_yaw_rate'), value_type=float),
+            'twist_stamped_enabled': False,
+            'forward_rate': ParameterValue(LaunchConfiguration('forward_rate'), value_type=float),
+            'backward_rate': ParameterValue(LaunchConfiguration('backward_rate'), value_type=float),
+            'rotation_rate': ParameterValue(LaunchConfiguration('rotation_rate'), value_type=float),
+            'hz': ParameterValue(LaunchConfiguration('hz'), value_type=float),
         }],
+        remappings=[
+            ('key_vel', '/cmd_vel'),
+        ],
     )
 
     return LaunchDescription([
-        max_linear_speed_arg,
-        max_yaw_rate_arg,
-        joy_node,
-        teleop_twist_joy_node,
+        forward_rate_arg,
+        backward_rate_arg,
+        rotation_rate_arg,
+        hz_arg,
+        key_teleop_node,
     ])
