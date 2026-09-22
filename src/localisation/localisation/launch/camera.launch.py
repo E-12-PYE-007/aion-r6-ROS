@@ -70,9 +70,9 @@ def generate_launch_description():
             'laser_index1_ir_ae_max_exposure': '16000',  # default 17000 -- kept under the 60fps frame period (~16.7ms); higher gets clamped anyway
             'laser_index1_depth_gain': '48',           # default 16 -- gain isn't limited by frame period like exposure is
 
-            'left_ir_fps': '60',
-            'right_ir_fps': '60',
-            'depth_fps': '60',
+            'left_ir_fps': '30',
+            'right_ir_fps': '30',
+            'depth_fps': '30',
         }.items(),
     )
 
