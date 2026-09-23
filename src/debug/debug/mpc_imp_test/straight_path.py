@@ -18,6 +18,19 @@ import numpy as np
 # by about 0.10m: a near-miss needing a small correction, not a full detour discovery.
 # The plain (unshaped) MPC formulation handles that case cleanly; this dead-on value
 # is the harder scenario used to test whether a longer horizon can resolve it too.
+#
+# The same bag also has a much larger obstacle blob in the corner of the map -
+# x=[4.0,5.15], y=[-4.30,-3.05], min ESDF -0.72 near its densest cell (vs. -0.18 for
+# the small one above) - used in MPC_FINDINGS.md attempt #12's blocking-case check.
+# PATH_ORIGIN=(0.25, -3.68), PATH_HEADING=0.0 points dead-on through its widest,
+# deepest cross-section (row-by-row profiled with a connected-components scan of the
+# ESDF, see that document). Requires --ticks ~500 in mpc_replay.py (further away than
+# the small obstacle) - use --path-origin 0.25 -3.68 to reproduce headlessly. Same
+# blob approached at -45 degrees instead: PATH_ORIGIN=(3.439,-2.439),
+# PATH_HEADING=-0.7853981633974483 (aims at the same widest/deepest crossing point,
+# just from a diagonal). Aiming at the blob's geometric centroid instead
+# (PATH_ORIGIN=(3.549,-2.689), same heading) does NOT converge cleanly - produces a
+# slow, unresolved spin. Don't use that aim point; see MPC_FINDINGS.md.
 PATH_ORIGIN = (0.25, 0.0)
 PATH_HEADING = 0.0
 

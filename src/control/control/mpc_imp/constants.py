@@ -22,13 +22,12 @@ SLACK_WEIGHT = 1000.0
 # lets the horizon cover the full ~2.67s VLA chunk (N_WAYPOINTS * WAYPOINT_DT)
 # without the NLP growing to match a much finer step.
 PREDICTION_DT = 0.2          # [s] solver's internal shooting-step spacing
-CONTROL_HORIZON_M = 50       # number of free control decision variables
-PREDICTION_HORIZON_N = 50    # steps * PREDICTION_DT ~ 10s - see mpc_replay.py sweep notes:
-# the dead-on obstacle case needs N>=~44 (>3x the ~2.67s VLA chunk span) to reliably
-# converge to a clean detour rather than deadlock; below that (through the low 40s) the
-# transition is noisy, not a clean threshold. N=14 (matching the chunk span) is the
-# original, architecturally-preferred value - this is deliberately testing whether a
-# longer horizon alone resolves the dead-on case, at the cost of a much bigger NLP.
+CONTROL_HORIZON_M = 14       # number of free control decision variables
+PREDICTION_HORIZON_N = 14    # steps * PREDICTION_DT ~ 2.8s, matching the VLA chunk's own
+# span - the original, architecturally-preferred value. N>=~44 (see mpc_replay.py sweep
+# notes) also clears the dead-on deadlock but was ruled out (real-time solve cost, see
+# MPC_FINDINGS.md attempts #6/#11); LOW_V_WEIGHT below (attempt #12) clears it at this
+# horizon instead.
 V_MAX = 0.3                  # [m/s] real platform limit - matches pure_pursuit_controller.py
 OMEGA_MAX = 0.3              # [rad/s] real platform limit - matches pure_pursuit_controller.py
 
@@ -55,6 +54,21 @@ QF = [
 ]
 QF_MULTIPLIER = 1.0
 TERMINAL_COST_Q = [[element * QF_MULTIPLIER for element in row] for row in QF]
+
+# --- Low-velocity soft floor (attempt #12, see MPC_FINDINGS.md) ---
+# Soft alternative to forcing v via a hard constraint: penalizes stage forward
+# velocity below LOW_V_THRESHOLD. v is already bounded to [0, V_MAX] by the solver's
+# own decision-variable bounds, so this term's cost per stage is capped at
+# LOW_V_WEIGHT * LOW_V_THRESHOLD**2 no matter how long the robot stalls - unlike the
+# slack cost above (quadratic and unbounded in S_k), so a deep intrusion still
+# outweighs paying this floor even though a shallow deadlock tie doesn't. 0 disables
+# the term (original behaviour).
+LOW_V_WEIGHT = 100.0         # swept 1-3000 against the dead-on obstacle at N=14: transition
+# from deadlocked to clear break-free sits between 15-18, plateaus (final_x, max_slack both
+# flat) from ~30 upward with no growing margin abuse even at 3000 - see MPC_FINDINGS.md
+# attempt #12. 100 sits comfortably past the transition without being needlessly aggressive.
+LOW_V_THRESHOLD = 0.15       # [m/s] - half of V_MAX; swept 0.05-0.30, 0.05 doesn't clear the
+# deadlock at any weight tried (per-stage cost cap too small), 0.10 upward does.
 
 # --- IPOPT ---
 # 100 was too tight for the 2.8s/N=14 horizon: a dumped real failure needed 112

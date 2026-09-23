@@ -9,6 +9,19 @@ CBF-QP safety filter instead (`CBF-obstacle-avoid` branch), which solves the
 same scenario cleanly on effectively the first attempt. This document is meant
 to be enough to reproduce every claim below without re-deriving it.
 
+**Update:** attempt #12 (a soft, bounded low-velocity floor, at the original
+`N=14`) is the cleanest cost-shaping fix found — no real-time solve-cost
+problem, no reference fabrication, no growing slack abuse across a 30x weight
+range, and (per the follow-up test below) it stops cleanly rather than
+bulldozing through when the required detour exceeds what a 14-step horizon
+can actually plan through, and this held up at a 45° approach angle too, not
+just dead-on. It's *not* a reversal of the verdict above - CBF-QP still gives
+a real safety guarantee and this doesn't, and a follow-up also found a case
+where aiming at an obstacle's ambiguous geometric "centre" (rather than its
+solid core) produces a slow, unresolved spin instead of a clean result either
+way - but it's a meaningfully better cost-shaping result than anything else
+tried here. See the dedicated sections below.
+
 ## The problem
 
 `UnicycleMPC` (`src/control/control/mpc_imp/solver_setup.py`) tracks a VLA
@@ -63,8 +76,216 @@ window favours one over the other.
 | 9 | Move suppression (rate penalty on `Δu`, to fight dithering from #6) | Same failure pattern as #1/#7: made sharp turning relatively more expensive than eating margin, so it just shifted the deadlock↔slack-abuse tradeoff again rather than fixing anything |
 | 10 | Near-miss reference line instead of dead-on (tilted ~-4.6°, so the line clips the obstacle's edge at ~0.10m clearance instead of driving through its centre) | **Plain, unshaped MPC handles this cleanly** — `stalled=False`, `max_slack≈0.01`, smooth single correction, full speed maintained throughout. Confirms the dead-on/near-exactly-symmetric case is close to worst-case for this failure mode, not representative of typical obstacle placement. |
 | 11 | Dead-on case again, horizon bumped until it converges | Converges reliably from `N≈44` (`~8.8s`, over 3x the chunk's own span) upward — see next section. The transition isn't a clean threshold: `N=41` worked with some solve failures, `N=42-43` stalled again, `N≥44` reliably clean. |
+| 12 | Soft, bounded low-velocity floor at the original `N=14`: stage cost `LOW_V_WEIGHT * max(0, LOW_V_THRESHOLD - v)²`. Unlike #1/#9, doesn't touch tracking/terminal weights or `Δu` - a dedicated, capped penalty for `v` sitting below a target speed. See detail section below. | Clears the dead-on deadlock cleanly at `N=14` - no real-time solve-cost problem (horizon unchanged from the architecturally-preferred value), no growing slack abuse across a 30x weight sweep. Best cost-shaping result in this document. Follow-up against a much larger obstacle in the same bag (still passable in principle, but needing a bigger swing than the horizon can plan through) shows it correctly stops instead of bulldozing - see detail section. |
 
-Attempt #10's mp4 and #11's mp4 are both in this repo (see Evidence below).
+Attempt #10's mp4, #11's mp4, and #12's two mp4s are all in this repo (see Evidence below).
+
+## Attempt #12 in detail — soft, bounded low-velocity floor
+
+Idea (raised when revisiting this investigation, 2026-09-22): rather than a
+*hard* floor on `v` — which reliably breaks the deadlock but has no way to
+distinguish "temporarily stuck, worth pushing through" from "genuinely
+blocked" and just eats margin forever in the latter case — make it a *soft*
+stage cost instead, tuned to sit below the slack penalty. Mechanistically this
+doesn't rely on winning a cost competition within one solve (that framing is
+what sank #1 and #9): the real deadlock is a literal fixed point in the closed
+loop — `chunk_generator`'s reference is `lookahead_point(current_x, 0.8m)`, a
+pure function of the robot's *current* position, so an unperturbed stalled
+robot gets an unperturbed reference every tick and reproduces the identical
+solve forever. Any nonzero push breaks that fixed point; the reference
+re-anchors from the new position, and once the robot is off-centreline by even
+a little, the existing ESDF-gradient/slack machinery finishes the job cleanly
+on its own (this is exactly what attempt #10 already shows for a small,
+naturally-occurring offset).
+
+Implementation (`solver_setup.py`, `constants.py`): added a stage cost term
+`LOW_V_WEIGHT * max(0, LOW_V_THRESHOLD - U_k[0])²` inside the existing stage-cost
+block, guarded so `LOW_V_WEIGHT=0` (the default) reproduces the original NLP
+exactly. Bounded by construction rather than by careful tuning: `v` is already
+constrained to `[0, V_MAX]` by the solver's own decision-variable bounds
+(`lbw`/`ubw`), so this term's cost is capped at `LOW_V_WEIGHT * LOW_V_THRESHOLD²`
+per stage no matter how long the robot has been stopped — while the slack cost
+(`SLACK_WEIGHT * S_k²`) stays quadratic and unbounded in the intrusion depth
+`S_k`. That gives a structural (not just empirically-tuned) crossover: for any
+fixed weight, a deep enough intrusion always ends up costing more than paying
+the floor, which a genuinely-blocking obstacle would reach and a passable one
+(as tested here) doesn't. This is the untested half of the theory — see
+caveat below.
+
+Swept against the dead-on obstacle at `N=14` with `mpc_dev_artefacts/mpc_replay.py`
+(now supports `--low-v-weight`/`--low-v-threshold`; see Reproducing section):
+
+Weight sweep (`LOW_V_THRESHOLD=0.15`, half of `V_MAX`):
+
+| `LOW_V_WEIGHT` | `final_x` | `max_slack` | `stalled` |
+|---|---|---|---|
+| 1 – 15 | 1.675–1.676 | 0.0461 | **True** (deadlocked, same as baseline) |
+| 18 | 4.557 | 0.0324 | False |
+| 20 | 4.583 | 0.0325 | False |
+| 22 – 30 | 4.70–4.72 | 0.0332 | False |
+| 100 | 4.809 | 0.0256 | False |
+| 300 – 3000 | 4.809–4.811 | 0.0254–0.0256 | False |
+
+The transition from deadlocked to clear is sharp (between weight 15 and 18,
+no noisy in-between band like the `N` horizon sweep had), and behaviour
+plateaus from ~30 upward — `final_x` and `max_slack` are flat out to 3000, no
+sign of the slack abuse that made #1 (`Qf` cranking) unsafe.
+
+Threshold sweep (`LOW_V_WEIGHT=100`):
+
+| `LOW_V_THRESHOLD` (m/s) | `final_x` | `max_slack` | `stalled` |
+|---|---|---|---|
+| 0.05 | 1.661 | 0.0131 | **True** (per-stage cost cap too small to break the tie) |
+| 0.10 | 4.455 | 0.0293 | False |
+| 0.15 | 4.809 | 0.0256 | False |
+| 0.20 | 4.951 | 0.0137 | False |
+| 0.25 | 5.060 | 0.0142 | False |
+| 0.30 (= `V_MAX`) | 4.960 | 0.0344 | False |
+
+Chosen and committed: `LOW_V_WEIGHT=100`, `LOW_V_THRESHOLD=0.15` — comfortably
+past the weight-18 transition without being needlessly aggressive, and not at
+either sweep extreme. `n_fail=0/250` at every point in both sweeps (`ca.fmax`
+is non-smooth at the threshold; IPOPT didn't have any trouble with it in
+practice).
+
+Tick-by-tick trace (`--verbose`) at the chosen weight shows a smooth,
+bounded approach: cruises at `v=0.3` until the margin is first touched
+(~tick 32), decelerates through `v≈0.2→0.15` as slack grows, then a period of
+`omega` alternating between roughly `-0.3` and `+0.3` (ticks ~77–88) while
+clearing the obstacle's shoulder — some heading indecision near the pinch
+point, but bounded (`max_slack` stays under 0.03 throughout, no growth trend)
+and it doesn't recur once past the obstacle. Less clean than attempt #10's
+single smooth correction, but nothing like the sustained oscillation #8
+(vortex reward) produced.
+
+### Follow-up: does it still stop for a bigger obstacle? (2026-09-22)
+
+The `esdf_single_obs` bag already has a second, much larger blob sitting in
+the corner of the same map - not the small obstacle used everywhere above.
+Found by connected-component-labelling the ESDF grid (`vals < -0.01`, via
+`scipy.ndimage.label`): a 275-cell blob at `x=[4.00,5.15]`, `y=[-4.30,-3.05]`,
+bottoming out at `-0.716` at its densest cell (vs. `-0.18` for the small
+obstacle) - roughly 6x the footprint and 4x the peak depth. `straight_path.py`
+now documents this. Pointed the same dead-on (`PATH_HEADING=0.0`) line at its
+widest, deepest row (`PATH_ORIGIN=(0.25, -3.68)`), same committed
+config (`N=14`, `LOW_V_WEIGHT=100`, `LOW_V_THRESHOLD=0.15`) - no new tuning,
+just a bigger obstacle:
+
+```
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 0.25 -3.68 --ticks 500
+# SUMMARY final_x=4.076 max_slack=0.0447 n_fail=0/500 stalled=True
+```
+
+**It stops.** The tick-by-tick trace (`--verbose`) shows the robot creep
+forward at falling speed while curving toward the near edge of the blob
+(`v` decaying from `0.3` down through `0.1`, `0.06`, `0.01`...), never
+finding room to complete the swing, and by tick ~354 settling into a genuine
+second fixed point: `x=4.076, y=-3.537` exactly, `u0=[0.000, ~0.000]`,
+`max_slack=0.0447` flat for the rest of the run (146 more ticks, unchanged to
+4 decimal places) - not growing, not oscillating, just stopped. Reproduced in
+the real closed loop too, not just the headless replay:
+`mpc_plotter_lowv_bigobs_N14.mp4` (temporarily set `PATH_ORIGIN = (0.25, -3.68)`
+in `straight_path.py`, rebuilt, ran the same launch command with 45s before
+SIGINT) shows the identical settle - `max S_k` converges to `0.0448`,
+matching the headless number almost exactly.
+
+**What this does and doesn't show.** This isn't a topological block - there
+*is* a way around this obstacle (the map extends well past both its `y` edges,
+unlike a corridor-spanning wall), so this isn't direct evidence for the
+"literally no path exists" case the caveat originally asked about. What it
+actually demonstrates is arguably more relevant to this system: the required
+lateral swing here (~0.6-1m within the blob's `y`-span, vs. ~0.3m for the
+small obstacle) is larger than a 14-step/2.8s horizon at these `v`/`omega`
+limits can commit to *and* still track the chunk-generator's obstacle-blind
+reference — i.e. the same root cause as the original deadlock (short,
+constantly re-anchored reference pins the horizon's view) reasserts itself
+once the required detour gets big enough, and here the low-v floor's bounded
+cost correctly loses to the growing slack cost rather than masking it. A true
+corridor-spanning wall (still not tested) would be the remaining case to
+check before trusting this on an arbitrary obstacle shape.
+
+### Second follow-up: 45° approach (2026-09-22)
+
+Motivation: check the fix isn't an axis-aligned artifact, and get a demo that
+fits inside `mpc_plotter`'s own render budget (~16s of usable video before
+`ros2 launch`'s SIGINT/SIGTERM grace period runs out) by starting closer to
+the obstacle. Added `--path-heading` to `mpc_replay.py` and made the robot
+start facing the line's own heading rather than hardcoded `theta=0.0`
+(otherwise the first several ticks are spent on a large heading correction
+unrelated to the obstacle, on any non-axis-aligned line). `chunk_generator`
+and `mpc_path_follower` don't care about heading at all - `StraightPath` takes
+an arbitrary one - so this needed no solver or node changes, just a different
+`PATH_ORIGIN`/`PATH_HEADING` (and, for the real launch, `sim_robot`'s
+`initial_theta` parameter to match).
+
+**First attempt - aimed at the blob's depth-weighted centroid** (`(4.61,
+-3.75)`, computed by `scipy.ndimage.label` + weighting each cell by its own
+depth; 1.5m back along `heading=-45°` gives `PATH_ORIGIN=(3.55,-2.69)`):
+
+```
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 3.549 -2.689 --path-heading -0.7853981633974483 --ticks 400
+# SUMMARY final_x=4.668 max_slack=0.0556 n_fail=0/400 stalled=False
+```
+
+Not a clean result despite `stalled=False`. The tick-by-tick trace shows
+`omega` pinned at `±0.300` for stretches of 40+ ticks at a time, flipping
+sign repeatedly, while forward progress along the intended line direction
+(`s`, the line's own arclength coordinate) stalls and briefly reverses -
+`s` goes `0.79 → 0.94 → 0.84` between ticks 60 and 200 while the robot
+physically loops down to `y=-4.42`, well past the blob's own `y`-extent
+(`[-4.30,-3.05]`), before eventually finding its way past at tick ~380 (~25s+
+of control-loop time - over 1.5x the plotter's usable render window on its
+own, without even counting ROS startup). Longer run-up (backoff 2.5m instead
+of 1.5m) doesn't fix it, just delays the same pattern. This isn't the clean
+detour attempt #12 showed for the small obstacle, and it isn't the clean stop
+the dead-on big-obstacle follow-up showed either - it's a third, worse
+outcome: sustained indecision that happens to resolve eventually, purely by
+luck of where the wandering trajectory ends up.
+
+**Second attempt - aimed at the same solid/wide crossing point used in the
+dead-on big-obstacle test** (`(4.5,-3.5)`, the row with the widest, deepest
+ESDF crossing from the earlier row-by-row profile; `PATH_ORIGIN=(3.44,-2.44)`):
+
+```
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 3.439 -2.439 --path-heading -0.7853981633974483
+# SUMMARY final_x=4.076 max_slack=0.0453 n_fail=0/250 stalled=True
+```
+
+Clean stop - `x` and `y` lock exactly (`4.076, -3.556`) by tick ~211 and hold
+for the rest of the run, `omega` keeps a small residual oscillation in place
+(harmless with `v=0`, doesn't move the robot). `final_x=4.076` matches the
+dead-on (`0°`) big-obstacle result almost exactly, which makes sense - both
+approaches are converging on the same physical point on the obstacle's
+boundary, just arriving from different directions.
+
+Reproduced in the real closed loop (`mpc_plotter_lowv_bigobs45_N14.mp4`,
+`PATH_ORIGIN=(3.439,-2.439)`, `PATH_HEADING=-0.7853981633974483` in
+`straight_path.py`, plus matching `initial_x`/`initial_y`/`initial_theta` on
+the `sim_robot` node in `mpc_imp_test_launch.py`) - also a clean, bounded
+stop, but at roughly **2x the slack depth** the headless replay predicted:
+`max S_k` settles oscillating between `0.1024` and `0.1048` (vs. `0.0453`
+headless) - still `~0.10m` clear of the obstacle's actual surface, well
+inside the `0.20m` margin and nowhere near contact, just a bigger
+headless-vs-real gap than either axis-aligned case showed (those matched to
+three decimal places). Not chased down - the headless replay hardcodes
+`psi=0.0` (odom→map yaw offset) while the real graph estimates it from `tf`,
+and that's the one input a non-axis-aligned scenario could plausibly make
+non-negligible where it was exactly zero by construction before; unconfirmed.
+
+**Bottom line:** this doesn't "solve the deadlock" for this obstacle - both
+approach angles converge on the same behaviour, a clean stop short of it, not
+a detour past it. That's consistent with your own read: the lateral swing
+needed to get around something this size, within a 14-step horizon tied to a
+short obstacle-blind reference, is a bigger ask than this formulation is
+built for, and stopping short of it is arguably the correct call for an
+obstacle you can't reliably plan all the way around, not a bug. What *did*
+generalize from attempt #12 is the good half - a bounded, non-growing stop
+rather than runaway margin abuse - across two different approach angles, as
+long as the line is aimed at solid/unambiguous obstacle. What's new and worth
+flagging: aiming at an obstacle's geometric "centre" isn't safe against
+landing in an ambiguous part of an irregular footprint, where the result is
+neither a clean stop nor a clean detour but sustained, slow indecision -
+worth keeping in mind for any future obstacle shape, not just this one.
 
 ## Why #6/#11 (longer horizon) isn't the answer, even though it "works"
 
@@ -180,30 +401,91 @@ promise (none implemented here):
 
 ## Evidence — mp4s in this repo
 
-- **`mpc_plotter_deadon_N50.mp4`** (repo root) — the dead-on obstacle,
-  `N=M=50` (current committed state of `constants.py`), everything else as
-  described above (honest `Qf`, no vortex term, real `V_MAX`/`OMEGA_MAX`,
-  ESDF fixes in place). Clears the obstacle but with visible
-  stopping/stuttering — this is the real-time solve-overrun problem
-  documented above, not a re-emergence of the deadlock. Reproduce with the
+Each mp4 comes from `ros2 launch bringup mpc_imp_test_launch.py`, which
+renders `sim_robot`'s ground-truth trajectory, the live action chunk, and the
+ESDF patch — not the headless `mpc_replay.py` used for the numeric sweeps
+above (see that tool's own note on what it can't surface: real-time solve
+overruns). Duration is real wall-clock time (~15-17s each), stopped by SIGINT
+once the robot has visibly settled, then rendered by `mpc_plotter` on
+shutdown (a slow step - see the `sigterm_timeout`/`sigkill_timeout` note in
+`mpc_imp_test_launch.py`; a long or hung render is normal, not itself a bug).
+
+- **`mpc_plotter_lowv_N14.mp4`** (repo root) — attempt #12: dead-on obstacle,
+  `N=M=14` (the architecturally-preferred horizon, matching the VLA chunk
+  span), soft low-velocity floor active (`LOW_V_WEIGHT=100`,
+  `LOW_V_THRESHOLD=0.15`), honest `Qf`, no vortex term. Current committed
+  state of `constants.py`. Robot cruises at `V_MAX`, slows as it first touches
+  the margin, curves around the obstacle's shoulder with `max S_k` peaking
+  around `0.027m` (vs. `SAFETY_MARGIN_M=0.20m`), then resumes cruising past
+  it — no stall, no visible stuttering (solve times are the same as the
+  original `N=14` case, well inside the 66.7ms budget). Reproduce with the
   current committed state:
   ```
-  ros2 launch bringup mpc_imp_test_launch.py output_path:=mpc_plotter_deadon_N50.mp4
+  ros2 launch bringup mpc_imp_test_launch.py output_path:=mpc_plotter_lowv_N14.mp4
   ```
-- **`mpc_plotter_nearmiss.mp4`** (repo root) — the near-miss reference line
-  (attempt #10). To reproduce, set `PATH_HEADING = -0.080904` in
-  `src/debug/debug/mpc_imp_test/straight_path.py` (currently `0.0`, the
-  dead-on scenario) and re-run the same launch command. This one used
-  `N=14` and the vortex term disabled — set `PREDICTION_HORIZON_N` /
-  `CONTROL_HORIZON_M` back to `14` in `constants.py` first (currently `50`).
+- **`mpc_plotter_lowv_bigobs_N14.mp4`** (repo root) — attempt #12's follow-up:
+  the same config as the mp4 above, but pointed at the much larger obstacle
+  blob in the corner of the same `esdf_single_obs` bag (`x=[4.00,5.15]`,
+  `y=[-4.30,-3.05]`, min ESDF `-0.72`) instead of the small one -
+  `PATH_ORIGIN=(0.25,-3.68)`. Robot creeps forward decelerating, curves toward
+  the blob's near edge, and settles into a full stop (`v→0`, `max S_k→0.0448`,
+  flat) rather than pushing through - see the "Follow-up" subsection above for
+  what this does and doesn't prove. Reproduce by temporarily setting
+  `PATH_ORIGIN = (0.25, -3.68)` in `straight_path.py` (currently `(0.25, 0.0)`),
+  rebuilding (`colcon build --packages-select control debug`), then the same
+  launch command with a different `output_path` - give it more time before
+  sending SIGINT than the other three (the obstacle is further out, ~45s
+  worked here vs. the usual ~35-40s).
+- **`mpc_plotter_lowv_bigobs45_N14.mp4`** (repo root) — attempt #12's second
+  follow-up: same large obstacle, approached at `-45°` instead of dead-on
+  (`PATH_ORIGIN=(3.439,-2.439)`, `PATH_HEADING=-0.7853981633974483`), aimed at
+  the same solid/wide crossing point as the mp4 above rather than the blob's
+  geometric centroid (aiming at the centroid instead produces a slow,
+  unresolved spin - see the "Second follow-up" subsection, not shown as a
+  video since it takes ~25s of sim time to resolve, longer than the plotter's
+  usable render window). Settles into a stop at the same physical point on the
+  obstacle as the dead-on approach, `max S_k` oscillating around `0.10m` -
+  roughly double what the headless replay predicted for this one case (see
+  that subsection for the likely `psi`-related reason), but still clear of
+  the obstacle's actual surface. Reproduce by temporarily setting
+  `PATH_ORIGIN = (3.439, -2.439)` and `PATH_HEADING = -0.7853981633974483` in
+  `straight_path.py`, and matching `initial_x`/`initial_y`/`initial_theta` on
+  the `sim_robot` node in `mpc_imp_test_launch.py`, rebuilding
+  (`colcon build --packages-select control debug bringup`), then the same
+  launch command with a different `output_path` (~35s before SIGINT worked
+  here).
+- **`mpc_plotter_deadon_N50.mp4`** (repo root) — attempt #11: the same
+  dead-on obstacle, `N=M=50` instead (a much longer horizon, the fix that
+  precedes #12 in this document), honest `Qf`, no vortex term, no low-v floor.
+  Clears the obstacle but with visible stopping/stuttering - this is the
+  real-time solve-overrun problem documented in the section above (mean 70.9ms
+  / max 423.2ms per solve against a 66.7ms budget, 27% of ticks over budget),
+  not a re-emergence of the deadlock itself. Reproduce by setting
+  `PREDICTION_HORIZON_N`/`CONTROL_HORIZON_M` to `50` and `LOW_V_WEIGHT` to `0`
+  in `constants.py`, then the same launch command with a different
+  `output_path`.
+- **`mpc_plotter_nearmiss.mp4`** (repo root) — attempt #10: the reference
+  line tilted `-4.6°` (`PATH_HEADING = -0.080904` in
+  `src/debug/debug/mpc_imp_test/straight_path.py`, instead of the dead-on
+  `0.0`), so it clips the obstacle's edge at ~0.10m clearance rather than
+  driving through its centre. `N=14`, honest `Qf`, no vortex term, no low-v
+  floor - the *plain, unshaped* formulation. Smooth single correction, full
+  speed maintained throughout, `max_slack≈0.01` - the cleanest of all six
+  mp4s, because this is the easy version of the scenario (near-symmetric
+  dead-on placement is what makes the other five hard). Reproduce by setting
+  `PATH_HEADING` to `-0.080904` in `straight_path.py`, and
+  `PREDICTION_HORIZON_N`/`CONTROL_HORIZON_M` to `14`, `LOW_V_WEIGHT` to `0`,
+  in `constants.py`.
 - **`mpc_plotter.mp4`** (repo root) — an earlier run from mid-investigation
   (commit `930d54c`, "Debugging by printing slack violation and tweaking
-  Qf"). Predates several of the fixes above; kept for the commit history but
-  not authoritative evidence for the final verdict — use the two above for
+  Qf"), predating the ESDF patch-size/out-of-domain fixes (items #3/#4) and
+  the reference-extrapolation fix (item #5). Kept for the commit history but
+  not authoritative evidence for any claim above — use the three above for
   that.
 - **`mpc_dev_artefacts/mpc_test.mp4`** — general test-harness sanity check
   from initial setup (commit `308d61a`), predates the obstacle-avoidance work
-  entirely. Not evidence for this investigation.
+  entirely (no obstacle, no slack variables, just path tracking). Not
+  evidence for this investigation.
 
 ## Reproducing / sweeping further
 
@@ -215,14 +497,21 @@ above for why it can't surface solve-time problems on its own). Requires
 `source install/setup.bash` and the `control`/`debug` packages built.
 
 ```
-python3 mpc_dev_artefacts/mpc_replay.py                     # current constants.py as committed
-python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 14       # reproduce the original deadlock
-python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 44       # near the convergence threshold
-python3 mpc_dev_artefacts/mpc_replay.py --qf-multiplier 100  # reproduce the early Qf-cranking experiment
-python3 mpc_dev_artefacts/mpc_replay.py --verbose --ticks 90 # tick-by-tick trace
+python3 mpc_dev_artefacts/mpc_replay.py                                   # current constants.py as committed (attempt #12: N=14 + low-v floor)
+python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 14 --low-v-weight 0    # reproduce the original deadlock (low-v floor off)
+python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 44 --low-v-weight 0    # near the N-sweep convergence threshold
+python3 mpc_dev_artefacts/mpc_replay.py --qf-multiplier 100 --low-v-weight 0  # reproduce the early Qf-cranking experiment
+python3 mpc_dev_artefacts/mpc_replay.py --low-v-weight 100 --low-v-threshold 0.15  # attempt #12's chosen config, explicit
+python3 mpc_dev_artefacts/mpc_replay.py --low-v-weight 20                  # near the weight-sweep convergence threshold (~18)
+python3 mpc_dev_artefacts/mpc_replay.py --verbose --ticks 90               # tick-by-tick trace
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 0.25 -3.68 --ticks 500   # dead-on into the big corner obstacle (stops)
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 3.439 -2.439 --path-heading -0.7853981633974483  # same, at 45° (also stops)
+python3 mpc_dev_artefacts/mpc_replay.py --path-origin 3.549 -2.689 --path-heading -0.7853981633974483 --ticks 400  # same obstacle, aimed at its centroid instead (spins - don't use this aim point)
 ```
 
-Current committed `constants.py` reflects the `N=50` dead-on test (item #11
-above) — this is not the recommended production configuration, it's the last
-state tested before ruling the approach out. If picking this branch back up,
+Current committed `constants.py` reflects the `N=14` + soft low-velocity-floor
+test (item #12 above, `LOW_V_WEIGHT=100`, `LOW_V_THRESHOLD=0.15`) — the most
+promising result in this document, but still not a recommended production
+configuration: it hasn't been validated against a genuinely-blocking obstacle
+(see the caveat in attempt #12's section). If picking this branch back up,
 start by reading this document, not just the code.

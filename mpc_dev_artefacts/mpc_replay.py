@@ -12,10 +12,11 @@ root, then run this directly.
 Prints a one-line summary; pass --verbose for the tick-by-tick trace.
 
 Examples:
-    python3 mpc_dev_artefacts/mpc_replay.py                       # current constants.py, as committed
-    python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 14         # force the original horizon back
-    python3 mpc_dev_artefacts/mpc_replay.py --qf-multiplier 100    # reproduce the early Qf-cranking experiment
-    python3 mpc_dev_artefacts/mpc_replay.py --verbose --ticks 90   # tick-by-tick trace
+    python3 mpc_dev_artefacts/mpc_replay.py                              # current constants.py, as committed
+    python3 mpc_dev_artefacts/mpc_replay.py --horizon-n 14 --low-v-weight 0  # original deadlock, no shaping
+    python3 mpc_dev_artefacts/mpc_replay.py --qf-multiplier 100 --low-v-weight 0  # early Qf-cranking experiment
+    python3 mpc_dev_artefacts/mpc_replay.py --low-v-weight 100 --low-v-threshold 0.15  # attempt #12
+    python3 mpc_dev_artefacts/mpc_replay.py --verbose --ticks 90          # tick-by-tick trace
 """
 import sys
 import sqlite3
@@ -55,7 +56,8 @@ def load_esdf():
     return esdf
 
 
-def run(n_ticks, patch_resolution, verbose, qf_multiplier=None, horizon_n=None):
+def run(n_ticks, patch_resolution, verbose, qf_multiplier=None, horizon_n=None,
+        low_v_weight=None, low_v_threshold=None, path_origin=None, path_heading=None):
     esdf = load_esdf()
     kwargs = dict(patch_resolution=patch_resolution, safety_margin=0.20)
     if qf_multiplier is not None:
@@ -64,10 +66,19 @@ def run(n_ticks, patch_resolution, verbose, qf_multiplier=None, horizon_n=None):
     if horizon_n is not None:
         kwargs['N'] = horizon_n
         kwargs['M'] = horizon_n
+    if low_v_weight is not None:
+        kwargs['low_v_weight'] = low_v_weight
+    if low_v_threshold is not None:
+        kwargs['low_v_threshold'] = low_v_threshold
     mpc = UnicycleMPC(**kwargs)
-    path_line = StraightPath(PATH_ORIGIN, PATH_HEADING)
+    origin = PATH_ORIGIN if path_origin is None else tuple(path_origin)
+    heading = PATH_HEADING if path_heading is None else path_heading
+    path_line = StraightPath(origin, heading)
 
-    x = np.array([0.25, 0.0, 0.0])
+    # Robot starts facing the line's own heading, not just theta=0 - matters once
+    # the line isn't axis-aligned, else the first few ticks are spent correcting a
+    # large initial heading mismatch rather than reacting to the obstacle itself.
+    x = np.array([origin[0], origin[1], heading])
     mpc.reset()
     psi = 0.0
 
@@ -144,5 +155,13 @@ if __name__ == '__main__':
     p.add_argument('--qf-multiplier', type=float, default=None,
                     help='override TERMINAL_COST_Q by this multiple of the base DARE solution (QF)')
     p.add_argument('--horizon-n', type=int, default=None, help='override PREDICTION_HORIZON_N/CONTROL_HORIZON_M')
+    p.add_argument('--low-v-weight', type=float, default=None,
+                    help='override LOW_V_WEIGHT (soft low-velocity floor, attempt #12)')
+    p.add_argument('--low-v-threshold', type=float, default=None, help='override LOW_V_THRESHOLD [m/s]')
+    p.add_argument('--path-origin', type=float, nargs=2, default=None, metavar=('X', 'Y'),
+                    help='override PATH_ORIGIN - robot starts here too, facing the line heading')
+    p.add_argument('--path-heading', type=float, default=None,
+                    help='override PATH_HEADING [rad] - robot starts facing this way too')
     args = p.parse_args()
-    run(args.ticks, args.patch_resolution, args.verbose, args.qf_multiplier, args.horizon_n)
+    run(args.ticks, args.patch_resolution, args.verbose, args.qf_multiplier, args.horizon_n,
+        args.low_v_weight, args.low_v_threshold, args.path_origin, args.path_heading)

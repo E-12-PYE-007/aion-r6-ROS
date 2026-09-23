@@ -5,6 +5,7 @@ from .constants import (
     PATCH_SIZE, PATCH_RESOLUTION, SPLINE_DEGREE, SAFETY_MARGIN_M, SLACK_WEIGHT,
     PREDICTION_DT, CONTROL_HORIZON_M, PREDICTION_HORIZON_N, V_MAX, OMEGA_MAX,
     Q_DIAG, R_DIAG, TERMINAL_COST_Q, IPOPT_MAX_ITER, NVBLOX_MAX_DISTANCE_M,
+    LOW_V_WEIGHT, LOW_V_THRESHOLD,
 )
 
 
@@ -22,7 +23,8 @@ class UnicycleMPC:
                  v_max=V_MAX, omega_max=OMEGA_MAX,
                  Q=None, R=None, Q_f=None, solver_opts=None,
                  patch_size=PATCH_SIZE, patch_resolution=PATCH_RESOLUTION, spline_degree=SPLINE_DEGREE,
-                 safety_margin=SAFETY_MARGIN_M, slack_weight=SLACK_WEIGHT):
+                 safety_margin=SAFETY_MARGIN_M, slack_weight=SLACK_WEIGHT,
+                 low_v_weight=LOW_V_WEIGHT, low_v_threshold=LOW_V_THRESHOLD):
         self.dt = dt
         self.M = M                                     # control horizon
         self.N = N                                     # prediction horizon
@@ -44,6 +46,8 @@ class UnicycleMPC:
             raise ValueError("safety_margin must be set to the robot's real half-width plus clearance")
         self.safety_margin = safety_margin
         self.slack_weight = slack_weight
+        self.low_v_weight = low_v_weight
+        self.low_v_threshold = low_v_threshold
 
         # Packed parameter layout:
         # [x0(3) | x_ref_0..N (3*(N+1)) | u_ref_0..N-1 (2*N) | psi(1) | esdf_coeffs (patch_size^2)]
@@ -154,6 +158,12 @@ class UnicycleMPC:
             x_err = X_k - p_x_ref(k)
             u_err = U_k - p_u_ref(k)
             J += x_err.T @ self.Q @ x_err + u_err.T @ self.R @ u_err
+
+            # Soft low-velocity floor (attempt #12, MPC_FINDINGS.md) - discourages
+            # near-zero forward velocity without forcing it via a hard constraint.
+            if self.low_v_weight:
+                v_deficit = ca.fmax(0.0, self.low_v_threshold - U_k[0])
+                J += self.low_v_weight * v_deficit**2
 
             # Propagate dynamics
             X_next = self.f(X_k, U_k)
