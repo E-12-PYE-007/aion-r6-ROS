@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bench-test robot: integrates cmd_vel through a unicycle model, republishes the result as
-/odom and the odom -> base_link transform, and logs every step to a CSV file.
+/odometry/filtered and the odom -> base_link transform, and logs every step to a CSV file.
 
 Subscribes: cmd_vel (Twist), /vla/action_chunk (ActionChunk), safety_layer/slack (Float32).
-Publishes:  /odom (Odometry), /tf (odom -> base_link).
+Publishes:  /odometry/filtered (Odometry), /tf (odom -> base_link).
 
 Start pose is DEFAULT_START plus the dx / dy / dtheta parameters (a delta in the odom frame).
 The CSV is flushed after every row, so a killed run keeps everything logged so far. Format
@@ -31,7 +31,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32
 from tf2_ros import TransformBroadcaster
 
-ODOM_TOPIC = '/odom'
+ODOM_TOPIC = '/odometry/filtered'   # the topic the local EKF publishes on the robot
 CMD_VEL_TOPIC = 'cmd_vel'
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
 SLACK_TOPIC = 'safety_layer/slack'

@@ -25,7 +25,7 @@ N_WAYPOINTS = 8               # fixed by aion_msgs/ActionChunk.msg
 
 # --- Topics and frames ---
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
-ODOM_TOPIC = '/odom'          # pose of base_link in the odom frame
+ODOM_TOPIC = '/odometry/filtered'   # local EKF output: pose of base_link in the odom frame
 ODOM_FRAME = 'odom'
 BASE_FRAME = 'base_link'
 CMD_VEL_TOPIC = 'cmd_vel'

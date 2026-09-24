@@ -81,6 +81,16 @@
   <a class="sub" href="#tune-process">The process</a>
   <a class="sub" href="#tune-results">Results at each step</a>
   <a class="sub" href="#tune-speed">Alpha and speed</a>
+  <a href="#realworld">15. Real-world testing</a>
+  <a class="sub" href="#rw-chain">What runs where</a>
+  <a class="sub" href="#rw-safety">Read first</a>
+  <a class="sub" href="#rw-setup">Setup and pre-flight</a>
+  <a class="sub" href="#rw-stage1">Stage 1: motors</a>
+  <a class="sub" href="#rw-stage2">Stage 2: localisation</a>
+  <a class="sub" href="#rw-stage3">Stage 3: safety layer</a>
+  <a class="sub" href="#rw-stage4">Stage 4: real VLA and ESDF</a>
+  <a class="sub" href="#rw-record">Recording</a>
+  <a class="sub" href="#rw-trouble">Troubleshooting</a>
   <a class="sub" href="#run-trouble">Troubleshooting</a>
 </nav>
 
@@ -109,7 +119,7 @@
 <p>Both share ESDF handling, pure-pursuit geometry, frame transforms, constants for limits, and the output topic.</p>
 
 <pre><code>   /vla/action_chunk ─┐
-   /odom             ─┼─►  safety layer node (cbf | mpc)  ─►  cmd_vel
+   /odometry/filtered ─┼─►  safety layer node (cbf | mpc)  ─►  cmd_vel
    /nvblox_node/static_map_slice ─┘        └─►  safety_layer/slack (debug)</code></pre>
 
 <h2 id="interfaces">2. Interfaces</h2>
@@ -117,7 +127,7 @@
   <tr><th>Topic</th><th>Type</th><th>Dir</th><th>Notes</th></tr>
   <tr><td><code>/vla/action_chunk</code></td><td><code>aion_msgs/ActionChunk</code></td><td>in</td>
       <td>8 relative poses (<code>Pose2D</code>), future deltas from the pose at capture time; <code>seq_num</code> changes per chunk.</td></tr>
-  <tr><td><code>/odom</code></td><td><code>nav_msgs/Odometry</code></td><td>in</td><td>Pose of <code>base_link</code> in <code>odom</code>.</td></tr>
+  <tr><td><code>/odometry/filtered</code></td><td><code>nav_msgs/Odometry</code></td><td>in</td><td>Pose of <code>base_link</code> in <code>odom</code>: the local EKF's output on the robot (<code>local_localisation_launch.py</code>), and what the sim publishes. With the global launch the local estimate is on <code>/odometry/local</code> instead.</td></tr>
   <tr><td><code>/nvblox_node/static_map_slice</code></td><td><code>nvblox_msgs/DistanceMapSlice</code></td><td>in</td>
       <td>ESDF slice; unknown cells carry <code>unknown_value</code> and are treated as max distance (2.0 m).</td></tr>
   <tr><td><code>cmd_vel</code></td><td><code>geometry_msgs/Twist</code></td><td>out</td><td><code>linear.x</code> = v, <code>angular.z</code> = omega. Limits 0.3 m/s, 0.3 rad/s.</td></tr>
@@ -150,6 +160,7 @@
 src/debug/
   debug/    sim_robot.py  static_esdf_publisher.py  chunk_generator.py
   launch/   sim_bench.launch.py
+src/bringup/launch/  motor_control_launch.py  (cmd_vel to the wheels)
 src/nvblox_msgs/
 src/safety_layer_design.html
 safety_layer_bench_testing/
@@ -256,15 +267,15 @@ sim_logs/         (gitignored) run logs, and the rendered videos</code></pre>
 </p>
 <table>
   <tr><th>Node</th><th>Package</th><th>Role</th></tr>
-  <tr><td><code>sim_robot</code></td><td>debug</td><td>The sim itself: unicycle integration, <code>/odom</code>, <code>/tf</code>, and the CSV log. Launched by <code>sim_bench.launch.py</code>.</td></tr>
+  <tr><td><code>sim_robot</code></td><td>debug</td><td>The sim itself: unicycle integration, <code>/odometry/filtered</code>, <code>/tf</code>, and the CSV log. Launched by <code>sim_bench.launch.py</code>.</td></tr>
   <tr><td><code>chunk_generator</code></td><td>debug</td><td>Fake VLA (section 9). Standalone; also usable on the real robot. Started with <code>ros2 run</code>, not by the sim launch.</td></tr>
   <tr><td><code>static_esdf_publisher</code></td><td>debug</td><td>Republishes the bag's first ESDF message at 1 Hz. Launched by <code>sim_bench.launch.py</code>.</td></tr>
   <tr><td><code>cbf_safety_layer</code> or <code>mpc_safety_layer</code></td><td>control</td><td>The controller under test</td></tr>
 </table>
-<pre><code>chunk_generator ──/vla/action_chunk──► safety layer ──cmd_vel──► sim_robot ──/odom, /tf──┐
-       ▲                                     ▲   ▲                    │                     │
-       └─────────────────/odom───────────────┼───┼────────────────────┘                     │
-static_esdf_publisher ──ESDF────────────────┘   └───────────────────/odom──────────────────┘
+<pre><code>chunk_generator ──/vla/action_chunk──► safety layer ──cmd_vel──► sim_robot ──/odometry/filtered, /tf──┐
+       ▲                                     ▲   ▲                    │                                 │
+       └───────────/odometry/filtered────────┼───┼────────────────────┘                                 │
+static_esdf_publisher ──ESDF────────────────┘   └──────────────────/odometry/filtered──────────────────┘
                                           sim_robot also subscribes to the chunk and slack topics, for the log</code></pre>
 
 <h3 id="sim-robot">Sim node</h3>
@@ -272,7 +283,7 @@ static_esdf_publisher ──ESDF────────────────
   <li>Integrates the last <code>cmd_vel</code> with forward-Euler unicycle kinematics on a 50 Hz timer. The step is the
       measured elapsed ROS time (capped at 0.1 s), so the pose stays consistent with the logged <code>t</code> even if the timer
       runs late. <code>t</code> counts from the first step.</li>
-  <li>Publishes <code>/odom</code> and the <code>odom &rarr; base_link</code> transform each step.</li>
+  <li>Publishes <code>/odometry/filtered</code> and the <code>odom &rarr; base_link</code> transform each step.</li>
   <li>Writes one CSV row per step (below), flushing every row, so a SIGINT or SIGKILL cannot lose data.</li>
   <li>Stops itself after <code>max_duration</code> seconds of ROS time (default 30), so a run always has a bounded length and video, and the launch
       shuts down with it. Set it to 0 to run until stopped.</li>
@@ -338,13 +349,13 @@ t,x,y,theta,v,omega,slack,seq_num,c0x,c0y,c0th,...,c7x,c7y,c7th
 
 <h2 id="generator">9. Chunk generator</h2>
 <p>
-  A single file in the <code>debug</code> package, depending only on <code>aion_msgs</code> and <code>/odom</code>, so
+  A single file in the <code>debug</code> package, depending only on <code>aion_msgs</code> and <code>/odometry/filtered</code>, so
   <code>ros2 run debug chunk_generator</code> works on the real robot as well as in the bench. Its only parameter is <code>goal_distance</code>
   (default 6.0 m); the 8 Hz rate, 0.1 m spacing and 8 waypoints are constants in the file.
 </p>
 <h3>Algorithm</h3>
 <ol>
-  <li>On the first <code>/odom</code> message, latch the goal: <code>goal = start + goal_distance &middot; (cos&theta;, sin&theta;)</code>. This is the only parameter (default 6.0 m).</li>
+  <li>On the first <code>/odometry/filtered</code> message, latch the goal: <code>goal = start + goal_distance &middot; (cos&theta;, sin&theta;)</code>. This is the only parameter (default 6.0 m).</li>
   <li>At 8 Hz, take the current pose. Direction <code>u</code> = unit vector from the pose to the goal, and heading = <code>atan2(u)</code>.</li>
   <li>Waypoints <i>i</i> = 1..8 at <code>pose + i &middot; 0.1 m &middot; u</code>, clamped so none passes the goal.</li>
   <li>Express each as a delta in the robot's own frame: rotate the offset by &minus;&theta;, with relative heading = heading &minus; &theta;.</li>
@@ -489,7 +500,7 @@ ros2 launch debug sim_bench.launch.py dx:=-0.2 dtheta:=0.35 output_path:=sim_log
 <pre><code>ros2 topic pub --once cmd_vel geometry_msgs/msg/Twist "{}"</code></pre>
 <p>Useful checks:</p>
 <pre><code>ros2 node list                                   # exactly one /sim_robot
-ros2 topic echo /odom --field pose.pose.position
+ros2 topic echo /odometry/filtered --field pose.pose.position
 ros2 topic hz /nvblox_node/static_map_slice      # ~1 Hz
 ros2 topic pub -r 5 safety_layer/slack std_msgs/msg/Float32 "{data: 0.05}"   # shows up in the slack column</code></pre>
 <p>
@@ -503,7 +514,7 @@ ros2 topic pub -r 5 safety_layer/slack std_msgs/msg/Float32 "{data: 0.05}"   # s
 <pre><code>ros2 run debug chunk_generator
 ros2 run debug chunk_generator --ros-args -p goal_distance:=4.0</code></pre>
 <p>
-  It waits for the first <code>/odom</code> message, latches the goal <code>goal_distance</code> metres ahead of the robot's pose at that moment (it logs
+  It waits for the first <code>/odometry/filtered</code> message, latches the goal <code>goal_distance</code> metres ahead of the robot's pose at that moment (it logs
   <code>Goal latched at ...</code>), then publishes <code>/vla/action_chunk</code> at 8 Hz. Things to know:
 </p>
 <ul>
@@ -749,6 +760,190 @@ python3 safety_layer_bench_testing/cbf_tuning.py --set extra_margin=0.2 --k-curv
   <code>PP_K_CURV</code> is in <code>common/constants.py</code> and is left at 1.0: it only affects the CBF's nominal here, but it is also the free-space cornering behaviour, so it was not changed without a decision.
   A larger speed-up would need the nominal to stop slowing for a turn the filter will not execute, which is a change to the design rather than to a knob.
 </p>
+
+<h2 id="realworld">15. Real-world testing guide</h2>
+<p>
+  How to take the safety layer from the bench onto the robot in stages, each one checking the layer below it. <span class="badge ok">verified</span> marks what was run on the workstation (no robot attached);
+  <span class="badge todo">unverified</span> marks what depends on hardware or software that is not on this machine (the Roboclaw, the Pixhawk and mavros, <code>robot_localization</code>). Nothing in this section has been run on the robot.
+  Paths are relative to the workspace root.
+</p>
+
+<h3 id="rw-chain">What runs where</h3>
+<pre><code>chunk source ──/vla/action_chunk──► safety layer ──/cmd_vel──► cmd_vel_to_roboclaw ──/set_motor_velocity──► roboclaw_for_motors ──► wheels
+ (stand-in or VLA)                      ▲   ▲                                                                       │
+ESDF source ──/nvblox_node/static_map_slice┘   │                                                                 encoders
+ (static bag or nvblox)                        │                                                                    │
+                          /odometry/filtered ◄─┴── local EKF ◄── /odometry/wheel ◄── encoder_localisation ◄── /encoder_counts
+                          (+ tf odom -&gt; base_link)      ▲
+                                                 IMU via mavros (/mavros_fcu/mavros_fcu/data_raw)</code></pre>
+<table>
+  <tr><th>Node</th><th>Started by</th><th>What it does (from the code)</th></tr>
+  <tr><td><code>roboclaw_for_motors</code></td><td><code>local_localisation_launch.py</code>, or <code>motor_control_launch.py start_driver:=true</code></td>
+      <td>The only node that opens the Roboclaw (<code>/dev/serial/by-id/usb-Basicmicro_Inc._USB_Roboclaw_2x45A-if00</code>, address 128, 38400 baud). Sends <code>set_motor_velocity</code> as a speed command (ticks per second, clamped to &plusmn;3000), M1 = right wheel, M2 = left. Publishes <code>encoder_counts</code> (tick deltas, 30 Hz). Stops both motors when the node shuts down cleanly.</td></tr>
+  <tr><td><code>cmd_vel_to_roboclaw</code></td><td><code>motor_control_launch.py</code> (new)</td>
+      <td>Turns <code>cmd_vel</code> into left and right wheel speeds with wheel radius 0.0804 m, 1100 counts per revolution and an effective track width of 0.5132 m.</td></tr>
+  <tr><td><code>mavros_fcu</code> (mavros)</td><td><code>local_localisation_launch.py</code> (includes <code>mavros-test.py</code>)</td><td>The Pixhawk link, <code>/dev/pixhawk</code> at 57600 baud; provides the IMU. The launch also sets the IMU message rate.</td></tr>
+  <tr><td><code>encoder_localisation</code></td><td><code>local_localisation_launch.py</code></td><td>Integrates <code>encoder_counts</code> into <code>/odometry/wheel</code> (frames <code>odom</code>, <code>base_link</code>).</td></tr>
+  <tr><td><code>ekf_filter_node_local</code></td><td><code>local_localisation_launch.py</code></td><td>Fuses the wheel odometry (forward speed, sideways speed, yaw rate) and the IMU yaw rate at 30 Hz, and broadcasts the <code>odom &rarr; base_link</code> transform. Its output is the safety layer's odometry input.</td></tr>
+  <tr><td>chunk source</td><td><code>ros2 run debug chunk_generator</code> (stand-in), or the VLA</td><td><code>/vla/action_chunk</code>. The VLA is not on this branch.</td></tr>
+  <tr><td>ESDF source</td><td><code>ros2 run debug static_esdf_publisher</code> (a recorded map as a virtual obstacle), or nvblox</td><td><code>/nvblox_node/static_map_slice</code>. nvblox is not on this branch.</td></tr>
+  <tr><td>safety layer</td><td><code>CBF_safety_layer.launch.py</code> or <code>MPC_safety_layer.launch.py</code></td><td>Chunks, odometry and ESDF in; <code>cmd_vel</code> out.</td></tr>
+</table>
+<p>
+  The odometry topic is <code>/odometry/filtered</code> everywhere, in the safety layer, the chunk generator and the sim, so the sim and the robot use the same names.
+  <span class="badge todo">unverified</span> That is the local EKF's default output name: the global launch remaps it to <code>/odometry/local</code> and the local launch does not, and <code>robot_localization</code> is not installed here to confirm it.
+  Check on the robot with <code>ros2 topic list | grep odometry</code>. If you run the global launch instead, change <code>ODOM_TOPIC</code> in <code>common/constants.py</code>, <code>chunk_generator.py</code> and <code>sim_robot.py</code> to <code>/odometry/local</code>.
+</p>
+<p>
+  <b>Do not run alongside the safety layer:</b> <code>pure_pursuit_controller</code>, or <code>pp-roboclaw-test.py</code> (it starts its own pure-pursuit controller publishing <code>cmd_vel</code>, and <code>bringup/setup.py</code> does not install it anyway);
+  a second <code>roboclaw_for_motors</code>; or anything from the sim (<code>sim_robot</code> publishes odometry).
+</p>
+
+<h3 id="rw-safety">Read first</h3>
+<div class="callout warn">
+  <b>Nothing stops the wheels if the controller stops.</b> <span class="badge ok">verified</span> from the code: <code>cmd_vel_to_roboclaw</code> only acts when a new <code>cmd_vel</code> arrives, and
+  <code>roboclaw_for_motors</code> sends each speed command once and has no timeout. If the safety layer, the chunk generator or the odometry stops or crashes, the last wheel speed stays in force.
+  Whether the Roboclaw itself has a serial timeout configured cannot be seen from the code. So Ctrl-C on the safety layer does not stop the robot.
+</div>
+<ul>
+  <li><b>Have the e-stop or power cut in hand for every run.</b> Wheels off the ground for stage 1; clear floor for stages 2 and 3.</li>
+  <li><b>Stopping.</b> E-stop if in doubt. Otherwise stop the chunk generator and safety layer, then publish zero: <code>ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{}"</code>
+      (if the safety layer is still running it overwrites this). Ctrl-C on the launch that runs <code>roboclaw_for_motors</code> sends both motors to zero on the way out
+      <span class="badge todo">unverified</span> on hardware; it relies on a clean shutdown, not a kill.</li>
+  <li><b>Speed limit.</b> The safety layer clamps to 0.3 m/s and 0.3 rad/s. Nothing else does: <code>cmd_vel_to_roboclaw</code> passes any <code>cmd_vel</code> through, and the driver's own limit is 3000 ticks/s, about 1.38 m/s.</li>
+  <li><b>Stale data is not handled.</b> Deferred to integration: the safety layer keeps using the last odometry, ESDF and chunk indefinitely. A frozen odometry or ESDF means it keeps filtering against old data.</li>
+  <li><b>Check the safety margin.</b> <code>SAFETY_MARGIN_M</code> is 0.20 m and must equal the robot's real half-width plus clearance. Measure it before trusting any run.</li>
+  <li><b>Start with the CBF.</b> Its solve takes about 0.7 ms here. The MPC took 18&ndash;19 ms on average and up to 73 ms against a 66.7 ms period on this workstation, and the robot's CPU is slower; watch <code>solve_time_ms</code>.
+      The MPC publishes zero velocity after 3 failed solves in a row, but a solve that is merely late just delays that tick's command.</li>
+  <li><b>Tuned on one ESDF.</b> The CBF was tuned on a single small obstacle in a kinematic sim with no actuator lag (section 14). Expect to re-tune on the robot.</li>
+</ul>
+
+<h3 id="rw-setup">Setup and pre-flight</h3>
+<pre><code># on the robot, once
+source /opt/ros/humble/setup.bash
+pip install basicmicro casadi           # control/requirements.txt
+colcon build --packages-select aion_msgs nvblox_msgs control localisation debug bringup
+source install/setup.bash               # in every new terminal</code></pre>
+<p>
+  The robot also needs <code>mavros</code>, <code>mavros_extras</code> and <code>robot_localization</code> installed (listed in <code>bringup/package.xml</code>).
+  <span class="badge ok">verified</span> <code>nvblox_msgs</code>, <code>control</code>, <code>debug</code> and <code>bringup</code> build and install on the workstation; <code>localisation</code> and the mavros pieces were not exercised here.
+</p>
+<pre><code>ls -l /dev/serial/by-id/usb-Basicmicro_Inc._USB_Roboclaw_2x45A-if00     # the Roboclaw path in roboclaw_for_motors.py
+ls -l /dev/pixhawk                                                     # the Pixhawk path in mavros-test.py
+ros2 pkg executables control | grep -E "safety_layer|roboclaw"         # cbf_safety_layer, mpc_safety_layer, cmd_vel_to_roboclaw, roboclaw_for_motors
+ros2 pkg prefix bringup && ls $(ros2 pkg prefix bringup)/share/bringup/launch</code></pre>
+<p>Go / no-go before powering the motors: e-stop tested; margin measured; both device paths present; nothing else publishing on <code>/cmd_vel</code> (<code>ros2 topic info /cmd_vel -v</code> should list no publishers yet); clear floor.</p>
+
+<h3 id="rw-stage1">Stage 1: motors only (wheels off the ground)</h3>
+<pre><code>ros2 launch bringup motor_control_launch.py start_driver:=true</code></pre>
+<p>
+  <code>motor_control_launch.py</code> is new. It always starts <code>cmd_vel_to_roboclaw</code>, and starts <code>roboclaw_for_motors</code> only with <code>start_driver:=true</code>. The default is false because the localisation launches
+  already start the driver, and two drivers on one serial port would send conflicting commands. Expect an INFO line <code>Connected to Roboclaw on /dev/serial/by-id/...</code>.
+</p>
+<ul>
+  <li><span class="badge ok">verified</span> without <code>start_driver</code> only the adapter starts; with it on a machine without <code>basicmicro</code>, the driver stops with
+      <code>RuntimeError: Install basicmicro on the robot to use Roboclaw hardware</code>, and the whole launch goes down with it.</li>
+  <li>If the port cannot be opened the driver stays up but logs <code>Failed to open Roboclaw on ... motor commands will be ignored</code>, and nothing will move.</li>
+</ul>
+<p>In a second terminal, command small speeds and compare the wheel-speed messages with these numbers:</p>
+<pre><code>ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
+ros2 topic echo /set_motor_velocity            # what the adapter asked for
+ros2 topic echo /current_motor_velocity        # what the driver sent to the Roboclaw
+ros2 topic echo /encoder_counts                # tick deltas per 1/30 s: positive when a wheel turns forward</code></pre>
+<table>
+  <tr><th class="num">linear.x [m/s]</th><th class="num">angular.z [rad/s]</th><th class="num">Left [ticks/s]</th><th class="num">Right [ticks/s]</th></tr>
+  <tr><td class="num">0.1</td><td class="num">0</td><td class="num">217.75</td><td class="num">217.75</td></tr>
+  <tr><td class="num">0.3</td><td class="num">0</td><td class="num">653.25</td><td class="num">653.25</td></tr>
+  <tr><td class="num">0</td><td class="num">0.3</td><td class="num">&minus;167.62</td><td class="num">167.62</td></tr>
+  <tr><td class="num">0.3</td><td class="num">0.3</td><td class="num">485.62</td><td class="num">820.87</td></tr>
+</table>
+<p>
+  <span class="badge ok">verified</span> These are what <code>/set_motor_velocity</code> showed when the adapter was run and driven with these commands, and they match a hand calculation (0.0804 m radius, 1100 counts per revolution, 0.5132 m track).
+  What the wheels do is <span class="badge todo">unverified</span>. Check: both wheels turn forward for +x; a positive angular.z turns the robot to the left (left wheel slower or backwards, right wheel faster);
+  the encoder counts increase for a forward-turning wheel. If a wheel is reversed, <code>LEFT_MOTOR_MULTIPLIER</code> and <code>RIGHT_MOTOR_MULTIPLIER</code> in <code>roboclaw_for_motors.py</code> flip its command and its encoder together.
+  Stop the publisher with Ctrl-C, then publish <code>{}</code> as above.
+</p>
+
+<h3 id="rw-stage2">Stage 2: localisation on the floor</h3>
+<pre><code>ros2 launch bringup local_localisation_launch.py      # roboclaw_for_motors, mavros, encoder_localisation, local EKF
+ros2 launch bringup motor_control_launch.py           # start_driver stays false: the driver is already running</code></pre>
+<pre><code>ros2 topic list | grep odometry                        # expect /odometry/wheel and /odometry/filtered
+ros2 topic hz /odometry/filtered                       # the EKF is set to 30 Hz
+ros2 topic hz /mavros_fcu/mavros_fcu/data_raw          # the IMU the EKF fuses
+ros2 run tf2_ros tf2_echo odom base_link               # the transform the safety layer needs
+timeout 5 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"   # about 0.5 m
+ros2 topic echo /odometry/filtered --field pose.pose.position --once</code></pre>
+<p>
+  Compare the distance the odometry reports with a tape measure over 0.5&ndash;1 m, and a 90&deg; turn with a marked floor. The odometry starts at (0, 0, 0) wherever the robot is when the EKF starts, so place the robot at its start pose <i>before</i> launching this.
+  All of it <span class="badge todo">unverified</span>. If the distances are off, the constants to look at are the wheel radius, counts per revolution and effective track width, which appear in both <code>cmd_vel_to_roboclaw.py</code> and <code>encoder_localisation.py</code> and must agree.
+</p>
+
+<h3 id="rw-stage3">Stage 3: safety layer against a virtual obstacle (no camera needed)</h3>
+<p>
+  Publish a recorded ESDF as if it were live. The robot then avoids an obstacle that exists only in the map, so the whole chain from chunks to wheels is tested without a camera or a real object.
+  In the recorded map the obstacle lies at x = 2.0&ndash;2.2 m, y = &minus;0.05&ndash;0.30 m in the <code>odom</code> frame, so with the robot starting at the odometry origin facing +x it is about 2 m ahead and slightly left.
+  Clear a strip at least 5 m long and 2 m wide, and put the robot at the start pose facing along it. Localisation and motor control from stage 2 stay running. One terminal each, in this order:
+</p>
+<pre><code># 1. the virtual obstacle. The default bag path is this workstation's, so give the robot's own copy.
+ros2 run debug static_esdf_publisher --ros-args -p bag_path:=$PWD/safety_layer_bench_testing/rosbags/esdf_single_obs/esdf_single_obs_0.db3
+
+# 2. the fake VLA: the goal is latched 4 m ahead of wherever the robot is when its first odometry arrives
+ros2 run debug chunk_generator --ros-args -p goal_distance:=4.0
+
+# 3. the safety layer. That map is recorded at 0.05 m, so give the bench patch geometry.
+ros2 launch control CBF_safety_layer.launch.py patch_size:=44 patch_resolution:=0.05 2&gt;&amp;1 | tee cbf_run.log</code></pre>
+<p>What to expect, from the bench (the robot should do the same in shape, not in speed profile):</p>
+<ul>
+  <li>The safety layer warns <code>No pose/action chunk received yet</code> until the odometry and the first chunk exist, and <code>No ESDF/transform available yet</code> until the map arrives. Then it starts publishing <code>cmd_vel</code>.
+      On the bench the first movement came about 3 s after the start because the nodes take a while to find each other.</li>
+  <li>The robot drives forward, slows, curves round the virtual obstacle staying outside the 0.20 m margin, and resumes speed. Given enough time it stops about 0.3 m short of the goal, where the pure-pursuit nominal runs out of path: the offline replica shows this, but the 30 s ROS runs ended just before it, still moving 0.5&ndash;0.7 m short.
+      A warning <code>CBF constraint slack in use</code> means the barrier could not be kept; the ROS bench runs never needed it.</li>
+  <li>Every tick prints <code>solve_time_ms=...</code> (section 13).</li>
+</ul>
+<p>
+  For the MPC, use <code>MPC_safety_layer.launch.py</code> with the same two arguments, once the CBF run looks right and after checking <code>solve_time_ms</code> against the 66.7 ms period.
+  Start with <code>goal_distance:=2.5</code> or so to keep the first runs short. Restart the chunk generator for each run, because it latches its goal once.
+</p>
+<p>
+  <span class="badge ok">verified</span> on the workstation: this exact set of nodes and arguments runs end to end against the sim on the same topic names (the sim publishes <code>/odometry/filtered</code> too), with chunks flowing, the robot moving and solve times printing.
+  The wheels, the EKF and real odometry are <span class="badge todo">unverified</span>.
+</p>
+
+<h3 id="rw-stage4">Stage 4: real ESDF and real VLA</h3>
+<p>The safety layer needs these on the graph. Neither producer is on this branch.</p>
+<table>
+  <tr><th>Input</th><th>Topic and type</th><th>Requirements</th></tr>
+  <tr><td>Action chunks</td><td><code>/vla/action_chunk</code>, <code>aion_msgs/ActionChunk</code></td><td>8 relative poses as future deltas from the pose at capture time, and a <code>seq_num</code> that changes with every new chunk (the CBF re-anchors on it).</td></tr>
+  <tr><td>ESDF</td><td><code>/nvblox_node/static_map_slice</code>, <code>nvblox_msgs/DistanceMapSlice</code></td><td>The message's <code>frame_id</code> must be reachable by tf from <code>odom</code> (the recorded maps use <code>odom</code>). With 0.1 m voxels use the default patch (no <code>patch_size</code> or <code>patch_resolution</code> arguments); the arguments in stage 3 are only for the 0.05 m recorded map.</td></tr>
+  <tr><td>Odometry</td><td><code>/odometry/filtered</code></td><td>With the transform <code>odom &rarr; base_link</code>.</td></tr>
+</table>
+<p>
+  The unmerged remote branches <code>visual_odom</code> and <code>integrate-visual-odom</code> (camera and vision) and <code>migrate-agvla-inference</code> (the VLA) exist; I have not read what they publish, so check topic names and message types against the table before joining them up.
+  Swap the stand-ins out one at a time: real ESDF first with the chunk generator still driving, then the VLA.
+</p>
+
+<h3 id="rw-record">Recording</h3>
+<pre><code>ros2 bag record -o run_$(date +%Y%m%d_%H%M%S) \
+    /odometry/filtered /odometry/wheel /cmd_vel /vla/action_chunk /nvblox_node/static_map_slice \
+    /safety_layer/slack /cbf/h /encoder_counts /set_motor_velocity /current_motor_velocity /tf</code></pre>
+<p>
+  Solve times are in the terminal output of the safety layer launch (<code>| tee</code> as above). <code>plot_run.py</code> reads only the sim's CSV logs; there is no converter from a bag to that format, so animations of real runs would need one written.
+  <code>/cbf/h</code> is the barrier value against the 0.35 m barrier margin, not the 0.20 m one.
+</p>
+
+<h3 id="rw-trouble">Troubleshooting</h3>
+<table>
+  <tr><th>Symptom</th><th>Likely cause</th></tr>
+  <tr><td><code>Install basicmicro on the robot to use Roboclaw hardware</code></td><td><code>pip install basicmicro</code>. <span class="badge ok">verified</span> message; the driver and the whole motor launch exit.</td></tr>
+  <tr><td><code>Failed to open Roboclaw ... motor commands will be ignored</code></td><td>The by-id path is missing or the port is busy. Nothing will move. Check the cable and <code>ls -l /dev/serial/by-id</code>, and that only one <code>roboclaw_for_motors</code> is running.</td></tr>
+  <tr><td><code>/set_motor_velocity</code> has numbers but the robot does not move</td><td>No driver running: <code>/current_motor_velocity</code> is published by the driver for every command, so if it is silent the driver is not up. Start <code>local_localisation_launch.py</code>, or <code>motor_control_launch.py start_driver:=true</code>.</td></tr>
+  <tr><td>Safety layer stays on <code>No pose/action chunk received yet</code></td><td>Nothing on <code>/odometry/filtered</code> (localisation not running, or a different odometry topic), or no chunks. <code>ros2 topic info /odometry/filtered</code> and <code>/vla/action_chunk</code>.</td></tr>
+  <tr><td><code>No ESDF/transform available yet</code> or <code>Could not look up odom -&gt; ...</code></td><td>No ESDF message yet, or no tf from <code>odom</code> to the ESDF's frame.</td></tr>
+  <tr><td>Erratic or fighting motion</td><td>Two publishers on <code>/cmd_vel</code>: <code>ros2 topic info /cmd_vel -v</code>. Look for a leftover controller.</td></tr>
+  <tr><td>The goal is in the wrong place</td><td>The chunk generator latches its goal on the first odometry it sees. Restart it with the robot at its start pose.</td></tr>
+  <tr><td>Robot turns the wrong way, or a wheel runs backwards</td><td>Wheel wiring or the multipliers in <code>roboclaw_for_motors.py</code> (M1 is the right wheel, M2 the left).</td></tr>
+  <tr><td>Ctrl-C on the safety layer and the robot keeps moving</td><td>Expected: see &ldquo;Read first&rdquo;. E-stop, or stop the chunk source and publish zero <code>cmd_vel</code>.</td></tr>
+</table>
 </main>
 </body>
 </html>

@@ -4,7 +4,7 @@ MPC safety layer for the Aion R6: takes VLA action chunks and publishes cmd_vel.
 Each chunk is resampled to the solver's time step and tracked by an NMPC (solver_setup.py)
 that also keeps the robot outside the ESDF safety margin.
 
-Subscribes: /odom, /vla/action_chunk, /nvblox_node/static_map_slice
+Subscribes: /odometry/filtered, /vla/action_chunk, /nvblox_node/static_map_slice
 Publishes:  cmd_vel, safety_layer/slack (largest margin slack over the horizon)
 Parameters: patch_size, patch_resolution (ESDF patch geometry; defaults in common/constants.py),
             print_solve_time (log the NLP solve time every tick as 'solve_time_ms=<value>')
@@ -51,7 +51,7 @@ class MpcSafetyLayerNode(Node):
     def __init__(self):
         super().__init__('mpc_safety_layer')
 
-        self._current_pose = None          # (x, y, theta), latest /odom sample
+        self._current_pose = None          # (x, y, theta), latest odometry sample
         self._chunk_t0 = None              # clock time the current chunk was received at
         self._consecutive_solve_failures = 0
         self._interpolated_path = None     # (n, 3) odom-frame poses, resampled to the solver's dt

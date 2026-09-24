@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Obstacle-blind stand-in for the VLA: publishes action chunks that point at a fixed goal.
 
-The goal is latched from the first /odom message: `goal_distance` metres straight ahead of the
+The goal is latched from the first /odometry/filtered message: `goal_distance` metres straight ahead of the
 robot's pose at that moment. From then on, every chunk is 8 waypoints spaced 0.1 m along the
 straight line from the robot's current pose to the goal, each with the heading of that line,
 expressed relative to the current pose (future deltas only, never the current pose itself). A
 waypoint never goes past the goal, so near the goal the waypoints bunch up on it.
 
-Subscribes: /odom (nav_msgs/Odometry) - pose of base_link in the odom frame.
+Subscribes: /odometry/filtered (nav_msgs/Odometry) - pose of base_link in the odom frame.
 Publishes:  /vla/action_chunk (aion_msgs/ActionChunk), at 8 Hz.
 Parameters:
   goal_distance   distance from the initial pose to the goal, along the initial heading [m]
@@ -21,7 +21,7 @@ from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-ODOM_TOPIC = '/odom'
+ODOM_TOPIC = '/odometry/filtered'
 ACTION_CHUNK_TOPIC = '/vla/action_chunk'
 CHUNK_RATE_HZ = 8.0
 N_WAYPOINTS = 8            # fixed by aion_msgs/ActionChunk.msg (Pose2D[8] relative_poses)
@@ -68,8 +68,8 @@ class ChunkGeneratorNode(Node):
         self.declare_parameter('goal_distance', DEFAULT_GOAL_DISTANCE_M)
         self._goal_distance = float(self.get_parameter('goal_distance').value)
 
-        self._pose = None     # (x, y, theta), latest /odom sample
-        self._goal = None     # (x, y) in the odom frame, latched from the first /odom sample
+        self._pose = None     # (x, y, theta), latest odometry sample
+        self._goal = None     # (x, y) in the odom frame, latched from the first odometry sample
         self._seq_num = 0
 
         self.create_subscription(Odometry, ODOM_TOPIC, self._odom_callback, 10)
