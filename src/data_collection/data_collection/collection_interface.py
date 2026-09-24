@@ -40,6 +40,17 @@ KEY_UP = '\x1b[A'
 KEY_DOWN = '\x1b[B'
 KEY_RIGHT = '\x1b[C'
 KEY_LEFT = '\x1b[D'
+KEY_UP_ALT = '\x1bOA'
+KEY_DOWN_ALT = '\x1bOB'
+KEY_RIGHT_ALT = '\x1bOC'
+KEY_LEFT_ALT = '\x1bOD'
+
+KEY_ALIASES = {
+    KEY_UP_ALT: KEY_UP,
+    KEY_DOWN_ALT: KEY_DOWN,
+    KEY_RIGHT_ALT: KEY_RIGHT,
+    KEY_LEFT_ALT: KEY_LEFT,
+}
 
 
 def prompt_from_episode_name(name):
@@ -70,7 +81,7 @@ def read_key(timeout_sec):
             if not ready:
                 break
             sequence.append(sys.stdin.read(1))
-        return ''.join(sequence)
+        return KEY_ALIASES.get(''.join(sequence), ''.join(sequence))
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -94,6 +105,7 @@ class CollectionInterfaceClient(Node):
         self.episode_dir = None
         self.last_pressed = {}
         self.last_command = None
+        self.last_printed_command = None
 
     def wait_for_services(self, timeout_sec=5.0):
         for cli, name in ((self.start_cli, 'start_episode'), (self.stop_cli, 'stop_episode')):
@@ -181,12 +193,21 @@ class CollectionInterfaceClient(Node):
         cmd.angular.z = angular
         self.cmd_vel_pub.publish(cmd)
         self.last_command = command
+        self.print_drive_command(command)
 
     def stop_drive(self):
         self.last_pressed.clear()
         if self.last_command != (0.0, 0.0):
             self.cmd_vel_pub.publish(Twist())
             self.last_command = (0.0, 0.0)
+            self.print_drive_command((0.0, 0.0))
+
+    def print_drive_command(self, command):
+        if command == self.last_printed_command:
+            return
+        linear, angular = command
+        print(f"[drive] linear.x={linear:.2f} angular.z={angular:.2f}")
+        self.last_printed_command = command
 
 
 def prompt_for_episode(node):
