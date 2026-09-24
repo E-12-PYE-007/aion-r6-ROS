@@ -28,6 +28,7 @@ setup(
             'mocap_data_collector = data_collection.mocap_data_collector:main',
             'episode_data_collector = data_collection.episode_data_collector:main',
             'collection_interface = data_collection.collection_interface:main',
+            'image_decoder = data_collection.image_decoder:main',
 
         ],
     },
