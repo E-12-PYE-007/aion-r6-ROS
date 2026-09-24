@@ -20,7 +20,19 @@ COLLECTOR_NODE = 'episode_data_collector'
 START_KEY = 'x'
 STOP_KEY = 's'
 QUIT_KEYS = {'q', '\x03'} # 'q' or Ctrl+C
-NAME_HINT = 'e.g. <target>_<follow_side>_turn_<turns>'
+NAME_HINT = 'e.g. fls, fro, fltr, frtl'
+FENCE_PROMPTS = {
+    'fl': 'follow the fence on your left',
+    'fr': 'follow the fence on your right',
+}
+
+
+def prompt_from_episode_name(name):
+    descriptor = name.lower()
+    for prefix, prompt in FENCE_PROMPTS.items():
+        if descriptor.startswith(prefix):
+            return prompt
+    return None
 
 
 def read_key():
@@ -125,10 +137,11 @@ def main(args=None):
                 if not name:
                     print('[warn] empty name, cancelled')
                     continue
-                prompt = input('Prompt describing this episode: ').strip()
-                if not prompt:
-                    print('[warn] empty prompt, cancelled')
+                prompt = prompt_from_episode_name(name)
+                if prompt is None:
+                    print('[warn] name must start with fl or fr, cancelled')
                     continue
+                print(f'[prompt] {prompt}')
                 node.start_episode(name, prompt)
 
             elif key == STOP_KEY:
