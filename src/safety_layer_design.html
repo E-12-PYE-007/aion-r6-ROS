@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Safety Layer Design</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #5b6474; --line: #d9dee7;
+    --nav-bg: #f4f6fa; --accent: #1f5fbf; --code-bg: #f1f3f8;
+    --ok: #17703a; --ok-bg: #e5f5ea; --warn: #8a5a00; --warn-bg: #fff3d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171e; --fg: #dde2ec; --muted: #9aa3b5; --line: #2c3240;
+      --nav-bg: #1a1e27; --accent: #7fb0ff; --code-bg: #1e2330;
+      --ok: #6fd394; --ok-bg: #16301f; --warn: #f0c060; --warn-bg: #3a2e12;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  nav { position: fixed; top: 0; left: 0; bottom: 0; width: 250px; overflow-y: auto;
+        background: var(--nav-bg); border-right: 1px solid var(--line); padding: 20px 16px; }
+  nav h1 { font-size: 15px; margin: 0 0 12px; }
+  nav a { display: block; color: var(--fg); text-decoration: none; padding: 4px 8px;
+          border-radius: 4px; font-size: 14px; }
+  nav a:hover { background: var(--line); }
+  nav a.sub { padding-left: 22px; color: var(--muted); font-size: 13px; }
+  main { margin-left: 250px; max-width: 900px; padding: 32px 40px 80px; }
+  h2 { margin-top: 48px; padding-top: 8px; border-top: 1px solid var(--line); }
+  h3 { margin-top: 28px; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; margin: 14px 0; width: 100%; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--nav-bg); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px;
+           border-radius: 10px; vertical-align: middle; }
+  .ok { color: var(--ok); background: var(--ok-bg); }
+  .todo { color: var(--warn); background: var(--warn-bg); }
+  .callout { border-left: 4px solid var(--accent); background: var(--nav-bg);
+             padding: 10px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  @media (max-width: 800px) {
+    nav { position: static; width: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { margin-left: 0; padding: 20px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+<nav>
+  <h1>Safety Layer Design</h1>
+  <a href="#overview">1. Overview</a>
+  <a href="#interfaces">2. Interfaces</a>
+  <a href="#layout">3. Package layout</a>
+  <a href="#common">4. Shared code</a>
+  <a href="#cbf">5. CBF node</a>
+  <a href="#mpc">6. MPC node</a>
+  <a href="#patch">7. ESDF patch</a>
+  <a href="#bench">8. Bench sim</a>
+  <a class="sub" href="#sim-robot">Sim node</a>
+  <a class="sub" href="#log">Log format</a>
+  <a class="sub" href="#scenario">Scenario &amp; deltas</a>
+  <a href="#generator">9. Chunk generator</a>
+  <a href="#plotter">10. Plotter</a>
+  <a href="#order">11. Build order</a>
+  <a href="#open">12. Open / deferred</a>
+  <a href="#running">13. Running the bench</a>
+  <a class="sub" href="#run-build">Build</a>
+  <a class="sub" href="#run-sim">Start the sim</a>
+  <a class="sub" href="#run-drive">Drive it by hand</a>
+  <a class="sub" href="#run-generator">Run the chunk generator</a>
+  <a class="sub" href="#run-safety">Run a safety layer</a>
+  <a class="sub" href="#run-render">Render the animation</a>
+  <a href="#tuning">14. Tuning the CBF</a>
+  <a class="sub" href="#tune-knobs">What the knobs do</a>
+  <a class="sub" href="#tune-process">The process</a>
+  <a class="sub" href="#tune-results">Results at each step</a>
+  <a class="sub" href="#tune-speed">Alpha and speed</a>
+  <a class="sub" href="#run-trouble">Troubleshooting</a>
+</nav>
+
+<main>
+<h1>Safety Layer Design</h1>
+<p>
+  <span class="badge ok">verified</span> marks a claim I checked by reading the code or running it
+  against the real code / recorded ESDF bag (the check is named). <span class="badge todo">unverified</span>
+  marks anything I have not checked. Branch: <code>safety-layer</code>, based on <code>origin/main</code>
+  at <code>3a52fc7</code>.
+</p>
+
+<h2 id="overview">1. Overview</h2>
+<p>
+  The safety layer is a ROS 2 node that takes a VLA action chunk and outputs <code>cmd_vel</code>, keeping
+  the robot outside an ESDF safety margin around obstacles. Two interchangeable implementations exist,
+  each launched on its own: a <b>CBF</b> node and an <b>MPC</b> node. The VLA is treated as
+  obstacle-blind; the safety layer is what makes the result safe.
+</p>
+<ul>
+  <li><b>CBF</b>: pure-pursuit nominal command, then a small QP that returns the nearest command keeping a
+      point ahead of the robot outside the margin. One node, nominal and filter inside it.</li>
+  <li><b>MPC</b>: nonlinear MPC tracking the chunk with a slacked ESDF-distance constraint, plus a soft
+      low-velocity floor (weight 100, threshold 0.15 m/s, horizon N=14 at 0.2 s).</li>
+</ul>
+<p>Both share ESDF handling, pure-pursuit geometry, frame transforms, constants for limits, and the output topic.</p>
+
+<pre><code>   /vla/action_chunk ─┐
+   /odom             ─┼─►  safety layer node (cbf | mpc)  ─►  cmd_vel
+   /nvblox_node/static_map_slice ─┘        └─►  safety_layer/slack (debug)</code></pre>
+
+<h2 id="interfaces">2. Interfaces</h2>
+<table>
+  <tr><th>Topic</th><th>Type</th><th>Dir</th><th>Notes</th></tr>
+  <tr><td><code>/vla/action_chunk</code></td><td><code>aion_msgs/ActionChunk</code></td><td>in</td>
+      <td>8 relative poses (<code>Pose2D</code>), future deltas from the pose at capture time; <code>seq_num</code> changes per chunk.</td></tr>
+  <tr><td><code>/odom</code></td><td><code>nav_msgs/Odometry</code></td><td>in</td><td>Pose of <code>base_link</code> in <code>odom</code>.</td></tr>
+  <tr><td><code>/nvblox_node/static_map_slice</code></td><td><code>nvblox_msgs/DistanceMapSlice</code></td><td>in</td>
+      <td>ESDF slice; unknown cells carry <code>unknown_value</code> and are treated as max distance (2.0 m).</td></tr>
+  <tr><td><code>cmd_vel</code></td><td><code>geometry_msgs/Twist</code></td><td>out</td><td><code>linear.x</code> = v, <code>angular.z</code> = omega. Limits 0.3 m/s, 0.3 rad/s.</td></tr>
+  <tr><td><code>safety_layer/slack</code></td><td><code>std_msgs/Float32</code></td><td>out</td>
+      <td>Debug, one per tick. See the units caveat below.</td></tr>
+</table>
+<p>
+  <span class="badge ok">verified</span> topic names, limits and message types read from
+  <code>CBF-obstacle-avoid</code> and <code>MPC-obstacle-avoid</code> <code>constants.py</code> and node files.
+</p>
+<div class="callout warn">
+  <b>Slack units differ.</b> The CBF publishes <code>cbf/slack</code>: the slack <i>s</i> in
+  <code>ddt(h) + s &ge; -&alpha;h</code>, in m/s. The MPC publishes <code>mpc/max_slack</code>: the largest
+  ESDF-margin slack over the horizon, in metres. Both nodes publish on <code>safety_layer/slack</code> so the
+  sim logs one column, but the plotter must label the axis per controller. The controller name goes in the log header.
+</div>
+<p>Both controllers currently use <code>odom</code> as the odom frame, and the bench bag's frame is <code>odom</code>
+  <span class="badge ok">verified</span> (read from the first message), so the ESDF&ndash;odom transform is the identity on the bench.</p>
+
+<h2 id="layout">3. Package layout</h2>
+<pre><code>src/control/
+  control/
+    safety_layer/
+      common/        constants.py  esdf_map.py  esdf_spline.py  frames.py  pure_pursuit.py
+      cbf/           cbf_qp.py  cbf_safety_layer.py  constants.py
+      mpc/           solver_setup.py  mpc_safety_layer.py  constants.py
+  launch/
+    CBF_safety_layer.launch.py
+    MPC_safety_layer.launch.py
+src/debug/
+  debug/    sim_robot.py  static_esdf_publisher.py  chunk_generator.py
+  launch/   sim_bench.launch.py
+src/nvblox_msgs/
+src/safety_layer_design.html
+safety_layer_bench_testing/
+  rosbags/  esdf_single_obs  esdf_heavy_obs  esdf_no_obs
+  plot_run.py  cbf_tuning.py
+sim_logs/         (gitignored) run logs, and the rendered videos</code></pre>
+<ul>
+  <li>Launch files start <b>only</b> the safety layer node. No <code>sim</code> argument; anything simulated is
+      started separately (<code>sim_bench.launch.py</code>, and the chunk generator).</li>
+  <li>Each launch file takes two arguments, <code>patch_size</code> and <code>patch_resolution</code>, defaulting to the deployment values in
+      <code>common/constants.py</code>; they set node parameters of the same names. <code>control/setup.py</code> installs the launch files and defines the
+      <code>cbf_safety_layer</code> and <code>mpc_safety_layer</code> executables. <code>casadi</code> is in <code>control/requirements.txt</code>.</li>
+  <li>Limits (<code>V_MAX</code>, <code>OMEGA_MAX</code>), the ESDF patch geometry and the safety margin are
+      the same for both controllers, so they live in <code>common</code>. Only controller-specific tuning stays per
+      controller.</li>
+</ul>
+
+<h2 id="common">4. Shared code</h2>
+<p>Everything both controllers need lives in <code>safety_layer/common</code>:</p>
+<ul>
+  <li><b><code>constants.py</code>:</b> limits, ESDF patch geometry, safety margin, control period, pure-pursuit tuning, topic and frame names.</li>
+  <li><b><code>esdf_map.py</code>:</b> <code>EsdfMap.store</code> reshapes a slice and replaces unknown cells with 2.0 m; <code>get_patch</code> cuts a square patch centred on a map-frame
+      point, filling out-of-bounds with 2.0 m; <code>patch_at</code> does the odom &rarr; ESDF-frame transform lookup and returns the patch and the frame yaw.</li>
+  <li><b><code>esdf_spline.py</code>:</b> the bicubic B-spline ESDF lookup used inside both the QP and the NLP, including the coefficient shift that makes out-of-patch queries read as free space.</li>
+  <li><b><code>frames.py</code>:</b> quaternion to yaw, angle wrapping, planar pose transform.</li>
+  <li><b><code>pure_pursuit.py</code>:</b> the obstacle-blind nominal command. It anchors to the pose at the chunk's first sight (<code>seq_num</code> change),
+      Hermite-interpolates the 8 waypoints (10 samples per segment), finds the first sample beyond the 0.3 m lookahead, turns it into a curvature, scales speed to
+      <code>V_MAX / (1 + K&middot;|&kappa;|)</code>, and saturates v and omega together so the turning radius is preserved. If no sample is beyond the lookahead
+      it returns <code>(0, 0)</code>. Used by the CBF node; the MPC does not use it. The standalone <code>control/pure_pursuit_controller.py</code> still has its own copy.</li>
+</ul>
+<p>
+  <span class="badge ok">verified</span> When the code was ported, it computed exactly what the original per-controller code did: on 40 real ESDF patches the CBF output
+  (v, omega, h, slack) differed by 0.00e+00 from the original, with the constraint active in 6 of them; the MPC's first command and predicted states were identical on 12 solves; the ESDF
+  patches were identical; and 60 pure-pursuit steps over 6 chunks matched exactly. The CBF filter was changed deliberately after that (section 5); the rest is unchanged.
+</p>
+
+<h2 id="cbf">5. CBF node</h2>
+<p>
+  One node. Each tick (about 15 Hz): compute the nominal <code>(v, omega)</code>, cut the ESDF patch around the
+  robot, solve the QP, publish <code>cmd_vel</code> and slack. The QP is a small convex problem solved fresh each
+  call with CasADi <code>qrqp</code>.
+</p>
+<table>
+  <tr><th>Parameter</th><th class="num">Value</th><th>Meaning</th></tr>
+  <tr><td><code>SAFETY_MARGIN_M</code> + <code>CBF_EXTRA_MARGIN_M</code></td><td class="num">0.20 + 0.15</td><td>The barrier's margin. The extra 0.15 m covers the robot's centre passing closer to an obstacle than the lookahead point does when it turns past it.</td></tr>
+  <tr><td><code>LOOKAHEAD_M</code></td><td class="num">0.4</td><td>The barrier is evaluated at this distance ahead of the robot. At the robot's centre omega has no effect on <code>ddt(h)</code>; ahead of it, turning moves the point sideways, so the QP can steer as well as brake.</td></tr>
+  <tr><td><code>CBF_ALPHA</code></td><td class="num">2.0</td><td>Class-K gain: smaller brakes earlier and more gently</td></tr>
+  <tr><td><code>CBF_WEIGHT_OMEGA</code></td><td class="num">0.003</td><td>Cost of changing omega from the nominal. It is nearly free so the filter can steer round an obstacle the nominal points straight at; with a large weight it can only brake and the robot stops in front of it.</td></tr>
+  <tr><td><code>CBF_SLACK_WEIGHT</code></td><td class="num">1000</td><td>Keeps the QP feasible if the robot is already inside the margin</td></tr>
+</table>
+<p>The formulation and derivation stay in <code>cbf_formulation.pdf</code> on the <code>CBF-obstacle-avoid</code> branch. Section 14 says what each knob does and how these values were chosen.</p>
+
+<h3>The barrier derivative (a defect fixed after the port)</h3>
+<p>
+  The ESDF patch is centred on the robot's current position and the lookup uses the offset from that centre. The original code differentiated the barrier with respect to the robot pose
+  while using that same pose as the patch centre, so the dependence on the robot's position cancelled: the QP's coefficient on forward speed, <code>Lg_h_v</code>, came out as about 0.00 and
+  the filter could never brake for an obstacle ahead; it could only steer, limited to 0.3 rad/s. Now the patch centre is held fixed while the lookahead point moves.
+  <span class="badge ok">verified</span> By finite differences through the same patch, <code>dh/dx</code> is &minus;0.95 on the approach (the old code effectively used 0), and an independent solve of the same QP
+  (SLSQP) gave the same answer as <code>qrqp</code>, so the solver was never the problem. The MPC is not affected, because its states are decision variables measured from a fixed patch centre.
+</p>
+<h2 id="mpc">6. MPC node</h2>
+<p>
+  From <code>MPC-obstacle-avoid</code>, including the low-velocity floor. Solver: CasADi with IPOPT
+  (<code>IPOPT_MAX_ITER = 300</code>). Horizon: N = 14 steps at 0.2 s, about 2.8 s, matching the chunk's own
+  8 &times; 1/3 s span.
+</p>
+<table>
+  <tr><th>Parameter</th><th class="num">Value</th><th>Meaning</th></tr>
+  <tr><td><code>LOW_V_WEIGHT</code></td><td class="num">100</td><td>Soft stage cost on <code>max(0, LOW_V_THRESHOLD - v)&sup2;</code></td></tr>
+  <tr><td><code>LOW_V_THRESHOLD</code></td><td class="num">0.15 m/s</td><td>Half of <code>V_MAX</code></td></tr>
+  <tr><td><code>SLACK_WEIGHT</code></td><td class="num">1000</td><td>Slack on the ESDF margin</td></tr>
+  <tr><td><code>MAX_CONSECUTIVE_SOLVE_FAILURES</code></td><td class="num">3</td><td>Stop publishing solver output after this many failed ticks in a row</td></tr>
+</table>
+<p>
+  The obstacle-avoidance limits of this formulation (it stops rather than detours when an obstacle is close to
+  dead-on with the reference, unless the low-velocity floor is on) are documented in <code>MPC_FINDINGS.md</code>
+  on the <code>MPC-obstacle-avoid</code> branch. That document stays on that branch.
+</p>
+
+<h2 id="patch">7. ESDF patch</h2>
+<p>
+  Both controllers use a 22 &times; 22 patch at 0.1 m, the deployment voxel size. Both build a bicubic B-spline over
+  the patch, so the cell count sets the size of the problem.
+</p>
+<table>
+  <tr><th>Quantity</th><th class="num">22 cells @ 0.1 m</th><th class="num">44 cells @ 0.1 m</th></tr>
+  <tr><td>Patch side</td><td class="num">2.2 m</td><td class="num">4.4 m</td></tr>
+  <tr><td>Half-patch (reach from robot)</td><td class="num">1.1 m</td><td class="num">2.2 m</td></tr>
+  <tr><td>Spline coefficients</td><td class="num">484</td><td class="num">1936</td></tr>
+</table>
+<p>
+  <span class="badge ok">verified</span> arithmetic, run in a script. Does 1.1 m reach far enough?
+</p>
+<ul>
+  <li><b>CBF:</b> the barrier is evaluated 0.25 m ahead, and the margin is 0.20 m, so it looks about
+      0.25 + 0.20 = 0.45 m out. Well inside 1.1 m.</li>
+  <li><b>MPC:</b> the furthest the horizon can reach is <code>V_MAX &times; N &times; dt = 0.3 &times; 14 &times; 0.2 = 0.84 m</code>. Inside 1.1 m.</li>
+</ul>
+
+<h2 id="bench">8. Bench sim</h2>
+<p>
+  <code>sim_bench.launch.py</code> starts <code>sim_robot</code> and <code>static_esdf_publisher</code> together, since they
+  are always used together. The chunk generator and the safety layer are launched separately.
+</p>
+<table>
+  <tr><th>Node</th><th>Package</th><th>Role</th></tr>
+  <tr><td><code>sim_robot</code></td><td>debug</td><td>The sim itself: unicycle integration, <code>/odom</code>, <code>/tf</code>, and the CSV log. Launched by <code>sim_bench.launch.py</code>.</td></tr>
+  <tr><td><code>chunk_generator</code></td><td>debug</td><td>Fake VLA (section 9). Standalone; also usable on the real robot. Started with <code>ros2 run</code>, not by the sim launch.</td></tr>
+  <tr><td><code>static_esdf_publisher</code></td><td>debug</td><td>Republishes the bag's first ESDF message at 1 Hz. Launched by <code>sim_bench.launch.py</code>.</td></tr>
+  <tr><td><code>cbf_safety_layer</code> or <code>mpc_safety_layer</code></td><td>control</td><td>The controller under test</td></tr>
+</table>
+<pre><code>chunk_generator ──/vla/action_chunk──► safety layer ──cmd_vel──► sim_robot ──/odom, /tf──┐
+       ▲                                     ▲   ▲                    │                     │
+       └─────────────────/odom───────────────┼───┼────────────────────┘                     │
+static_esdf_publisher ──ESDF────────────────┘   └───────────────────/odom──────────────────┘
+                                          sim_robot also subscribes to the chunk and slack topics, for the log</code></pre>
+
+<h3 id="sim-robot">Sim node</h3>
+<ul>
+  <li>Integrates the last <code>cmd_vel</code> with forward-Euler unicycle kinematics on a 50 Hz timer. The step is the
+      measured elapsed ROS time (capped at 0.1 s), so the pose stays consistent with the logged <code>t</code> even if the timer
+      runs late. <code>t</code> counts from the first step.</li>
+  <li>Publishes <code>/odom</code> and the <code>odom &rarr; base_link</code> transform each step.</li>
+  <li>Writes one CSV row per step (below), flushing every row, so a SIGINT or SIGKILL cannot lose data.</li>
+  <li>Stops itself after <code>max_duration</code> seconds of ROS time (default 30), so a run always has a bounded length and video, and the launch
+      shuts down with it. Set it to 0 to run until stopped.</li>
+  <li>Holds the last <code>cmd_vel</code> until a new one arrives; there is no command timeout.</li>
+  <li>No wheel slip, motor lag or command latency. It shows what the filter logic does, not how the rover
+      will behave on the ground.</li>
+</ul>
+
+<h3 id="log">Log format</h3>
+<p>CSV, written to <code>sim_logs/&lt;timestamp&gt;.csv</code> in the working directory (gitignored). Header lines start with <code>#</code>:</p>
+<pre><code># controller: cbf
+# esdf_bag: /home/djstrahan/aion-r6-vla-master/aion-r6-ROS/safety_layer_bench_testing/rosbags/esdf_single_obs/esdf_single_obs_0.db3
+# default_start: 0.25 0.0 0.0
+# start_delta: 0.0 0.3 0.0
+# start: 0.25 0.3 0.0
+# goal_distance: 6.0
+t,x,y,theta,v,omega,slack,seq_num,c0x,c0y,c0th,...,c7x,c7y,c7th
+0.000,0.250,0.300,0.000,0.000,0.000,0.000,-1,0,0,0,...</code></pre>
+<table>
+  <tr><th>Columns</th><th>Meaning</th></tr>
+  <tr><td><code>t</code></td><td>ROS clock time [s]</td></tr>
+  <tr><td><code>x, y, theta</code></td><td>Robot pose in <code>odom</code></td></tr>
+  <tr><td><code>v, omega</code></td><td>Last received <code>cmd_vel</code></td></tr>
+  <tr><td><code>slack</code></td><td>Last received <code>safety_layer/slack</code> (units per controller)</td></tr>
+  <tr><td><code>seq_num</code></td><td>Sequence number of the latest chunk (&minus;1 before the first)</td></tr>
+  <tr><td><code>c0x &hellip; c7th</code></td><td>Latest chunk: 8 relative poses (x, y, theta) exactly as published, 24 columns</td></tr>
+</table>
+<p>
+  32 columns in all <span class="badge ok">verified</span> (8 + 24). At 50 Hz a 60 s run is 3000 rows.
+  The chunk is logged raw. The controllers anchor a chunk to the robot's pose when they first receive it, so the
+  plotter does the same: it takes the pose from the first row with a new <code>seq_num</code> and applies the 8
+  deltas from there.
+</p>
+
+<h3 id="scenario">Scenario and start-pose deltas</h3>
+<p>The default scenario is the one used throughout development: head-on at the single obstacle.</p>
+<ul>
+  <li>ESDF: <code>safety_layer_bench_testing/rosbags/esdf_single_obs</code>, at a hardcoded absolute path.</li>
+  <li>Start pose: <code>(0.25, 0.0, 0.0)</code> &mdash; the ESDF cone's apex, heading straight down its axis.</li>
+  <li><code>sim_robot</code> takes <code>dx</code>, <code>dy</code>, <code>dtheta</code> (default 0), expressed as a delta in the
+      <code>odom</code> frame from the default start. <code>dy:=0.3</code> starts at (0.25, 0.3, 0).</li>
+</ul>
+<p>
+  Where the obstacle is, read from the bag <span class="badge ok">verified</span>: on-axis cells with negative
+  distance (inside the obstacle) span x = 2.0&ndash;2.2 m, y = &minus;0.05&ndash;0.30 m, deepest value &minus;0.18 m. Along the
+  axis y = 0 the ESDF is:
+</p>
+<table>
+  <tr><th class="num">x [m]</th><th class="num">0.25</th><th class="num">1.0</th><th class="num">1.5</th><th class="num">1.7</th><th class="num">1.8</th><th class="num">1.9</th><th class="num">2.0</th><th class="num">2.2</th></tr>
+  <tr><th class="num">ESDF [m]</th><td class="num">1.60</td><td class="num">0.85</td><td class="num">0.35</td><td class="num">0.15</td><td class="num">0.05</td><td class="num">0.00</td><td class="num">&minus;0.05</td><td class="num">0.16</td></tr>
+</table>
+<p>
+  So the ESDF at the robot's centre reaches the 0.20 m margin at about x = 1.65 m, 1.4 m after the start
+  (at 0.3 m/s, about 4.7 s). The CBF evaluates its barrier at a point 0.25 m ahead of the centre, so it starts
+  to act earlier, when the robot's centre is near x = 1.4 m.
+</p>
+<div class="callout">
+  The goal is latched 6 m along the <i>start</i> heading from the start position, so it moves with the deltas.
+  <code>dy:=0.3</code> is a parallel pass with the goal at (6.25, 0.3). <code>dtheta:=20&deg;</code> sends the
+  robot on a line that misses the obstacle entirely. To approach it from an angle, choose <code>dx, dy, dtheta</code> so the
+  heading points at it. The plotter draws the ESDF (obstacles are the empty regions) and a dotted start&ndash;goal line so a run is easy to read.
+</div>
+
+<h2 id="generator">9. Chunk generator</h2>
+<p>
+  A single file in the <code>debug</code> package, depending only on <code>aion_msgs</code> and <code>/odom</code>, so
+  <code>ros2 run debug chunk_generator</code> works on the real robot as well as in the bench. Its only parameter is <code>goal_distance</code>
+  (default 6.0 m); the 8 Hz rate, 0.1 m spacing and 8 waypoints are constants in the file.
+</p>
+<h3>Algorithm</h3>
+<ol>
+  <li>On the first <code>/odom</code> message, latch the goal: <code>goal = start + goal_distance &middot; (cos&theta;, sin&theta;)</code>. This is the only parameter (default 6.0 m).</li>
+  <li>At 8 Hz, take the current pose. Direction <code>u</code> = unit vector from the pose to the goal, and heading = <code>atan2(u)</code>.</li>
+  <li>Waypoints <i>i</i> = 1..8 at <code>pose + i &middot; 0.1 m &middot; u</code>, clamped so none passes the goal.</li>
+  <li>Express each as a delta in the robot's own frame: rotate the offset by &minus;&theta;, with relative heading = heading &minus; &theta;.</li>
+</ol>
+<p>The chunk is 0.8 m long, which is 2.67 s at <code>V_MAX</code>, matching the real chunk span <span class="badge ok">verified</span> (0.8 / 0.3).</p>
+
+<h3>Why it points at a far goal</h3>
+<p>
+  The previous generator aimed at the point 0.8 m ahead on a straight line, so any lateral offset larger than 0.8 m
+  made the chunk point sideways at the line. A goal 6 m away barely changes direction with lateral offset. Bearing of the
+  chunk for a robot at x = 2.0 m, both generators, goal at (6.25, 0)
+  <span class="badge ok">verified</span> (old value computed by running the old <code>StraightPath.lookahead_point</code>):
+</p>
+<table>
+  <tr><th class="num">Lateral offset [m]</th><th class="num">0.0</th><th class="num">0.1</th><th class="num">0.2</th><th class="num">0.4</th><th class="num">0.6</th><th class="num">0.8</th><th class="num">1.0</th><th class="num">1.5</th></tr>
+  <tr><th>Old bearing [&deg;]</th><td class="num">0.0</td><td class="num">&minus;7.2</td><td class="num">&minus;14.5</td><td class="num">&minus;30.0</td><td class="num">&minus;48.6</td><td class="num">&minus;90.0</td><td class="num">&minus;90.0</td><td class="num">&minus;90.0</td></tr>
+  <tr><th>New bearing [&deg;]</th><td class="num">0.0</td><td class="num">&minus;1.3</td><td class="num">&minus;2.7</td><td class="num">&minus;5.4</td><td class="num">&minus;8.0</td><td class="num">&minus;10.7</td><td class="num">&minus;13.2</td><td class="num">&minus;19.4</td></tr>
+</table>
+<h3>Worked example</h3>
+<p>Robot at (2.0, 0.4), heading 0; goal (6.25, 0). Distance to goal 4.269 m, heading &minus;5.38&deg; (&minus;0.0938 rad). The chunk, as published:</p>
+<table>
+  <tr><th>Waypoint</th><th class="num">rel x [m]</th><th class="num">rel y [m]</th><th class="num">rel &theta; [rad]</th></tr>
+  <tr><td>1</td><td class="num">0.0996</td><td class="num">&minus;0.0094</td><td class="num">&minus;0.0938</td></tr>
+  <tr><td>2</td><td class="num">0.1991</td><td class="num">&minus;0.0187</td><td class="num">&minus;0.0938</td></tr>
+  <tr><td>8</td><td class="num">0.7965</td><td class="num">&minus;0.0750</td><td class="num">&minus;0.0938</td></tr>
+</table>
+<h3>Behaviour to expect</h3>
+<ul>
+  <li><b>No line to rejoin.</b> After a detour the robot heads for the goal from wherever it ends up.</li>
+  <li><b>Dead-on is still symmetric.</b> A robot on the line to the goal with an obstacle dead ahead gets the same
+      chunk every tick. That is a property of an obstacle-blind VLA, not a generator fault, and it is the case the
+      MPC struggled with, so it stays as a test.</li>
+  <li><b>Ending.</b> Near the goal the waypoints bunch up on it and never pass it (a robot already at the goal gets 8 waypoints at zero offset;
+      one past the goal is pointed back at it). The pure-pursuit code returns <code>(0, 0)</code> when no waypoint is beyond its 0.3 m lookahead, so a real controller
+      should stop about 0.3 m short of the goal. <span class="badge todo">unverified</span> with the real controllers, which are not ported yet; with a stand-in
+      follower that stops when the last waypoint is within 0.3 m, the robot stopped 0.300 m from the goal (see below).</li>
+</ul>
+<h3>Verification</h3>
+<p><span class="badge ok">verified</span> by running the node (the script results, not just reading the code):</p>
+<ul>
+  <li>The chunk for a robot at (2.0, 0.4, 0) with the goal at (6.25, 0) matches the worked-example table above to four decimals.</li>
+  <li>For a robot rotated 90&deg; the 8 waypoints, converted to the world frame, lie on the line to the goal (largest offset 1e-16 m), 0.1 m apart, all with the same
+      heading.</li>
+  <li>Closed loop with the sim (start delta <code>dy:=-0.5 dtheta:=0.3</code>) and a throwaway follower that steers at the chunk's last waypoint: the goal latched at
+      (5.982, 1.273), which equals 0.25 + 6&middot;cos(0.3), &minus;0.5 + 6&middot;sin(0.3) computed by hand; chunks arrived at 8.00 Hz (226 published, 226 seen, <code>seq_num</code>
+      stepping by exactly 1); the robot stopped 0.300 m from the goal.</li>
+</ul>
+
+<h2 id="plotter">10. Plotter</h2>
+<p>
+  <code>safety_layer_bench_testing/plot_run.py</code>: one script, no ROS (numpy, matplotlib and ffmpeg only). It reads a CSV log and
+  the ESDF bag named in the log's header. The bag is parsed directly, without ROS; the parser returns the same fields as
+  <code>rclpy</code> on all three bags in <code>rosbags/</code> <span class="badge ok">verified</span>.
+</p>
+<h3>Colours</h3>
+<ul>
+  <li><b>Negative ESDF cells (inside an obstacle): empty (white).</b></li>
+  <li>Cells at or above 0: a gradient from red (at an obstacle surface) through yellow, green and cyan to blue and purple (2.0 m, the max distance).
+      This is the rainbow ordering RViz uses for a coloured ESDF; I built it from a list of colours, so it is an approximation of RViz's palette, not a copy.</li>
+  <li>Unknown cells: light grey.</li>
+  <li>Black solid line: the obstacle boundary (ESDF = 0). Black dashed line: the safety margin (0.20 m by default, <code>--margin</code>).</li>
+</ul>
+<h3>Contents</h3>
+<ul>
+  <li><b>Map:</b> the robot's path so far (a faint line shows the whole run), the robot, the latest action chunk in the odom frame (anchored as in
+      the log section), start and goal markers, a dotted start&ndash;goal line, and a readout of time, pose, v, omega, slack and the ESDF at the robot.</li>
+  <li><b>Strips below</b>, with a time cursor: cmd_vel (v and omega), slack (axis labelled per controller from the log header), and the ESDF distance
+      at the robot's centre with the margin dashed. The ESDF distance is a nearest-cell lookup, and unknown cells read as the max distance, as the controllers treat them.</li>
+</ul>
+<p>Options and render times are in section 13. The plot assumes the ESDF frame is <code>odom</code> and warns if the bag says otherwise.</p>
+
+<h2 id="order">11. Build order</h2>
+<ol>
+  <li>Branch <code>safety-layer</code> from <code>origin/main</code>. <span class="badge ok">done</span></li>
+  <li>This document. <span class="badge ok">done</span></li>
+  <li><code>nvblox_msgs</code> on the branch, <code>static_esdf_publisher</code>, <code>sim_robot</code> with logging,
+      <code>sim_bench.launch.py</code>, <code>plot_run.py</code>. <span class="badge ok">done</span></li>
+  <li><code>chunk_generator</code>. <span class="badge ok">done</span></li>
+  <li><code>control/safety_layer/{common, cbf, mpc}</code>, the two launch files, setup and package changes, comment audit. <span class="badge ok">done</span></li>
+  <li>Run both controllers on the head-on scenario and one angled scenario (section 13). <span class="badge ok">done</span> for one 30 s run each; more start-pose deltas are still to try.</li>
+</ol>
+
+<h2 id="open">12. Open / deferred</h2>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>Staleness handling: stale odom / ESDF / chunk</td><td>Deferred to integration time. Today both nodes keep using the last value indefinitely.</td></tr>
+  <tr><td>Hardcoded bag path <code>/home/djstrahan/...</code></td><td>Left as is for now. It appears as a default in three places: <code>sim_robot.py</code>, <code>static_esdf_publisher.py</code> and <code>sim_bench.launch.py</code>.</td></tr>
+  <tr><td>Bench ESDF parameters</td><td>Handled by the <code>patch_size</code> and <code>patch_resolution</code> launch arguments (section 13); the defaults are the deployment values.</td></tr>
+  <tr><td>MPC IPOPT iteration budget (300)</td><td>Flagged in the source as needing a proper look before deployment; 112 iterations was already close to one control period on the dev machine. In the bench runs the MPC solve took 18&ndash;19 ms on average but up to 73 ms, and 0.2&ndash;0.5 % of ticks went over the 66.7 ms period (section 13).</td></tr>
+  <tr><td>Safety margin <code>SAFETY_MARGIN_M = 0.20</code></td><td>Must be checked against the real robot's half-width plus clearance before deployment.</td></tr>
+  <tr><td>Camera side (<code>visual_odom</code>, <code>integrate-visual-odom</code>)</td><td>Not merged. This branch has the Orbbec submodule from <code>main</code> and the EKF launch/config only.</td></tr>
+</table>
+
+<h2 id="running">13. Running the bench</h2>
+<p>
+  What works now: the sim with logging, the ESDF publisher, and the animation. Nothing publishes action chunks or runs a controller
+  yet, so you drive the robot by publishing <code>cmd_vel</code> yourself. All paths are relative to the repo root,
+  <code>/home/djstrahan/aion-r6-vla-master/aion-r6-ROS</code>.
+</p>
+
+<h3 id="run-build">Build</h3>
+<pre><code>source /opt/ros/humble/setup.bash
+colcon build --packages-select nvblox_msgs debug
+source install/setup.bash</code></pre>
+<p>
+  <code>aion_msgs</code> must be built too; it already is in this workspace. Do this once, and again after editing anything in
+  <code>src/debug</code> (the install is not symlinked). The plotter does not need any of this; it runs in a plain shell.
+</p>
+
+<h3 id="run-sim">Start the sim</h3>
+<pre><code>ros2 launch debug sim_bench.launch.py</code></pre>
+<p>
+  Defaults: start at (0.25, 0.0, 0.0), head-on at the single obstacle, <code>esdf_single_obs</code>, 30 s run. The terminal prints the
+  log file it is writing (<code>sim_logs/run_&lt;timestamp&gt;.csv</code>, under the directory you launched from, so launch from the repo root
+  to keep logs in the gitignored <code>sim_logs/</code>). It stops itself after 30 s (<code>max_duration</code>) and shuts the
+  launch down; Ctrl-C also works at any time.
+</p>
+<table>
+  <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td><code>dx</code>, <code>dy</code></td><td>0.0</td><td>Start-position delta from (0.25, 0) in the odom frame [m]</td></tr>
+  <tr><td><code>dtheta</code></td><td>0.0</td><td>Start-heading delta [rad]</td></tr>
+  <tr><td><code>max_duration</code></td><td>30.0</td><td>Stop after this many seconds; 0 runs until stopped</td></tr>
+  <tr><td><code>controller</code></td><td>unknown</td><td>Label for the log header (<code>cbf</code> or <code>mpc</code> selects the slack axis label)</td></tr>
+  <tr><td><code>goal_distance</code></td><td>6.0</td><td>Header only: where the plot draws the goal. Must match the chunk generator's parameter once that exists.</td></tr>
+  <tr><td><code>output_path</code></td><td>(auto)</td><td>CSV path</td></tr>
+  <tr><td><code>bag_path</code></td><td>esdf_single_obs</td><td>Rosbag to take the ESDF from</td></tr>
+</table>
+<pre><code>ros2 launch debug sim_bench.launch.py dy:=0.3 max_duration:=15 controller:=cbf
+ros2 launch debug sim_bench.launch.py dx:=-0.2 dtheta:=0.35 output_path:=sim_logs/angled.csv</code></pre>
+<p>
+  <span class="badge ok">verified</span> by running it: the log is written at about 50 rows/s (1202 rows in a 24 s run), the launch exits with code 0 at
+  <code>max_duration</code>, and Ctrl-C mid-run exits both nodes cleanly and leaves every row up to that point in the file.
+</p>
+
+<h3 id="run-drive">Drive it by hand</h3>
+<p>In a second terminal (with the workspace sourced):</p>
+<pre><code>ros2 topic pub -r 10 cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}, angular: {z: 0.0}}"</code></pre>
+<p>
+  The robot moves straight at 0.3 m/s from its start pose; a non-zero <code>angular.z</code> curves it. The sim holds the last command until
+  a new one arrives, so a <code>--once</code> publish keeps it moving; to stop it:
+</p>
+<pre><code>ros2 topic pub --once cmd_vel geometry_msgs/msg/Twist "{}"</code></pre>
+<p>Useful checks:</p>
+<pre><code>ros2 node list                                   # exactly one /sim_robot
+ros2 topic echo /odom --field pose.pose.position
+ros2 topic hz /nvblox_node/static_map_slice      # ~1 Hz
+ros2 topic pub -r 5 safety_layer/slack std_msgs/msg/Float32 "{data: 0.05}"   # shows up in the slack column</code></pre>
+<p>
+  The sim does not check for obstacles: driving straight down the axis goes through the obstacle, which the plot shows as the path crossing the
+  empty region. The sim stops and the launch exits at <code>max_duration</code>, whatever <code>cmd_vel</code> is still being published. Action chunks are logged whenever something publishes <code>/vla/action_chunk</code>; until then the chunk columns are zero
+  and <code>seq_num</code> is &minus;1, and the animation draws no chunk.
+</p>
+
+<h3 id="run-generator">Run the chunk generator</h3>
+<p>In a third terminal, <b>after</b> the sim is up and <b>before</b> anything moves the robot:</p>
+<pre><code>ros2 run debug chunk_generator
+ros2 run debug chunk_generator --ros-args -p goal_distance:=4.0</code></pre>
+<p>
+  It waits for the first <code>/odom</code> message, latches the goal <code>goal_distance</code> metres ahead of the robot's pose at that moment (it logs
+  <code>Goal latched at ...</code>), then publishes <code>/vla/action_chunk</code> at 8 Hz. Things to know:
+</p>
+<ul>
+  <li>The goal is fixed at the first odometry it sees. If the robot has already moved when you start the generator, the goal is relative to where it is then, and
+      the log header's goal (computed from the start pose) will not match. Start the sim, then the generator, then whatever drives <code>cmd_vel</code>.
+      For a new run restart both.</li>
+  <li>If you change <code>goal_distance</code> here, pass the same value to the sim launch (<code>goal_distance:=...</code>) so the plot draws the goal in the right place.</li>
+  <li>Stop it with Ctrl-C.</li>
+  <li>The chunks show up in the animation (pink line) and in the log's chunk columns.</li>
+</ul>
+<p>
+  Ready-made scenario: <code>dy:=-0.5 dtheta:=0.3</code> starts the robot 0.5 m to the side, heading 17&deg; toward the obstacle's centre
+  (its straight line reaches x = 2.1 at y &asymp; 0.07, inside the obstacle), so it is an angled approach, unlike the default head-on one.
+  With no safety layer the robot drives straight through the obstacle, as the plot shows.
+</p>
+
+<h3 id="run-safety">Run a safety layer</h3>
+<p>Start it last, after the sim and the chunk generator (the safety layer needs odometry, a chunk and the ESDF before it publishes anything):</p>
+<pre><code># terminal 1: sim + ESDF                 (from the repo root)
+ros2 launch debug sim_bench.launch.py controller:=cbf
+# terminal 2: fake VLA
+ros2 run debug chunk_generator
+# terminal 3: the safety layer, with the bench ESDF's patch geometry
+ros2 launch control CBF_safety_layer.launch.py patch_size:=44 patch_resolution:=0.05
+# afterwards
+python3 safety_layer_bench_testing/plot_run.py</code></pre>
+<p>
+  Use <code>MPC_safety_layer.launch.py</code> and <code>controller:=mpc</code> for the MPC. The <code>controller</code> label only sets the slack axis units in the plot, so match it to what you run.
+  Without the two patch arguments the safety layer uses the deployment defaults (22 cells at 0.1 m), which suit a 0.1 m ESDF; the recorded bench ESDF needs the values above.
+  The <code>debug</code> nodes and the safety layer stop with Ctrl-C.
+</p>
+<p>
+  <b>Solve time.</b> Each safety layer node logs how long its solver call took, every tick, as an INFO line:
+  <code>[cbf_safety_layer]: solve_time_ms=0.741</code>. It times only the solve (the CBF-QP, or the MPC's NLP), not the nominal command or the ESDF patch cut.
+  To keep a log for comparison, tee the launch output and pull the numbers out:
+</p>
+<pre><code>ros2 launch control MPC_safety_layer.launch.py 2&gt;&amp;1 | tee mpc_run.log
+grep -o 'solve_time_ms=[0-9.]*' mpc_run.log | cut -d= -f2 &gt; mpc_solve_ms.txt</code></pre>
+<p>
+  Silence it with <code>--ros-args -p print_solve_time:=false</code> when using <code>ros2 run</code>. The lines carry the ROS log timestamp, so a solve time can be matched to a moment in a sim log.
+  <span class="badge ok">verified</span> Measured on this WSL2 machine in the four runs below, over the ~27 s the robot was being driven (408&ndash;409 ticks each; the control period is 66.7 ms):
+</p>
+<table>
+  <tr><th>Run</th><th class="num">Mean [ms]</th><th class="num">Median</th><th class="num">95th percentile</th><th class="num">99th percentile</th><th class="num">Max</th><th class="num">Ticks over 66.7 ms</th></tr>
+  <tr><td>CBF head-on</td><td class="num">0.74</td><td class="num">0.68</td><td class="num">1.13</td><td class="num">1.43</td><td class="num">1.71</td><td class="num">0 %</td></tr>
+  <tr><td>CBF angled</td><td class="num">0.69</td><td class="num">0.68</td><td class="num">0.81</td><td class="num">1.15</td><td class="num">1.66</td><td class="num">0 %</td></tr>
+  <tr><td>MPC head-on</td><td class="num">17.86</td><td class="num">17.37</td><td class="num">27.53</td><td class="num">36.52</td><td class="num">72.65</td><td class="num">0.2 %</td></tr>
+  <tr><td>MPC angled</td><td class="num">19.34</td><td class="num">18.41</td><td class="num">33.36</td><td class="num">50.61</td><td class="num">68.26</td><td class="num">0.5 %</td></tr>
+</table>
+<p>
+  <span class="badge ok">verified</span> Closed loop with the sim and the chunk generator, one 30 s run per row (default start is head-on at the obstacle; the angled start is
+  <code>dy:=-0.5 dtheta:=0.3</code>), with the tuned CBF (alpha 2). Without a safety layer the robot drives through the obstacle (ESDF at its centre reaches &minus;0.15 m). The robot only starts moving
+  about 2.8 s into each run (the sim's <code>cmd_vel</code> subscription and the controller take that long to find each other), so the 30 s cap leaves about 27 s of driving.
+</p>
+<table>
+  <tr><th>Controller</th><th>Start</th><th class="num">Min ESDF at centre [m]</th><th class="num">Time inside the 0.20 m margin</th><th class="num">Max slack</th><th class="num">Distance to goal at 30 s [m]</th></tr>
+  <tr><td>CBF</td><td>head-on</td><td class="num">0.250</td><td class="num">0.0 %</td><td class="num">0.000</td><td class="num">0.51 (still moving)</td></tr>
+  <tr><td>CBF</td><td>angled</td><td class="num">0.224</td><td class="num">0.0 %</td><td class="num">0.000</td><td class="num">0.67 (still moving)</td></tr>
+  <tr><td>MPC</td><td>head-on</td><td class="num">0.180</td><td class="num">1.3 %</td><td class="num">0.023 m</td><td class="num">0.46 (still moving)</td></tr>
+  <tr><td>MPC</td><td>angled</td><td class="num">0.158</td><td class="num">3.1 %</td><td class="num">0.044 m</td><td class="num">0.19 (still moving)</td></tr>
+</table>
+<p>
+  These are single runs. Both controllers detour around the obstacle and head for the goal. The CBF keeps out of the margin with no slack, but slows to about 0.07 m/s while it works round the obstacle
+  (about 10 s, because the pure-pursuit nominal slows down, section 14), so it is slower to the goal than the MPC; the MPC accepts small margin slack. The titled animations of the two head-on runs are
+  <code>sim_logs/cbf_head_on.mp4</code> and <code>sim_logs/mpc_head_on.mp4</code>, made with
+  <code>plot_run.py sim_logs/cbf_head_on.csv --title "CBF safety layer - head-on at the obstacle"</code>.
+</p>
+
+<h3 id="run-render">Render the animation</h3>
+<pre><code>python3 safety_layer_bench_testing/plot_run.py</code></pre>
+<p>
+  With no argument it picks the most recently modified <code>.csv</code> in <code>sim_logs/</code> (in the current directory, else in the repo root) and prints
+  which one it chose. It writes an mp4 next to that log, named like it (for <code>sim_logs/run_20260924_223000.csv</code>, <code>sim_logs/run_20260924_223000.mp4</code>), (1200 &times; 900, 20 fps, H.264, real-time speed) and prints the minimum
+  ESDF distance at the robot's centre. The log can be from a finished run or one that was interrupted.
+</p>
+<table>
+  <tr><th>Option</th><th>Effect</th></tr>
+  <tr><td><code>LOG.csv</code></td><td>Plot this log instead of the newest one</td></tr>
+  <tr><td><code>--out FILE</code></td><td>Video path; a <code>.gif</code> name writes a GIF instead</td></tr>
+  <tr><td><code>--png FILE</code></td><td>Write only the final frame as an image, no video (seconds, good for a first look)</td></tr>
+  <tr><td><code>--show</code></td><td>Play in a window instead of writing a file</td></tr>
+  <tr><td><code>--speed N</code></td><td>Playback speed relative to real time (default 1). Frames are picked by time, so a 24 s log at <code>--speed 2</code> is a 12 s video at any fps.</td></tr>
+  <tr><td><code>--fps N</code></td><td>Video frame rate (default 20)</td></tr>
+  <tr><td><code>--dpi N</code></td><td>Resolution (default 100, which is 1200 &times; 900). Changes render time little (see below).</td></tr>
+  <tr><td><code>--title TEXT</code></td><td>Heading shown above the plot</td></tr>
+  <tr><td><code>--margin M</code></td><td>Safety margin to draw (default 0.20)</td></tr>
+  <tr><td><code>--view X0 X1 Y0 Y1</code></td><td>Map limits in odom metres; default fits the run</td></tr>
+  <tr><td><code>--bag FILE</code></td><td>ESDF bag; default is the one named in the log header</td></tr>
+</table>
+<h3>Why it renders fast</h3>
+<p>
+  The ESDF image, contours, strip traces, legend and labels never change, so the script draws them once and keeps the pixels. Each frame
+  restores those pixels and redraws only what moves (the path so far, the robot, the chunk, the text readout, three time cursors), then pipes the raw frame to
+  ffmpeg. The generic matplotlib animation writer redraws and re-encodes everything each frame, which took about 225 ms per frame here; this takes about 16 ms.
+</p>
+<p>
+  <span class="badge ok">verified</span> on this machine, 24 s run (1202 log rows):
+</p>
+<table>
+  <tr><th>Settings</th><th class="num">Frames</th><th class="num">Render time</th></tr>
+  <tr><td>Previous method, 1200 &times; 900, 25 fps</td><td class="num">602</td><td class="num">136 s</td></tr>
+  <tr><td>Default now: 1200 &times; 900, 20 fps, 1&times; speed</td><td class="num">481</td><td class="num">7 s</td></tr>
+  <tr><td>Same method at 25 fps</td><td class="num">602</td><td class="num">9.6 s</td></tr>
+</table>
+<p>
+  Per frame, measured by rendering 600 frames: 16 ms at 1200 &times; 900, 12 ms at 960 &times; 720, 10 ms at 720 &times; 540. The ffmpeg speed preset makes
+  no measurable difference. So resolution is nearly free and the cost is proportional to the number of frames,
+  (run length &times; fps &divide; speed); a 60 s run at the defaults is about 1200 frames, roughly 20 s. The output frame matches the previous method's
+  frame (105 of 1,080,000 pixels differ, all compression noise). <code>--show</code> opens a window and runs without errors, but I have not watched
+  the animation in it. <code>--png</code> takes a few seconds and gives the final frame.
+</p>
+
+<h3 id="run-trouble">Troubleshooting</h3>
+<table>
+  <tr><th>Symptom</th><th>Cause / fix</th></tr>
+  <tr><td><code>No module named 'nvblox_msgs'</code> or <code>'aion_msgs'</code></td><td>The workspace is not sourced: <code>source install/setup.bash</code>.</td></tr>
+  <tr><td>The robot does not move</td><td>The sim listens on <code>cmd_vel</code> (no leading slash, no namespace). Check with <code>ros2 topic echo cmd_vel</code>.</td></tr>
+  <tr><td>Erratic motion, jumping odometry</td><td>Two sims are running, usually a launch that was not stopped. <code>ros2 node list</code> should show one <code>/sim_robot</code>; kill the stray <code>sim_robot</code> and <code>static_esdf_publisher</code> processes.</td></tr>
+  <tr><td><code>ffmpeg not found</code></td><td><code>sudo apt install ffmpeg</code>, or use <code>--png</code> or <code>--out RUN.gif</code>.</td></tr>
+  <tr><td>Plot is zoomed on the wrong area</td><td>Pass <code>--view X0 X1 Y0 Y1</code>.</td></tr>
+  <tr><td>Plotter cannot find the bag</td><td>The log header holds the absolute path from when the sim ran. Pass <code>--bag</code>.</td></tr>
+  <tr><td>Static ESDF publisher fails to start</td><td>The <code>bag_path</code> does not exist or has no <code>/nvblox_node/static_map_slice</code> messages; the error names the file.</td></tr>
+</table>
+
+<h2 id="tuning">14. Tuning the CBF</h2>
+<p>
+  The CBF has few knobs, and they interact. This section says what each one does, how the current values were arrived at, and how to repeat the process with
+  <code>safety_layer_bench_testing/cbf_tuning.py</code>.
+</p>
+
+<h3 id="tune-knobs">What the knobs do</h3>
+<p>
+  The filter solves, every tick, for the [v, omega] closest to the nominal command that keeps a <i>barrier</i> non-negative. The barrier is
+  <code>h = (ESDF distance at a point LOOKAHEAD_M ahead of the robot) &minus; (margin)</code>, and the condition is <code>dh/dt &ge; &minus;alpha&middot;h</code>: as the robot gets close, it may only close in ever more slowly.
+</p>
+<table>
+  <tr><th>Knob</th><th class="num">Value</th><th>What it does</th><th>Raise it</th><th>Lower it</th></tr>
+  <tr><td><code>CBF_EXTRA_MARGIN_M</code></td><td class="num">0.15</td>
+      <td>Added to <code>SAFETY_MARGIN_M</code> (0.20) to make the barrier's margin (0.35). The barrier watches a point ahead of the robot, so the robot's <i>centre</i> can be closer to an obstacle than the barrier says; this covers that.</td>
+      <td>The centre stays farther out (0.20 extra: min centre 0.269 m instead of 0.206 m). More conservative in tight spaces; brakes earlier.</td>
+      <td>The centre dips inside the real margin: with 0 extra it spent 11&ndash;13 % of a run inside 0.20 m.</td></tr>
+  <tr><td><code>LOOKAHEAD_M</code></td><td class="num">0.4</td>
+      <td>How far ahead of the robot the barrier is evaluated. Turning moves that point sideways by <code>lookahead &times; omega</code>, which is what gives omega any effect on the barrier. At 0 the filter could only brake.</td>
+      <td>More steering authority and earlier reaction; more conservative. The lookahead plus the margin must fit inside the ESDF patch (0.75 m of a 1.1 m half-patch now).</td>
+      <td>Less steering authority. At 0.1 m, with the omega weight at 1, none of 4 start poses reached the goal.</td></tr>
+  <tr><td><code>CBF_WEIGHT_OMEGA</code> (vs <code>CBF_WEIGHT_V</code> = 1)</td><td class="num">0.003</td>
+      <td>The cost of changing omega from the nominal, relative to changing v. The nominal is obstacle-blind and keeps pointing at the obstacle.</td>
+      <td>The filter prefers braking to steering. At 1.0 the robot stops in front of the obstacle and stays there (0 of 5 start poses reached the goal).</td>
+      <td>The filter steers freely round the obstacle. Below about 0.01 it makes no measurable difference.</td></tr>
+  <tr><td><code>CBF_ALPHA</code></td><td class="num">2.0</td>
+      <td>How fast <code>h</code> may shrink. It sets how hard the filter brakes on the way in, and how hard it pushes out once inside the margin.</td>
+      <td>Brakes later and harder. Slack starts to be used (max 0.009 at 2, 0.080 at 3, 0.24 at 6).</td>
+      <td>Brakes earlier and gentler.</td></tr>
+  <tr><td><code>CBF_SLACK_WEIGHT</code></td><td class="num">1000</td>
+      <td>The price of violating the barrier. It only matters when the barrier cannot be met (the robot is already inside the margin).</td>
+      <td colspan="2">10 to 100000 made no difference in the sweeps, which were run with the omega weight at 1, where the robot stalls either way. Not re-checked with the current omega weight.</td></tr>
+  <tr><td><code>PP_K_CURV</code> (common)</td><td class="num">1.0</td>
+      <td>Not a CBF knob: it is the pure-pursuit nominal's slowdown in curves, <code>v = V_MAX / (1 + K&middot;|curvature|)</code>. It matters here because the CBF filters that nominal.</td>
+      <td>Slower through detours.</td>
+      <td>Modestly faster: 0.5 took the runs that reached the goal within 30 s from 12 to 14 of 15 (section 14 below).</td></tr>
+  <tr><td><code>SAFETY_MARGIN_M</code>, <code>V_MAX</code>, <code>OMEGA_MAX</code> (common)</td><td class="num">0.20, 0.3, 0.3</td>
+      <td>Physical: the robot's half-width plus clearance, and the platform limits. Shared with the MPC; not tuning knobs. The omega limit bounds how fast the filter can steer.</td>
+      <td colspan="2"></td></tr>
+</table>
+<div class="callout">
+  <b>The two tensions to remember.</b> (1) Safety filter versus progress: the more the filter is allowed to brake and the less it is allowed to steer, the more the robot stops in front of obstacles.
+  Omega weight and lookahead set that balance. (2) The barrier watches a point ahead, the margin is about the centre: extra margin is what closes that gap.
+</div>
+
+<h3 id="tune-process">The process</h3>
+<ol>
+  <li><b>Say what good means, as numbers.</b> For each run: the share of time the robot's <i>centre</i> is inside the 0.20 m margin, the smallest centre distance, whether it stalled or reached the goal, the slack used, and the smallest barrier value.
+      Judge the centre, not the barrier: the margin is a property of the robot.</li>
+  <li><b>Make the loop fast.</b> A ROS run takes 35 s. <code>cbf_tuning.py</code> replays the sim, the chunk generator and the CBF node offline using the same code, so a run takes about 0.4 s and 15 start poses about 6 s.
+      <span class="badge ok">verified</span> It reproduced a ROS run before it was trusted: minimum centre distance 0.112 m in both, maximum slack 0.351 versus 0.354, final distance to goal 0.28 m in both.</li>
+  <li><b>Look inside a bad run before touching a knob.</b> The first run had the centre inside the margin 25&ndash;30 % of the time. The timeline showed the barrier at &minus;0.14 while the filter was still commanding full speed and paying 0.35 of slack.
+      That could not be optimal, so the solver was checked against an independent solve of the same QP (identical), and the QP's coefficient on forward speed was printed: it was about 0. That was the derivative defect (section 5), not a tuning problem. Tuning around it would have hidden it.</li>
+  <li><b>Fix, then re-measure.</b> With the derivative fixed the margin held (0 %), but the robot now stopped in front of the obstacle: a correct filter with a blind nominal pointing at the obstacle has nothing pushing it sideways.</li>
+  <li><b>Sweep one knob, then several together.</b> Alpha and the slack weight did nothing for progress. Lookahead of 0.4 m and above helped a little (1 of 4 poses reached the goal instead of 0). The omega weight was the lever: low values let the filter steer round the obstacle and every start pose reached the goal, at the price of the centre dipping inside the margin (11&ndash;13 % of a run).</li>
+  <li><b>Understand the cost before paying it.</b> That dip is geometry (barrier ahead, margin about the centre). Two answers were tried: a second barrier on the centre (rejected: the robot parked against the margin and did not progress), and a larger margin on the lookahead barrier (adopted).</li>
+  <li><b>Check that the choice is not fitted to the poses used.</b> The chosen values were then run on 15 start poses (the sweeps used four to six): 0 % inside the margin, none stalled. The runs that did not reach the goal in 30 s were checked and were still moving at full speed 1.1&ndash;1.9 m short, on longer detours; they were not stalls.</li>
+  <li><b>Confirm in ROS</b> with the real nodes and the sim (section 13), and compare with the offline numbers.</li>
+</ol>
+<p>Repeating it:</p>
+<pre><code>source install/setup.bash
+python3 safety_layer_bench_testing/cbf_tuning.py                              # the repo's values
+python3 safety_layer_bench_testing/cbf_tuning.py --sweep alpha=1,2,3          # one knob
+python3 safety_layer_bench_testing/cbf_tuning.py --sweep weight_omega=1,0.1,0.01 --sweep lookahead=0.25,0.4
+python3 safety_layer_bench_testing/cbf_tuning.py --set extra_margin=0.2 --k-curv 0.5</code></pre>
+<p>
+  Each variant is run from 15 start poses for 30 s, and the columns are the worst share of a run the centre spends inside the margin, the smallest centre distance, the smallest barrier value, the largest slack used,
+  how many runs end within 0.6 m of the goal, and the mean time to come within 0.5 m of it. Knobs: <code>alpha</code>, <code>lookahead</code>, <code>weight_v</code>, <code>weight_omega</code>, <code>slack_weight</code>, <code>extra_margin</code>; <code>--k-curv</code> sets <code>PP_K_CURV</code>.
+</p>
+<p><b>Limits of what was tuned on.</b> One recorded ESDF with one small obstacle, a blind fake VLA aimed straight at it, and a kinematic sim with no actuator lag. The other two recorded ESDFs were not used. Re-run the sweeps if any of those change.</p>
+
+<h3 id="tune-results">Results at each step</h3>
+
+<p>
+  Offline closed loop (the same code as the nodes, on the bench ESDF; the offline replica reproduced the ROS run: min centre distance 0.112 m in both, max slack 0.351 vs 0.354).
+  &ldquo;Inside&rdquo; is the share of a 30 s run the robot's centre spends within 0.20 m of an obstacle.
+</p>
+<table>
+  <tr><th>Variant</th><th>Centre inside 0.20 m margin</th><th class="num">Min centre distance</th><th>Reaches the goal</th></tr>
+  <tr><td>Original (derivative defect), old parameters</td><td class="num">26.7 % / 30.5 % (head-on / angled)</td><td class="num">0.112 m</td><td>yes, but barrier violated by up to 0.14 m, slack 0.35</td></tr>
+  <tr><td>Derivative fixed, old parameters</td><td class="num">0 %</td><td class="num">0.25 m</td><td>no: stops in front of the obstacle (0 of 5 start poses)</td></tr>
+  <tr><td>Fixed, low omega weight and alpha only</td><td class="num">11&ndash;13 %</td><td class="num">0.10&ndash;0.14 m</td><td>yes (6 of 6)</td></tr>
+  <tr><td>Fixed, plus a second barrier on the robot's centre</td><td class="num">0 % with omega weight 1, 37&ndash;70 % with a low one</td><td class="num">0.16&ndash;0.25 m</td><td>no (0 of 6, or 1 of 6): rejected</td></tr>
+  <tr><td><b>Fixed, extra margin 0.15, lookahead 0.4, alpha 1, omega weight 0.003 (adopted; alpha later raised to 2, see below)</b></td><td class="num"><b>0 %</b> on 15 start poses</td><td class="num"><b>0.206 m</b></td><td>none stalled; 12 of 15 within 30 s, the other 3 still moving at full speed 1.1&ndash;1.9 m short (longer detours)</td></tr>
+</table>
+<p>
+  <span class="badge ok">verified</span> The 15 start poses are y offsets of &minus;0.6 to +0.6 m at heading 0, plus eight angled or offset ones. Increasing <code>CBF_ALPHA</code> or <code>CBF_SLACK_WEIGHT</code> did not restore progress
+  when the omega weight stayed high. A larger extra margin (0.20 m instead of 0.15, so a barrier margin of 0.40 m) gives more spare distance (min centre 0.269 m, 13 of 15 within 30 s) at the price of being more conservative in tight spaces.
+  The filter is a safety filter, not a planner: whether the robot gets round an obstacle depends on it being free to steer, which is what the low omega weight allows.
+</p>
+
+
+<h3 id="tune-speed">Alpha and speed</h3>
+<p>
+  The robot creeps past the obstacle at about 0.07 m/s, so alpha was raised from 1 to 2 to try to trade a little margin for speed. It made no measurable difference.
+  <span class="badge ok">verified</span> With everything else at the current values, on 15 start poses:
+</p>
+<table>
+  <tr><th class="num">Alpha</th><th class="num">Centre inside 0.20 m</th><th class="num">Min centre [m]</th><th class="num">Max slack</th><th class="num">Reached in 30 s</th><th class="num">Mean time to within 0.5 m of goal</th></tr>
+  <tr><td class="num">1</td><td class="num">0 %</td><td class="num">0.206</td><td class="num">0.000</td><td class="num">12 of 15</td><td class="num">24.3 s</td></tr>
+  <tr><td class="num">1.5</td><td class="num">0 %</td><td class="num">0.224</td><td class="num">0.000</td><td class="num">12 of 15</td><td class="num">24.1 s</td></tr>
+  <tr><td class="num">2 (now)</td><td class="num">0 %</td><td class="num">0.206</td><td class="num">0.009</td><td class="num">12 of 15</td><td class="num">24.3 s</td></tr>
+  <tr><td class="num">3</td><td class="num">0 %</td><td class="num">0.206</td><td class="num">0.080</td><td class="num">12 of 15</td><td class="num">24.5 s</td></tr>
+  <tr><td class="num">6</td><td class="num">0 %</td><td class="num">0.206</td><td class="num">0.236</td><td class="num">12 of 15</td><td class="num">24.5 s</td></tr>
+</table>
+<p>
+  The slowness does not come from the filter. Over the creep (t = 4&ndash;20 s, head-on) the mean nominal speed and the mean filtered speed are both 0.153 m/s, and 55 % of the time the <i>nominal</i> is below 0.1 m/s.
+  The filter holds the heading off the goal direction, so pure pursuit sees a large, lasting heading error, computes a high curvature, and its slowdown (<code>V_MAX / (1 + K&middot;|curvature|)</code>, then the
+  v&ndash;omega saturation) cuts speed to about 0.07 m/s even though the filter never lets the turn happen. Lowering <code>PP_K_CURV</code> helps only a little:
+</p>
+<table>
+  <tr><th class="num">PP_K_CURV</th><th class="num">Reached in 30 s</th><th class="num">Mean time to within 0.5 m of goal</th><th class="num">Centre inside 0.20 m</th><th class="num">Min centre [m]</th></tr>
+  <tr><td class="num">1.0 (now)</td><td class="num">12 of 15</td><td class="num">24.3 s</td><td class="num">0 %</td><td class="num">0.206</td></tr>
+  <tr><td class="num">0.5</td><td class="num">14 of 15</td><td class="num">23.3 s</td><td class="num">0 %</td><td class="num">0.206</td></tr>
+  <tr><td class="num">0.25</td><td class="num">14 of 15</td><td class="num">23.0 s</td><td class="num">0 %</td><td class="num">0.206</td></tr>
+  <tr><td class="num">0</td><td class="num">14 of 15</td><td class="num">22.8 s</td><td class="num">0 %</td><td class="num">0.206</td></tr>
+</table>
+<p>
+  <code>PP_K_CURV</code> is in <code>common/constants.py</code> and is left at 1.0: it only affects the CBF's nominal here, but it is also the free-space cornering behaviour, so it was not changed without a decision.
+  A larger speed-up would need the nominal to stop slowing for a turn the filter will not execute, which is a change to the design rather than to a knob.
+</p>
+</main>
+</body>
+</html>

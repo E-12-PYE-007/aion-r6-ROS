@@ -1,3 +1,6 @@
+import os
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'control'
@@ -10,6 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools', 'basicmicro'],
     zip_safe=True,
@@ -27,6 +31,8 @@ setup(
             'roboclaw_for_motors = control.roboclaw_for_motors:main',
             'pure_pursuit_controller = control.pure_pursuit_controller:main',
             'cmd_vel_to_roboclaw = control.cmd_vel_to_roboclaw:main',
+            'cbf_safety_layer = control.safety_layer.cbf.cbf_safety_layer:main',
+            'mpc_safety_layer = control.safety_layer.mpc.mpc_safety_layer:main',
         ],
     },
 )

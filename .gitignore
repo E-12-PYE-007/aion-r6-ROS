@@ -48,3 +48,6 @@ Thumbs.db
 /ekf_trials/
 /matlab scripts/
 /scripts/tmp_wheel_covariance_relay.py
+
+# Bench-test sim logs and renders
+sim_logs/
