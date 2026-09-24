@@ -49,9 +49,9 @@ Drive rate params:
 | param | default | notes |
 |---|---|---|
 | `cmd_vel_topic` | `/cmd_vel` | topic to publish teleop commands on |
-| `forward_rate` | `0.3` (m/s) | up-arrow speed |
-| `backward_rate` | `0.3` (m/s) | down-arrow speed |
-| `rotation_rate` | `0.3` (rad/s) | left/right-arrow yaw rate |
+| `forward_rate` | `0.4` (m/s) | up-arrow speed |
+| `backward_rate` | `0.4` (m/s) | down-arrow speed |
+| `rotation_rate` | `0.4` (rad/s) | left/right-arrow yaw rate |
 | `hz` | `10.0` | command publish rate |
 | `key_timeout` | `0.5` (s) | command returns to zero when arrow key repeats stop |
 
@@ -73,7 +73,7 @@ Extra descriptor letters can describe the run, for example `s` straight, `o` obs
 For drive-only testing without episode control, `bringup` also provides a `key_teleop` wrapper:
 
 ```
-ros2 launch bringup teleop_launch.py forward_rate:=0.3 backward_rate:=0.3 rotation_rate:=0.3
+ros2 launch bringup teleop_launch.py forward_rate:=0.4 backward_rate:=0.4 rotation_rate:=0.4
 ```
 
 ## Service interface (`episode_data_collector`)

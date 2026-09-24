@@ -101,6 +101,20 @@ class RoboclawForMotorsNode(Node):
         """Clamp motor duty cycle to the configured safety limit."""
         return max(low, min(high, value))
 
+    def send_roboclaw_command(self, label, command, *args):
+        """Send one Roboclaw command without letting serial timeouts kill ROS."""
+        try:
+            if not command(self.address, *args):
+                self.get_logger().warn(f"Roboclaw did not acknowledge {label} command")
+                return False
+            return True
+        except Exception as exc:
+            self.get_logger().warn(
+                f"Roboclaw {label} command failed: {exc}",
+                throttle_duration_sec=2.0,
+            )
+            return False
+
     def drive_motors_callback(self, msg):
         """Apply sign multipliers, command Roboclaw, and report actual duty sent."""
         duty_left = self.clamp(float(msg.left) * self.left_multiplier, -self.max_duty_cycle, self.max_duty_cycle)
@@ -110,8 +124,7 @@ class RoboclawForMotorsNode(Node):
             rc_left = int(duty_left * PERCENT_TO_ROBOCLAW)
             rc_right = int(duty_right * PERCENT_TO_ROBOCLAW)
             # M1 = right wheel, M2 = left wheel.
-            if not self.roboclaw.DutyM1M2(self.address, rc_right, rc_left):
-                self.get_logger().warn("Roboclaw did not acknowledge DutyM1M2 command")
+            self.send_roboclaw_command("DutyM1M2", self.roboclaw.DutyM1M2, rc_right, rc_left)
 
         out = LeftRightFloat32()
         out.left = float(duty_left)
@@ -131,8 +144,12 @@ class RoboclawForMotorsNode(Node):
 
         if self.connected:
             # M1 = right wheel, M2 = left wheel.
-            if not self.roboclaw.SpeedM1M2(self.address, int(velocity_right), int(velocity_left)):
-                self.get_logger().warn("Roboclaw did not acknowledge SpeedM1M2 command")
+            self.send_roboclaw_command(
+                "SpeedM1M2",
+                self.roboclaw.SpeedM1M2,
+                int(velocity_right),
+                int(velocity_left),
+            )
 
         out = LeftRightFloat32()
         out.left = float(velocity_left)

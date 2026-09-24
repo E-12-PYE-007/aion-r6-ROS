@@ -19,17 +19,17 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     forward_rate_arg = DeclareLaunchArgument(
         'forward_rate',
-        default_value='0.3',
+        default_value='0.4',
         description='Forward speed in m/s for the up arrow',
     )
     backward_rate_arg = DeclareLaunchArgument(
         'backward_rate',
-        default_value='0.3',
+        default_value='0.4',
         description='Reverse speed in m/s for the down arrow',
     )
     rotation_rate_arg = DeclareLaunchArgument(
         'rotation_rate',
-        default_value='0.3',
+        default_value='0.4',
         description='Yaw rate in rad/s for left/right arrows',
     )
     hz_arg = DeclareLaunchArgument(

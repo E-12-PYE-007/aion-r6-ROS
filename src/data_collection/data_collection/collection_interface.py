@@ -80,9 +80,9 @@ class CollectionInterfaceClient(Node):
         super().__init__('collection_interface')
 
         cmd_vel_topic = self.declare_parameter('cmd_vel_topic', '/cmd_vel').value
-        self.forward_rate = float(self.declare_parameter('forward_rate', 0.3).value)
-        self.backward_rate = float(self.declare_parameter('backward_rate', 0.3).value)
-        self.rotation_rate = float(self.declare_parameter('rotation_rate', 0.3).value)
+        self.forward_rate = float(self.declare_parameter('forward_rate', 0.4).value)
+        self.backward_rate = float(self.declare_parameter('backward_rate', 0.4).value)
+        self.rotation_rate = float(self.declare_parameter('rotation_rate', 0.4).value)
         self.hz = float(self.declare_parameter('hz', 10.0).value)
         self.key_timeout = float(self.declare_parameter('key_timeout', 0.5).value)
 
@@ -93,6 +93,7 @@ class CollectionInterfaceClient(Node):
         self.recording = False
         self.episode_dir = None
         self.last_pressed = {}
+        self.last_command = None
 
     def wait_for_services(self, timeout_sec=5.0):
         for cli, name in ((self.start_cli, 'start_episode'), (self.stop_cli, 'stop_episode')):
@@ -152,7 +153,7 @@ class CollectionInterfaceClient(Node):
             return True
         return False
 
-    def publish_drive_command(self):
+    def publish_drive_command(self, force=False):
         now = self.get_clock().now()
         active_keys = [
             key for key, stamp in self.last_pressed.items()
@@ -171,14 +172,21 @@ class CollectionInterfaceClient(Node):
         if KEY_RIGHT in active_keys:
             angular -= self.rotation_rate
 
+        command = (linear, angular)
+        if not force and command == self.last_command:
+            return
+
         cmd = Twist()
         cmd.linear.x = linear
         cmd.angular.z = angular
         self.cmd_vel_pub.publish(cmd)
+        self.last_command = command
 
     def stop_drive(self):
         self.last_pressed.clear()
-        self.cmd_vel_pub.publish(Twist())
+        if self.last_command != (0.0, 0.0):
+            self.cmd_vel_pub.publish(Twist())
+            self.last_command = (0.0, 0.0)
 
 
 def prompt_for_episode(node):
@@ -222,6 +230,7 @@ def main(args=None):
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.0)
             key = read_key(1.0 / node.hz)
+            drive_key = False
 
             if key in QUIT_KEYS:
                 node.stop_drive()
@@ -241,9 +250,9 @@ def main(args=None):
                 elif node.stop_episode():
                     node.confirm_save()
             elif key is not None:
-                node.handle_drive_key(key)
+                drive_key = node.handle_drive_key(key)
 
-            node.publish_drive_command()
+            node.publish_drive_command(force=drive_key)
     finally:
         node.stop_drive()
         node.destroy_node()
