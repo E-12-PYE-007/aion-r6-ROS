@@ -20,7 +20,7 @@ def generate_launch_description():
     )
     max_yaw_rate_arg = DeclareLaunchArgument(
         'max_yaw_rate',
-        default_value='0.4',
+        default_value='0.6',
         description='Max yaw rate in rad/s (teleop_twist_joy scale_angular.yaw)',
     )
 
