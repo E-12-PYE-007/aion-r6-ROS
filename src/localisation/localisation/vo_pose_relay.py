@@ -134,7 +134,27 @@ class VoPoseRelay(Node):
         output.pose.pose.orientation.y = qy
         output.pose.pose.orientation.z = qz
         output.pose.pose.orientation.w = qw
-        output.pose.covariance = rotate_covariance(msg.pose.covariance, angle)
+
+        position_variance_multiplier = 10000.0
+
+        yaw_variance_multiplier = 4.0
+
+        cov = rotate_covariance(msg.pose.covariance, angle)
+
+        # Covariance order: x, y, z, roll, pitch, yaw.
+        scales = [
+            math.sqrt(position_variance_multiplier),
+            math.sqrt(position_variance_multiplier),
+            1.0, 1.0, 1.0,
+            math.sqrt(yaw_variance_multiplier),
+        ]
+        output.pose.covariance = [
+            cov[6*i + j] * scales[i] * scales[j]
+            for i in range(6)
+            for j in range(6)
+        ]
+
+
         self.publisher.publish(output)
 
 
