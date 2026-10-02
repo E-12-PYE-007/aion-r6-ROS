@@ -88,17 +88,17 @@ def generate_launch_description():
         ],
     )
 
-    navsat_node = Node(
+    navsat_transform_node = Node(
         package='robot_localization',
         executable='navsat_transform_node',
-        name='navsat_transform',
+        name='navsat_transform_node',
         output='screen',
         parameters=[
             NAVSAT_CONFIG_FILE,
             {'use_sim_time': use_sim_time},
         ],
         remappings=[
-            ('imu', '/mavros_fcu/mavros_fcu/data'),
+            ('imu/data', '/mavros_fcu/mavros_fcu/data'),
             ('gps/fix',
             '/mavros_fcu/mavros_fcu/global_position/raw/fix'),
             ('odometry/filtered', '/odometry/local'),
@@ -116,5 +116,5 @@ def generate_launch_description():
         encoder_node,
         local_ekf_node,
         global_ekf_node,
-        navsat_node,
+        navsat_transform_node,
     ])
