@@ -98,10 +98,9 @@ def generate_launch_description():
             {'use_sim_time': use_sim_time},
         ],
         remappings=[
-            ('imu/data', '/mavros_fcu/mavros_fcu/data'),
-            ('gps/fix',
-            '/mavros_fcu/mavros_fcu/global_position/raw/fix'),
-            ('odometry/filtered', '/odometry/local'),
+            ('imu', '/mavros_fcu/mavros_fcu/data'),
+            ('gps/fix', '/mavros_fcu/mavros_fcu/raw/fix'),
+            ('odometry/filtered', '/odometry/global'),
             ('odometry/gps', '/odometry/gps'),
         ],
     )
