@@ -1,15 +1,15 @@
-"""Bring up the rover for real action-chunk-following (no simulated input):
+"""Bring up the rover's camera, localisation, and drivable control stack:
 
-camera (Gemini 336) ---------------------------------------+
-                                                             v
-    [/vla/action_chunk] -> pure_pursuit_controller -> cmd_vel_to_roboclaw -> roboclaw_for_motors
-                                    ^                                              |
-                                    +------------------------ ekf_filter_node_local <--- encoder_localisation
-                                                                       ^
-                                                                mavros (IMU)
+camera (Gemini 336)
 
-Unlike pp-roboclaw-test.py, this does not launch simulate_action_chunk --
-/vla/action_chunk must be published by something else (e.g. ag_vla's sys1).
+    [/cmd_vel] -> cmd_vel_to_roboclaw -> roboclaw_for_motors
+                                              |
+                       ekf_filter_node_local <--- encoder_localisation
+                              ^
+                       mavros (IMU)
+
+/cmd_vel must be published by something else (e.g. pure_pursuit_controller,
+collection_interface, or key_teleop).
 
 mavros is included because the EKF config (local_ekf_wheel_imu.yaml) fuses
 IMU data from /mavros_fcu/mavros_fcu/data_raw alongside wheel odometry.
@@ -95,12 +95,6 @@ def generate_launch_description():
             package='control',
             executable='cmd_vel_to_roboclaw',
             name='cmd_vel_to_roboclaw',
-            output='screen',
-        ),
-        Node(
-            package='control',
-            executable='pure_pursuit_controller',
-            name='pure_pursuit_controller',
             output='screen',
         ),
     ])
