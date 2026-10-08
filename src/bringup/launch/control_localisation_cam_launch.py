@@ -11,6 +11,9 @@ camera (Gemini 336)
 /cmd_vel must be published by something else (e.g. pure_pursuit_controller,
 collection_interface, or key_teleop).
 
+system_monitor (data_collection) publishes CPU/GPU/memory/process stats on
+/system_diagnostics.
+
 mavros is included because the EKF config (local_ekf_wheel_imu.yaml) fuses
 IMU data from /mavros_fcu/mavros_fcu/data_raw alongside wheel odometry.
 """
@@ -95,6 +98,12 @@ def generate_launch_description():
             package='control',
             executable='cmd_vel_to_roboclaw',
             name='cmd_vel_to_roboclaw',
+            output='screen',
+        ),
+        Node(
+            package='data_collection',
+            executable='system_monitor',
+            name='system_monitor',
             output='screen',
         ),
     ])
