@@ -27,6 +27,7 @@ setup(
             'chunk_data_collector = data_collection.chunk_data_collector:main',
             'stream_data_collector = data_collection.stream_data_collector:main',
             'mocap_data_collector = data_collection.mocap_data_collector:main',
+            'system_monitor = data_collection.system_monitor:main',
         ],
     },
 )
