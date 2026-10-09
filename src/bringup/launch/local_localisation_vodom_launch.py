@@ -34,6 +34,16 @@ def generate_launch_description():
         )
     )
 
+    camera_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('localisation'),
+                'launch',
+                'camera.launch.py',
+            )
+        )
+    )
+
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
@@ -82,4 +92,5 @@ def generate_launch_description():
         encoder_node,
         vo_pose_relay_node,
         ekf_node,
+        camera_launch,
     ])

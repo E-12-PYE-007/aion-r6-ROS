@@ -45,6 +45,15 @@ def generate_launch_description():
         )
     )
 
+    camera_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('localisation'),
+                'launch',
+                'camera.launch.py',
+            )
+        )
+    )
     
     encoder_node = Node(
         package='localisation',
@@ -116,4 +125,5 @@ def generate_launch_description():
         local_ekf_node,
         global_ekf_node,
         navsat_transform_node,
+        camera_launch,
     ])
