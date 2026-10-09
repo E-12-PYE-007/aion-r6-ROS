@@ -45,6 +45,7 @@ def generate_launch_description():
             executable='pure_pursuit_controller',
             name='pure_pursuit_controller',
             output='screen',
+            remappings=[('/odometry/filtered', '/odometry/wheel')],  # no EKF in this test
         ),
         Node(
             package='debug',
