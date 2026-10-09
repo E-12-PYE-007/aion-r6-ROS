@@ -1,7 +1,9 @@
 import os
 from glob import glob
+
 from setuptools import find_packages, setup
-package_name = 'localisation'
+
+package_name = 'weed_geotagging'
 
 setup(
     name=package_name,
@@ -11,13 +13,13 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='dstrahan',
     maintainer_email='dan.strahan08@gmail.com',
-    description='State-estimation nodes for the Aion R6 rover -- turns raw sensor sources into pose/velocity estimates.',
+    description='Project weed detections through depth into robot/map coordinates.',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -26,8 +28,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'encoder_localisation = localisation.encoder_localisation:main',
-            'vo_pose_relay = localisation.vo_pose_relay:main',
+            'weed_geotagger = weed_geotagging.weed_geotagger:main',
+            'fake_weed_inputs = weed_geotagging.fake_weed_inputs:main',
+            'yolo_weed_detector = weed_geotagging.yolo_weed_detector:main',
         ],
     },
 )

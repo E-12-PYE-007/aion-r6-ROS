@@ -45,9 +45,9 @@ ros2 run data_collection collection_interface
 
 It's kept out of the launch file deliberately — it needs a real attached terminal for raw keypress capture and `input()` prompts, which `ros2 launch` doesn't reliably provide to spawned processes (same reason `teleop_twist_keyboard` is normally run by hand). It also needs to run on the same machine as `episode_data_collector`: discarding an episode deletes its directory straight off local disk, so client and collector must share a filesystem.
 
-In `collection_interface`: `x` start (prompts for a name, then a prompt describing the episode), `s` stop (then asks `Save episode? [y/n]`, deleting the episode directory on `n`), `q` quit (stops + asks to save first if recording).
+In `collection_interface`: `x` start (prompts for an episode descriptor and derives the prompt automatically), `s` stop (then asks `Save episode? [y/n]`, deleting the episode directory on `n`), `q` quit (stops + asks to save first if recording).
 
-Suggested name format: `<target>_<follow_side>_turn_<turns>`. Not enforced — just a hint at the prompt.
+Episode descriptors must start with `fl` or `fr`. `fl...` records the prompt `follow the fence on your left`; `fr...` records `follow the fence on your right`. Extra descriptor letters can describe the run, for example `s` straight, `o` obstacle, `c` clear, `tr` turn right, or `tl` turn left, but only the leading `fl` or `fr` affects the language prompt.
 
 ## Service interface (`episode_data_collector`)
 
