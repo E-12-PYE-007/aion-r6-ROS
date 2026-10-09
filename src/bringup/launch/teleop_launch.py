@@ -15,12 +15,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     max_linear_speed_arg = DeclareLaunchArgument(
         'max_linear_speed',
-        default_value='0.4',
+        default_value='0.3',
         description='Max linear speed in m/s (teleop_twist_joy scale_linear.x) -- conservative default, tune before real runs',
     )
     max_yaw_rate_arg = DeclareLaunchArgument(
         'max_yaw_rate',
-        default_value='0.6',
+        default_value='0.3',
         description='Max yaw rate in rad/s (teleop_twist_joy scale_angular.yaw)',
     )
 
@@ -29,6 +29,11 @@ def generate_launch_description():
         executable='joy_node',
         name='joy_node',
         output='screen',
+        parameters=[{
+            # Stick deadzone is applied here in joy_node; teleop_twist_joy has no
+            # deadzone param and silently ignores one.
+            'deadzone': 0.20,
+        }],
     )
 
     teleop_twist_joy_node = Node(
