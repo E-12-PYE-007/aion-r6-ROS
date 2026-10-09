@@ -27,6 +27,7 @@ setup(
             'roboclaw_for_motors = control.roboclaw_for_motors:main',
             'pure_pursuit_controller = control.pure_pursuit_controller:main',
             'cmd_vel_to_roboclaw = control.cmd_vel_to_roboclaw:main',
+            'cbf_safety_layer = control.safety_layer.cbf_safety_layer:main',
         ],
     },
 )
