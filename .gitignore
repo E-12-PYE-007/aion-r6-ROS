@@ -8,6 +8,9 @@ log/
 # *.mcap
 # rosbag2_*/
 
+# Saved images
+# image/
+
 # Python cache artifacts
 __pycache__/
 *.py[cod]
