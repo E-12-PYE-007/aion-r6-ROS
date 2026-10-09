@@ -44,7 +44,7 @@ class CbfSafetyLayerNode(Node):
 
         self.declare_parameter('patch_size', PATCH_SIZE)
         self.declare_parameter('patch_resolution', PATCH_RESOLUTION)
-        self.declare_parameter('print_solve_time', True)
+        self.declare_parameter('print_solve_time', False)
         self._print_solve_time = bool(self.get_parameter('print_solve_time').value)
         patch_size = int(self.get_parameter('patch_size').value)
         patch_resolution = float(self.get_parameter('patch_resolution').value)
