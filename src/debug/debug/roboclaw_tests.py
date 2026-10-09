@@ -50,7 +50,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import rclpy
-from aion_msgs.msg import LeftRightFloat32, LeftRightInt32
+from custom_msgs.msg import LeftRightFloat32, LeftRightInt32
 from rclpy.node import Node
 
 # Shared robot geometry / calibration constants -- previously duplicated

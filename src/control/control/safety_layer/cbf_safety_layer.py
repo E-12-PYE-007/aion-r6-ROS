@@ -5,7 +5,7 @@ A pure-pursuit controller turns the latest chunk into a nominal (v, omega), and 
 filter (cbf_qp.py) changes it as little as needed to keep the robot outside the ESDF safety
 margin.
 
-Subscribes: /odometry/filtered, /vla/action_chunk, /nvblox_node/static_map_slice
+Subscribes: /odometry/filtered, /agvla/action_chunk, /nvblox_node/static_map_slice
 Publishes:  cmd_vel, safety_layer/slack, cbf/h
 Parameters: patch_size, patch_resolution (ESDF patch geometry; defaults in safety_layer/constants.py),
             print_solve_time (log the QP solve time every tick as 'solve_time_ms=<value>')
@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 import rclpy
-from aion_msgs.msg import ActionChunk
+from custom_msgs.msg import ActionChunk
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from nvblox_msgs.msg import DistanceMapSlice

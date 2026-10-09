@@ -66,7 +66,7 @@ def generate_waypoints(relative_poses):
 
 class PurePursuit:
     """Follows an action chunk. A chunk's poses are relative to where the robot was when it
-    arrived, so each new seq_num re-anchors the path at the current pose."""
+    arrived, so each new curr_img_seq_num re-anchors the path at the current pose."""
 
     def __init__(self):
         self._last_seq = None
@@ -77,11 +77,11 @@ class PurePursuit:
     def nominal(self, action_chunk, current_pose):
         """(v, omega) toward the first path point beyond the lookahead distance;
         (0, 0) once no such point is left."""
-        if self._last_seq is None or action_chunk.seq_num != self._last_seq:
+        if self._last_seq is None or action_chunk.curr_img_seq_num != self._last_seq:
             self._anchor_pose = current_pose
             self._waypoints = generate_waypoints(action_chunk.relative_poses)
             self._waypoint_idx = 0
-            self._last_seq = action_chunk.seq_num
+            self._last_seq = action_chunk.curr_img_seq_num
 
         anchor_x, anchor_y, anchor_theta = self._anchor_pose
         current_x, current_y, current_theta = current_pose

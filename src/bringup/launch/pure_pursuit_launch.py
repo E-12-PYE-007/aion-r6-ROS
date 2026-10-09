@@ -1,7 +1,7 @@
 """Drive on VLA action chunks with pure pursuit only (no safety layer).
 
   local localisation (roboclaw driver, encoders, local EKF) -> /odometry/filtered
-  /vla/action_chunk -> pure_pursuit_controller -> cmd_vel -> motor control
+  /agvla/action_chunk -> pure_pursuit_controller -> cmd_vel -> motor control
 
 The VLA runs separately.
 

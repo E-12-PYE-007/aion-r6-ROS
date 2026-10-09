@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wheel-odometry node for the Aion R6.
 
-Subscribes to encoder_counts (aion_msgs/LeftRightInt32) and integrates tick
+Subscribes to encoder_counts (custom_msgs/LeftRightInt32) and integrates tick
 deltas into a pose + velocity estimate, published as nav_msgs/Odometry on
 /odometry/wheel.
 """
@@ -9,7 +9,7 @@ deltas into a pose + velocity estimate, published as nav_msgs/Odometry on
 import math
 
 import rclpy
-from aion_msgs.msg import LeftRightInt32
+from custom_msgs.msg import LeftRightInt32
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 

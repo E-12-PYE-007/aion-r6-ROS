@@ -1,17 +1,18 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>localisation</name>
+  <name>ag_vla</name>
   <version>0.0.0</version>
-  <description>State-estimation nodes for the Aion R6 rover -- turns raw sensor sources into pose/velocity estimates.</description>
-  <maintainer email="dan.strahan08@gmail.com">dstrahan</maintainer>
-  <license>TODO: License declaration</license>
+  <description>AgVLA sys1 edge adapter: turns sys2 hidden states into action chunks.</description>
+  <maintainer email="lisa.yamamoto@student.unimelb.edu.au">lisa</maintainer>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>custom_msgs</depend>
-  <depend>nav_msgs</depend>
-
-  <exec_depend>robot_localization</exec_depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -1,0 +1,4 @@
+#!/home/vla-cap/venvs/ag_sys1/bin/python3
+import sys
+from ag_vla.sys1 import main
+sys.exit(main())
