@@ -19,6 +19,8 @@ def generate_launch_description():
         DeclareLaunchArgument('max_depth_samples', default_value='800'),
         DeclareLaunchArgument('min_depth_samples', default_value='20'),
         DeclareLaunchArgument('depth_mad_scale', default_value='2.5'),
+        DeclareLaunchArgument('foreground_depth_percentile', default_value='20.0'),
+        DeclareLaunchArgument('foreground_depth_tolerance_m', default_value='0.6'),
         DeclareLaunchArgument('merge_radius_m', default_value='0.35'),
         DeclareLaunchArgument('track_min_update_weight', default_value='0.10'),
         DeclareLaunchArgument('track_max_update_weight', default_value='0.45'),
@@ -46,6 +48,14 @@ def generate_launch_description():
                 'max_depth_samples': ParameterValue(LaunchConfiguration('max_depth_samples'), value_type=int),
                 'min_depth_samples': ParameterValue(LaunchConfiguration('min_depth_samples'), value_type=int),
                 'depth_mad_scale': ParameterValue(LaunchConfiguration('depth_mad_scale'), value_type=float),
+                'foreground_depth_percentile': ParameterValue(
+                    LaunchConfiguration('foreground_depth_percentile'),
+                    value_type=float,
+                ),
+                'foreground_depth_tolerance_m': ParameterValue(
+                    LaunchConfiguration('foreground_depth_tolerance_m'),
+                    value_type=float,
+                ),
                 'merge_radius_m': ParameterValue(LaunchConfiguration('merge_radius_m'), value_type=float),
                 'track_min_update_weight': ParameterValue(
                     LaunchConfiguration('track_min_update_weight'),

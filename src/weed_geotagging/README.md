@@ -75,8 +75,15 @@ ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
 Useful tracking/depth tuning args:
 
 ```bash
-merge_radius_m:=0.35 bbox_shrink_ratio:=0.2 max_depth_samples:=800 min_depth_samples:=20
+merge_radius_m:=0.35 bbox_shrink_ratio:=0.2 max_depth_m:=3.0
+foreground_depth_percentile:=20.0 foreground_depth_tolerance_m:=0.6
+max_depth_samples:=800 min_depth_samples:=20
 ```
+
+Depth sampling is foreground-biased: it samples many pixels inside the shrunken
+bbox, rejects invalid/far depth, estimates the weed distance from a near-depth
+percentile, then keeps pixels close to that foreground depth. This helps avoid
+using background depth behind thin plants.
 
 `target_label` defaults to empty, which accepts every YOLO class. Set it if you
 only want one class, for example `target_label:=plant2`.

@@ -54,6 +54,7 @@ class DepthStats:
     total_samples: int
     inlier_samples: int
     valid_ratio: float
+    depth_percentile: float
 
 
 @dataclass
@@ -152,6 +153,8 @@ class WeedGeotagger(Node):
         self.max_depth_samples = int(self.declare_parameter('max_depth_samples', 800).value)
         self.min_depth_samples = int(self.declare_parameter('min_depth_samples', 20).value)
         self.depth_mad_scale = float(self.declare_parameter('depth_mad_scale', 2.5).value)
+        self.foreground_depth_percentile = float(self.declare_parameter('foreground_depth_percentile', 20.0).value)
+        self.foreground_depth_tolerance_m = float(self.declare_parameter('foreground_depth_tolerance_m', 0.6).value)
         self.merge_radius_m = float(self.declare_parameter('merge_radius_m', 0.35).value)
         self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
         self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
@@ -186,6 +189,7 @@ class WeedGeotagger(Node):
                     'x_robot', 'y_robot', 'z_robot',
                     'depth_m', 'depth_mean_m', 'depth_std_m', 'depth_min_m', 'depth_max_m',
                     'depth_valid_samples', 'depth_total_samples', 'depth_inlier_samples', 'depth_valid_ratio',
+                    'depth_percentile',
                     'pixel_u', 'pixel_v',
                     'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax', 'bbox_width', 'bbox_height', 'bbox_area',
                     'depth_stamp_sec', 'odom_stamp_sec', 'camera_info_width', 'camera_info_height',
@@ -331,6 +335,21 @@ class WeedGeotagger(Node):
         valid_depths = samples[valid_mask]
         valid_xs = xs[valid_mask].astype(np.float32)
         valid_ys = ys[valid_mask].astype(np.float32)
+
+        percentile = min(50.0, max(1.0, self.foreground_depth_percentile))
+        foreground_depth = float(np.percentile(valid_depths, percentile))
+        foreground_limit = min(
+            self.max_depth_m,
+            foreground_depth + max(0.0, self.foreground_depth_tolerance_m),
+        )
+        foreground_mask = valid_depths <= foreground_limit
+        valid_depths = valid_depths[foreground_mask]
+        valid_xs = valid_xs[foreground_mask]
+        valid_ys = valid_ys[foreground_mask]
+
+        if valid_depths.size < self.min_depth_samples:
+            return None
+
         median_depth = float(np.median(valid_depths))
         mad = float(np.median(np.abs(valid_depths - median_depth)))
         if mad > 1e-6:
@@ -347,7 +366,7 @@ class WeedGeotagger(Node):
         return DepthStats(
             pixel_u=float(np.mean(color_us)),
             pixel_v=float(np.mean(color_vs)),
-            depth_m=float(np.median(valid_depths)),
+            depth_m=foreground_depth,
             depth_mean_m=float(np.mean(valid_depths)),
             depth_std_m=float(np.std(valid_depths)),
             depth_min_m=float(np.min(valid_depths)),
@@ -356,6 +375,7 @@ class WeedGeotagger(Node):
             total_samples=total_samples,
             inlier_samples=int(valid_depths.size),
             valid_ratio=float(valid_depths.size) / float(max(1, total_samples)),
+            depth_percentile=percentile,
         )
 
     def update_track(self, detection, measurement):
@@ -482,6 +502,7 @@ class WeedGeotagger(Node):
             measurement.depth.total_samples,
             measurement.depth.inlier_samples,
             measurement.depth.valid_ratio,
+            measurement.depth.depth_percentile,
             measurement.depth.pixel_u,
             measurement.depth.pixel_v,
             detection.xmin,
