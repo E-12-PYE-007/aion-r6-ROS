@@ -105,10 +105,16 @@ class YoloWeedDetector(Node):
                 })
 
             if self.annotated_pub is not None:
-                annotated = result.plot()
-                out = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
-                out.header = msg.header
-                self.annotated_pub.publish(out)
+                try:
+                    annotated = result.plot()
+                    out = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
+                    out.header = msg.header
+                    self.annotated_pub.publish(out)
+                except Exception as exc:
+                    self.get_logger().warn(
+                        f'Failed to publish annotated detection image: {exc}',
+                        throttle_duration_sec=5.0,
+                    )
 
         payload = String()
         payload.data = json.dumps({'detections': detections})

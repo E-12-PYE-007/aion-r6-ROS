@@ -46,8 +46,19 @@ Accepted JSON examples:
 
 ## Outputs
 
-- `weed_markers` (`visualization_msgs/MarkerArray`) — weed points in `odom`
+- `weed_markers` (`visualization_msgs/MarkerArray`) — persistent weed tracks in `odom`
 - Optional CSV via `output_csv`
+
+The geotagger now keeps a small in-memory track list so the same plant is not
+recorded as a new weed every frame. A new measurement is matched to an existing
+track when it is within `merge_radius_m`; otherwise a new `track_id` is created.
+Existing tracks are updated with a weighted moving average based on YOLO score,
+depth quality, distance, and current angular speed.
+
+The CSV includes both raw measurement columns and smoothed track columns. Useful
+accuracy/debug columns include `track_id`, `event`, `observations`,
+`raw_weed_x/y/z`, `track_weed_x/y/z`, `depth_std_m`, `depth_inlier_samples`,
+`depth_valid_ratio`, `match_distance_m`, `linear_x`, and `angular_z`.
 
 ## Run
 
@@ -57,8 +68,18 @@ Run detection and geotagging together:
 ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
   model_path:=/home/vla-cap/models/best.pt \
   output_csv:=/home/vla-cap/weeds.csv \
-  odom_topic:=/odometry/filtered
+  odom_topic:=/odometry/filtered \
+  publish_annotated:=false
 ```
+
+Useful tracking/depth tuning args:
+
+```bash
+merge_radius_m:=0.35 bbox_shrink_ratio:=0.2 max_depth_samples:=800 min_depth_samples:=20
+```
+
+`target_label` defaults to empty, which accepts every YOLO class. Set it if you
+only want one class, for example `target_label:=plant2`.
 
 Or run only the geotagger if another node is already publishing detections:
 

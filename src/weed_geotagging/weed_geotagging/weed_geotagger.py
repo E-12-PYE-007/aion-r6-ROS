@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Project YOLO weed detections into the robot odometry/map frame.
-
-Initial detection adapter:
-    std_msgs/String JSON on detections_topic.
-
-Accepted JSON shapes:
-    {"detections": [{"bbox": [xmin, ymin, xmax, ymax], "class": "weed", "score": 0.9}]}
-    [{"bbox": [xmin, ymin, xmax, ymax], "class": "weed", "score": 0.9}]
-
-Once the YOLO node's real ROS message type is known, replace parse_detections()
-or add another adapter without changing the projection/geotagging math.
-"""
+"""Project YOLO weed detections into persistent local-map weed tracks."""
 
 import csv
 import json
@@ -36,10 +25,70 @@ class Detection:
     ymax: float
     label: str = 'weed'
     score: float = 0.0
+    stamp_sec: int = 0
+    stamp_nanosec: int = 0
 
     @property
-    def center(self):
-        return 0.5 * (self.xmin + self.xmax), 0.5 * (self.ymin + self.ymax)
+    def width(self):
+        return max(0.0, self.xmax - self.xmin)
+
+    @property
+    def height(self):
+        return max(0.0, self.ymax - self.ymin)
+
+    @property
+    def area(self):
+        return self.width * self.height
+
+
+@dataclass
+class DepthStats:
+    pixel_u: float
+    pixel_v: float
+    depth_m: float
+    depth_mean_m: float
+    depth_std_m: float
+    depth_min_m: float
+    depth_max_m: float
+    valid_samples: int
+    total_samples: int
+    inlier_samples: int
+    valid_ratio: float
+
+
+@dataclass
+class WeedMeasurement:
+    x: float
+    y: float
+    z: float
+    x_robot: float
+    y_robot: float
+    z_robot: float
+    depth: DepthStats
+    odom_x: float
+    odom_y: float
+    odom_yaw: float
+    linear_x: float
+    angular_z: float
+
+
+@dataclass
+class WeedTrack:
+    track_id: int
+    label: str
+    x: float
+    y: float
+    z: float
+    score: float
+    observations: int
+    first_seen_sec: float
+    last_seen_sec: float
+    last_update_weight: float
+    last_match_distance: float
+
+
+def stamp_to_sec(stamp):
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
 def yaw_from_quaternion(q):
@@ -62,6 +111,7 @@ def parse_detections(payload):
         if bbox is None or len(bbox) != 4:
             continue
 
+        stamp = item.get('stamp', {}) if isinstance(item.get('stamp', {}), dict) else {}
         label = str(item.get('class', item.get('label', 'weed')))
         score = float(item.get('score', item.get('confidence', 0.0)))
         detections.append(Detection(
@@ -71,6 +121,8 @@ def parse_detections(payload):
             ymax=float(bbox[3]),
             label=label,
             score=score,
+            stamp_sec=int(stamp.get('sec', 0)),
+            stamp_nanosec=int(stamp.get('nanosec', 0)),
         ))
     return detections
 
@@ -92,10 +144,19 @@ class WeedGeotagger(Node):
         self.camera_info_topic = self.declare_parameter('camera_info_topic', '/camera/color/camera_info').value
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
         self.output_csv = self.declare_parameter('output_csv', '').value
-        self.target_label = self.declare_parameter('target_label', 'weed').value
+        self.target_label = self.declare_parameter('target_label', '').value
         self.min_score = float(self.declare_parameter('min_score', 0.0).value)
-        self.depth_window_px = int(self.declare_parameter('depth_window_px', 5).value)
         self.max_depth_m = float(self.declare_parameter('max_depth_m', 8.0).value)
+
+        self.bbox_shrink_ratio = float(self.declare_parameter('bbox_shrink_ratio', 0.2).value)
+        self.max_depth_samples = int(self.declare_parameter('max_depth_samples', 800).value)
+        self.min_depth_samples = int(self.declare_parameter('min_depth_samples', 20).value)
+        self.depth_mad_scale = float(self.declare_parameter('depth_mad_scale', 2.5).value)
+        self.merge_radius_m = float(self.declare_parameter('merge_radius_m', 0.35).value)
+        self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
+        self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
+        self.angular_slowdown_start = float(self.declare_parameter('angular_slowdown_start', 0.2).value)
+        self.angular_slowdown_stop = float(self.declare_parameter('angular_slowdown_stop', 0.8).value)
 
         self.camera_x = float(self.declare_parameter('camera_x', 0.2).value)
         self.camera_y = float(self.declare_parameter('camera_y', 0.0).value)
@@ -105,7 +166,8 @@ class WeedGeotagger(Node):
         self.latest_depth = None
         self.latest_camera_info = None
         self.latest_odom = None
-        self.next_marker_id = 0
+        self.next_track_id = 1
+        self.tracks = []
         self.csv_file = None
         self.csv_writer = None
 
@@ -116,10 +178,18 @@ class WeedGeotagger(Node):
             self.csv_writer = csv.writer(self.csv_file)
             if output_path.stat().st_size == 0:
                 self.csv_writer.writerow([
-                    'stamp_sec', 'label', 'score',
-                    'odom_x', 'odom_y', 'odom_yaw',
-                    'weed_x', 'weed_y', 'weed_z',
-                    'depth_m', 'pixel_u', 'pixel_v',
+                    'stamp_sec', 'detection_stamp_sec', 'event', 'track_id',
+                    'label', 'score', 'update_weight', 'match_distance_m', 'observations',
+                    'raw_weed_x', 'raw_weed_y', 'raw_weed_z',
+                    'track_weed_x', 'track_weed_y', 'track_weed_z',
+                    'odom_x', 'odom_y', 'odom_yaw', 'linear_x', 'angular_z',
+                    'x_robot', 'y_robot', 'z_robot',
+                    'depth_m', 'depth_mean_m', 'depth_std_m', 'depth_min_m', 'depth_max_m',
+                    'depth_valid_samples', 'depth_total_samples', 'depth_inlier_samples', 'depth_valid_ratio',
+                    'pixel_u', 'pixel_v',
+                    'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax', 'bbox_width', 'bbox_height', 'bbox_area',
+                    'depth_stamp_sec', 'odom_stamp_sec', 'camera_info_width', 'camera_info_height',
+                    'depth_image_width', 'depth_image_height',
                 ])
 
         self.create_subscription(String, self.detections_topic, self.detections_callback, 10)
@@ -160,34 +230,28 @@ class WeedGeotagger(Node):
             self.get_logger().warn(f'Bad detection JSON: {exc}', throttle_duration_sec=5.0)
             return
 
-        markers = MarkerArray()
+        updated_any = False
         for detection in detections:
             if self.target_label and detection.label != self.target_label:
                 continue
             if detection.score < self.min_score:
                 continue
 
-            geotag = self.project_detection(detection)
-            if geotag is None:
+            measurement = self.project_detection(detection)
+            if measurement is None:
                 continue
-            weed_x, weed_y, weed_z, depth_m, u, v = geotag
 
-            marker = self.make_marker(weed_x, weed_y, weed_z, detection)
-            markers.markers.append(marker)
-            self.write_csv(weed_x, weed_y, weed_z, depth_m, u, v, detection)
+            track, event, match_distance = self.update_track(detection, measurement)
+            self.write_csv(track, event, match_distance, measurement, detection)
+            updated_any = True
 
-        if markers.markers:
-            self.marker_pub.publish(markers)
+        if updated_any:
+            self.publish_track_markers()
 
     def project_detection(self, detection):
         depth_msg, depth = self.latest_depth
         camera_info = self.latest_camera_info
         odom = self.latest_odom
-
-        u, v = detection.center
-        depth_m = self.depth_at(depth, u, v)
-        if depth_m is None:
-            return None
 
         fx = camera_info.k[0]
         fy = camera_info.k[4]
@@ -197,12 +261,14 @@ class WeedGeotagger(Node):
             self.get_logger().warn('Camera intrinsics are invalid', throttle_duration_sec=5.0)
             return None
 
-        # ROS optical frame convention: x right, y down, z forward.
-        x_cam_right = (u - cx) * depth_m / fx
-        y_cam_down = (v - cy) * depth_m / fy
-        z_cam_forward = depth_m
+        depth_stats = self.depth_stats_for_bbox(depth, detection, camera_info)
+        if depth_stats is None:
+            return None
 
-        # Convert optical point into a planar robot-frame estimate.
+        x_cam_right = (depth_stats.pixel_u - cx) * depth_stats.depth_m / fx
+        y_cam_down = (depth_stats.pixel_v - cy) * depth_stats.depth_m / fy
+        z_cam_forward = depth_stats.depth_m
+
         x_robot = self.camera_x + z_cam_forward * math.cos(self.camera_yaw) - x_cam_right * math.sin(self.camera_yaw)
         y_robot = self.camera_y + z_cam_forward * math.sin(self.camera_yaw) + x_cam_right * math.cos(self.camera_yaw)
         z_robot = self.camera_z - y_cam_down
@@ -214,36 +280,158 @@ class WeedGeotagger(Node):
 
         weed_x = odom_x + x_robot * math.cos(odom_yaw) - y_robot * math.sin(odom_yaw)
         weed_y = odom_y + x_robot * math.sin(odom_yaw) + y_robot * math.cos(odom_yaw)
-        return weed_x, weed_y, z_robot, depth_m, u, v
 
-    def depth_at(self, depth, u, v):
-        center_u = int(round(u))
-        center_v = int(round(v))
-        half = max(0, self.depth_window_px // 2)
-        u0 = max(0, center_u - half)
-        u1 = min(depth.shape[1], center_u + half + 1)
-        v0 = max(0, center_v - half)
-        v1 = min(depth.shape[0], center_v + half + 1)
+        return WeedMeasurement(
+            x=weed_x,
+            y=weed_y,
+            z=z_robot,
+            x_robot=x_robot,
+            y_robot=y_robot,
+            z_robot=z_robot,
+            depth=depth_stats,
+            odom_x=odom_x,
+            odom_y=odom_y,
+            odom_yaw=odom_yaw,
+            linear_x=odom.twist.twist.linear.x,
+            angular_z=odom.twist.twist.angular.z,
+        )
+
+    def depth_stats_for_bbox(self, depth, detection, camera_info):
+        if detection.width <= 1.0 or detection.height <= 1.0:
+            return None
+
+        shrink = min(max(self.bbox_shrink_ratio, 0.0), 0.45)
+        xmin = detection.xmin + detection.width * shrink
+        xmax = detection.xmax - detection.width * shrink
+        ymin = detection.ymin + detection.height * shrink
+        ymax = detection.ymax - detection.height * shrink
+
+        color_width = float(camera_info.width or depth.shape[1])
+        color_height = float(camera_info.height or depth.shape[0])
+        scale_x = depth.shape[1] / color_width
+        scale_y = depth.shape[0] / color_height
+
+        u0 = max(0, int(math.floor(xmin * scale_x)))
+        u1 = min(depth.shape[1], int(math.ceil(xmax * scale_x)))
+        v0 = max(0, int(math.floor(ymin * scale_y)))
+        v1 = min(depth.shape[0], int(math.ceil(ymax * scale_y)))
         if u0 >= u1 or v0 >= v1:
             return None
 
-        window = depth[v0:v1, u0:u1]
-        valid = window[np.isfinite(window)]
-        valid = valid[(valid > 0.05) & (valid < self.max_depth_m)]
-        if valid.size == 0:
-            return None
-        return float(np.median(valid))
+        total_pixels = (u1 - u0) * (v1 - v0)
+        stride = max(1, int(math.ceil(math.sqrt(total_pixels / max(1, self.max_depth_samples)))))
+        ys, xs = np.mgrid[v0:v1:stride, u0:u1:stride]
+        samples = depth[ys, xs]
+        total_samples = int(samples.size)
 
-    def make_marker(self, x, y, z, detection):
+        valid_mask = np.isfinite(samples) & (samples > 0.05) & (samples < self.max_depth_m)
+        if int(np.count_nonzero(valid_mask)) < self.min_depth_samples:
+            return None
+
+        valid_depths = samples[valid_mask]
+        valid_xs = xs[valid_mask].astype(np.float32)
+        valid_ys = ys[valid_mask].astype(np.float32)
+        median_depth = float(np.median(valid_depths))
+        mad = float(np.median(np.abs(valid_depths - median_depth)))
+        if mad > 1e-6:
+            inlier_mask = np.abs(valid_depths - median_depth) <= self.depth_mad_scale * 1.4826 * mad
+            valid_depths = valid_depths[inlier_mask]
+            valid_xs = valid_xs[inlier_mask]
+            valid_ys = valid_ys[inlier_mask]
+
+        if valid_depths.size < self.min_depth_samples:
+            return None
+
+        color_us = valid_xs / scale_x
+        color_vs = valid_ys / scale_y
+        return DepthStats(
+            pixel_u=float(np.mean(color_us)),
+            pixel_v=float(np.mean(color_vs)),
+            depth_m=float(np.median(valid_depths)),
+            depth_mean_m=float(np.mean(valid_depths)),
+            depth_std_m=float(np.std(valid_depths)),
+            depth_min_m=float(np.min(valid_depths)),
+            depth_max_m=float(np.max(valid_depths)),
+            valid_samples=int(np.count_nonzero(valid_mask)),
+            total_samples=total_samples,
+            inlier_samples=int(valid_depths.size),
+            valid_ratio=float(valid_depths.size) / float(max(1, total_samples)),
+        )
+
+    def update_track(self, detection, measurement):
+        best_track = None
+        best_distance = None
+        for track in self.tracks:
+            if track.label != detection.label:
+                continue
+            distance = math.hypot(track.x - measurement.x, track.y - measurement.y)
+            if best_distance is None or distance < best_distance:
+                best_track = track
+                best_distance = distance
+
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if best_track is None or best_distance is None or best_distance > self.merge_radius_m:
+            track = WeedTrack(
+                track_id=self.next_track_id,
+                label=detection.label,
+                x=measurement.x,
+                y=measurement.y,
+                z=measurement.z,
+                score=detection.score,
+                observations=1,
+                first_seen_sec=now_sec,
+                last_seen_sec=now_sec,
+                last_update_weight=1.0,
+                last_match_distance=math.nan,
+            )
+            self.next_track_id += 1
+            self.tracks.append(track)
+            return track, 'new', math.nan
+
+        weight = self.measurement_update_weight(detection, measurement)
+        best_track.x = (1.0 - weight) * best_track.x + weight * measurement.x
+        best_track.y = (1.0 - weight) * best_track.y + weight * measurement.y
+        best_track.z = (1.0 - weight) * best_track.z + weight * measurement.z
+        best_track.score = max(best_track.score, detection.score)
+        best_track.observations += 1
+        best_track.last_seen_sec = now_sec
+        best_track.last_update_weight = weight
+        best_track.last_match_distance = best_distance
+        return best_track, 'update', best_distance
+
+    def measurement_update_weight(self, detection, measurement):
+        score_quality = min(1.0, max(0.05, detection.score))
+        depth_quality = min(1.0, max(0.05, measurement.depth.valid_ratio * 2.0))
+        distance_quality = min(1.0, max(0.2, 1.0 - measurement.depth.depth_m / max(0.1, self.max_depth_m)))
+        turn_quality = self.turn_quality(abs(measurement.angular_z))
+        quality = score_quality * depth_quality * distance_quality * turn_quality
+        return self.track_min_update_weight + quality * (self.track_max_update_weight - self.track_min_update_weight)
+
+    def turn_quality(self, angular_speed):
+        if angular_speed <= self.angular_slowdown_start:
+            return 1.0
+        if angular_speed >= self.angular_slowdown_stop:
+            return 0.5
+        span = max(1e-6, self.angular_slowdown_stop - self.angular_slowdown_start)
+        ratio = (angular_speed - self.angular_slowdown_start) / span
+        return 1.0 - 0.5 * ratio
+
+    def publish_track_markers(self):
+        markers = MarkerArray()
+        for track in self.tracks:
+            markers.markers.append(self.make_marker(track))
+        if markers.markers:
+            self.marker_pub.publish(markers)
+
+    def make_marker(self, track):
         marker = Marker()
         marker.header.frame_id = 'odom'
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'weeds'
-        marker.id = self.next_marker_id
-        self.next_marker_id += 1
+        marker.id = track.track_id
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        marker.pose.position = Point(x=float(x), y=float(y), z=float(z))
+        marker.pose.position = Point(x=float(track.x), y=float(track.y), z=float(track.z))
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.15
         marker.scale.y = 0.15
@@ -255,24 +443,60 @@ class WeedGeotagger(Node):
         marker.lifetime.sec = 0
         return marker
 
-    def write_csv(self, weed_x, weed_y, weed_z, depth_m, u, v, detection):
+    def write_csv(self, track, event, match_distance, measurement, detection):
         if self.csv_writer is None:
             return
+        depth_msg, depth = self.latest_depth
+        camera_info = self.latest_camera_info
         odom = self.latest_odom
-        pose = odom.pose.pose
         self.csv_writer.writerow([
             self.get_clock().now().nanoseconds / 1e9,
+            detection.stamp_sec + detection.stamp_nanosec * 1e-9,
+            event,
+            track.track_id,
             detection.label,
             detection.score,
-            pose.position.x,
-            pose.position.y,
-            yaw_from_quaternion(pose.orientation),
-            weed_x,
-            weed_y,
-            weed_z,
-            depth_m,
-            u,
-            v,
+            track.last_update_weight,
+            match_distance,
+            track.observations,
+            measurement.x,
+            measurement.y,
+            measurement.z,
+            track.x,
+            track.y,
+            track.z,
+            measurement.odom_x,
+            measurement.odom_y,
+            measurement.odom_yaw,
+            measurement.linear_x,
+            measurement.angular_z,
+            measurement.x_robot,
+            measurement.y_robot,
+            measurement.z_robot,
+            measurement.depth.depth_m,
+            measurement.depth.depth_mean_m,
+            measurement.depth.depth_std_m,
+            measurement.depth.depth_min_m,
+            measurement.depth.depth_max_m,
+            measurement.depth.valid_samples,
+            measurement.depth.total_samples,
+            measurement.depth.inlier_samples,
+            measurement.depth.valid_ratio,
+            measurement.depth.pixel_u,
+            measurement.depth.pixel_v,
+            detection.xmin,
+            detection.ymin,
+            detection.xmax,
+            detection.ymax,
+            detection.width,
+            detection.height,
+            detection.area,
+            stamp_to_sec(depth_msg.header.stamp),
+            stamp_to_sec(odom.header.stamp),
+            camera_info.width,
+            camera_info.height,
+            depth.shape[1],
+            depth.shape[0],
         ])
         self.csv_file.flush()
 
