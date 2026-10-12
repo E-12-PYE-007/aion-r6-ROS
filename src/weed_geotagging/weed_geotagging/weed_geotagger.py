@@ -156,6 +156,8 @@ class WeedGeotagger(Node):
         self.foreground_depth_percentile = float(self.declare_parameter('foreground_depth_percentile', 20.0).value)
         self.foreground_depth_tolerance_m = float(self.declare_parameter('foreground_depth_tolerance_m', 0.6).value)
         self.merge_radius_m = float(self.declare_parameter('merge_radius_m', 0.35).value)
+        self.new_track_max_angular_z = float(self.declare_parameter('new_track_max_angular_z', 0.15).value)
+        self.min_confirmed_observations = int(self.declare_parameter('min_confirmed_observations', 3).value)
         self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
         self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
         self.angular_slowdown_start = float(self.declare_parameter('angular_slowdown_start', 0.2).value)
@@ -182,7 +184,7 @@ class WeedGeotagger(Node):
             if output_path.stat().st_size == 0:
                 self.csv_writer.writerow([
                     'stamp_sec', 'detection_stamp_sec', 'event', 'track_id',
-                    'label', 'score', 'update_weight', 'match_distance_m', 'observations',
+                    'label', 'score', 'update_weight', 'match_distance_m', 'observations', 'confirmed',
                     'raw_weed_x', 'raw_weed_y', 'raw_weed_z',
                     'track_weed_x', 'track_weed_y', 'track_weed_z',
                     'odom_x', 'odom_y', 'odom_yaw', 'linear_x', 'angular_z',
@@ -246,6 +248,8 @@ class WeedGeotagger(Node):
                 continue
 
             track, event, match_distance = self.update_track(detection, measurement)
+            if track is None:
+                continue
             self.write_csv(track, event, match_distance, measurement, detection)
             updated_any = True
 
@@ -391,6 +395,9 @@ class WeedGeotagger(Node):
 
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if best_track is None or best_distance is None or best_distance > self.merge_radius_m:
+            if abs(measurement.angular_z) > self.new_track_max_angular_z:
+                return None, 'ignored_turn_new', math.nan
+
             track = WeedTrack(
                 track_id=self.next_track_id,
                 label=detection.label,
@@ -406,9 +413,11 @@ class WeedGeotagger(Node):
             )
             self.next_track_id += 1
             self.tracks.append(track)
-            return track, 'new', math.nan
+            event = 'confirmed_new' if self.is_confirmed(track) else 'candidate_new'
+            return track, event, math.nan
 
         weight = self.measurement_update_weight(detection, measurement)
+        was_confirmed = self.is_confirmed(best_track)
         best_track.x = (1.0 - weight) * best_track.x + weight * measurement.x
         best_track.y = (1.0 - weight) * best_track.y + weight * measurement.y
         best_track.z = (1.0 - weight) * best_track.z + weight * measurement.z
@@ -417,7 +426,16 @@ class WeedGeotagger(Node):
         best_track.last_seen_sec = now_sec
         best_track.last_update_weight = weight
         best_track.last_match_distance = best_distance
-        return best_track, 'update', best_distance
+        if not was_confirmed and self.is_confirmed(best_track):
+            event = 'confirmed'
+        elif self.is_confirmed(best_track):
+            event = 'update'
+        else:
+            event = 'candidate_update'
+        return best_track, event, best_distance
+
+    def is_confirmed(self, track):
+        return track.observations >= self.min_confirmed_observations
 
     def measurement_update_weight(self, detection, measurement):
         score_quality = min(1.0, max(0.05, detection.score))
@@ -439,6 +457,8 @@ class WeedGeotagger(Node):
     def publish_track_markers(self):
         markers = MarkerArray()
         for track in self.tracks:
+            if not self.is_confirmed(track):
+                continue
             markers.markers.append(self.make_marker(track))
         if markers.markers:
             self.marker_pub.publish(markers)
@@ -479,6 +499,7 @@ class WeedGeotagger(Node):
             track.last_update_weight,
             match_distance,
             track.observations,
+            self.is_confirmed(track),
             measurement.x,
             measurement.y,
             measurement.z,

@@ -54,6 +54,10 @@ recorded as a new weed every frame. A new measurement is matched to an existing
 track when it is within `merge_radius_m`; otherwise a new `track_id` is created.
 Existing tracks are updated with a weighted moving average based on YOLO score,
 depth quality, distance, and current angular speed.
+New tracks are suppressed while turning faster than `new_track_max_angular_z`,
+but nearby existing tracks can still update. Tracks are only published as
+markers after `min_confirmed_observations` observations, so one-off false
+detections stay as CSV candidates instead of becoming map points.
 
 The CSV includes both raw measurement columns and smoothed track columns. Useful
 accuracy/debug columns include `track_id`, `event`, `observations`,
@@ -77,6 +81,7 @@ Useful tracking/depth tuning args:
 ```bash
 merge_radius_m:=0.35 bbox_shrink_ratio:=0.2 max_depth_m:=3.0
 foreground_depth_percentile:=20.0 foreground_depth_tolerance_m:=0.6
+new_track_max_angular_z:=0.15 min_confirmed_observations:=3
 max_depth_samples:=800 min_depth_samples:=20
 ```
 
