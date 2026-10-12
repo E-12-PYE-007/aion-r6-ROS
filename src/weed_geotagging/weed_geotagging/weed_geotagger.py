@@ -4,6 +4,7 @@
 import csv
 import json
 import math
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,6 +72,8 @@ class WeedMeasurement:
     odom_yaw: float
     linear_x: float
     angular_z: float
+    odom_stamp_sec: float
+    odom_age_sec: float
 
 
 @dataclass
@@ -86,6 +89,7 @@ class WeedTrack:
     last_seen_sec: float
     last_update_weight: float
     last_match_distance: float
+    required_observations: int
 
 
 def stamp_to_sec(stamp):
@@ -156,9 +160,16 @@ class WeedGeotagger(Node):
         self.foreground_depth_percentile = float(self.declare_parameter('foreground_depth_percentile', 20.0).value)
         self.foreground_depth_tolerance_m = float(self.declare_parameter('foreground_depth_tolerance_m', 0.6).value)
         self.merge_radius_m = float(self.declare_parameter('merge_radius_m', 0.35).value)
-        self.new_track_max_angular_z = float(self.declare_parameter('new_track_max_angular_z', 0.15).value)
-        self.new_track_turn_cooldown_sec = float(self.declare_parameter('new_track_turn_cooldown_sec', 1.0).value)
+        self.turn_tracking_angular_z = float(self.declare_parameter('turn_tracking_angular_z', 0.15).value)
+        self.turning_merge_radius_m = float(self.declare_parameter('turning_merge_radius_m', 0.75).value)
+        self.new_track_max_angular_z = float(self.declare_parameter('new_track_max_angular_z', 999.0).value)
+        self.new_track_turn_cooldown_sec = float(self.declare_parameter('new_track_turn_cooldown_sec', 0.0).value)
         self.min_confirmed_observations = int(self.declare_parameter('min_confirmed_observations', 3).value)
+        self.turning_min_confirmed_observations = int(
+            self.declare_parameter('turning_min_confirmed_observations', 6).value
+        )
+        self.track_merge_radius_m = float(self.declare_parameter('track_merge_radius_m', 0.25).value)
+        self.odom_buffer_sec = float(self.declare_parameter('odom_buffer_sec', 10.0).value)
         self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
         self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
         self.angular_slowdown_start = float(self.declare_parameter('angular_slowdown_start', 0.2).value)
@@ -172,6 +183,7 @@ class WeedGeotagger(Node):
         self.latest_depth = None
         self.latest_camera_info = None
         self.latest_odom = None
+        self.odom_buffer = deque()
         self.last_turn_time_sec = None
         self.next_track_id = 1
         self.tracks = []
@@ -186,7 +198,8 @@ class WeedGeotagger(Node):
             if output_path.stat().st_size == 0:
                 self.csv_writer.writerow([
                     'stamp_sec', 'detection_stamp_sec', 'event', 'track_id',
-                    'label', 'score', 'update_weight', 'match_distance_m', 'observations', 'confirmed',
+                    'label', 'score', 'update_weight', 'match_distance_m',
+                    'observations', 'required_observations', 'confirmed',
                     'raw_weed_x', 'raw_weed_y', 'raw_weed_z',
                     'track_weed_x', 'track_weed_y', 'track_weed_z',
                     'odom_x', 'odom_y', 'odom_yaw', 'linear_x', 'angular_z',
@@ -196,7 +209,8 @@ class WeedGeotagger(Node):
                     'depth_percentile',
                     'pixel_u', 'pixel_v',
                     'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax', 'bbox_width', 'bbox_height', 'bbox_area',
-                    'depth_stamp_sec', 'odom_stamp_sec', 'camera_info_width', 'camera_info_height',
+                    'depth_stamp_sec', 'odom_stamp_sec', 'odom_age_sec',
+                    'camera_info_width', 'camera_info_height',
                     'depth_image_width', 'depth_image_height',
                 ])
 
@@ -223,7 +237,11 @@ class WeedGeotagger(Node):
 
     def odom_callback(self, msg):
         self.latest_odom = msg
-        if abs(msg.twist.twist.angular.z) > self.new_track_max_angular_z:
+        odom_stamp_sec = stamp_to_sec(msg.header.stamp)
+        self.odom_buffer.append((odom_stamp_sec, msg))
+        while self.odom_buffer and (odom_stamp_sec - self.odom_buffer[0][0]) > self.odom_buffer_sec:
+            self.odom_buffer.popleft()
+        if abs(msg.twist.twist.angular.z) > self.turn_tracking_angular_z:
             self.last_turn_time_sec = self.get_clock().now().nanoseconds / 1e9
 
     def detections_callback(self, msg):
@@ -247,7 +265,11 @@ class WeedGeotagger(Node):
             if detection.score < self.min_score:
                 continue
 
-            measurement = self.project_detection(detection)
+            odom = self.odom_for_detection(detection)
+            if odom is None:
+                continue
+
+            measurement = self.project_detection(detection, odom)
             if measurement is None:
                 continue
 
@@ -255,15 +277,23 @@ class WeedGeotagger(Node):
             if track is None:
                 continue
             self.write_csv(track, event, match_distance, measurement, detection)
+            self.merge_nearby_tracks()
             updated_any = True
 
         if updated_any:
             self.publish_track_markers()
 
-    def project_detection(self, detection):
+    def odom_for_detection(self, detection):
+        if self.latest_odom is None:
+            return None
+        detection_stamp_sec = detection.stamp_sec + detection.stamp_nanosec * 1e-9
+        if detection_stamp_sec <= 0.0 or not self.odom_buffer:
+            return self.latest_odom
+        return min(self.odom_buffer, key=lambda item: abs(item[0] - detection_stamp_sec))[1]
+
+    def project_detection(self, detection, odom):
         depth_msg, depth = self.latest_depth
         camera_info = self.latest_camera_info
-        odom = self.latest_odom
 
         fx = camera_info.k[0]
         fy = camera_info.k[4]
@@ -307,6 +337,8 @@ class WeedGeotagger(Node):
             odom_yaw=odom_yaw,
             linear_x=odom.twist.twist.linear.x,
             angular_z=odom.twist.twist.angular.z,
+            odom_stamp_sec=stamp_to_sec(odom.header.stamp),
+            odom_age_sec=(detection.stamp_sec + detection.stamp_nanosec * 1e-9) - stamp_to_sec(odom.header.stamp),
         )
 
     def depth_stats_for_bbox(self, depth, detection, camera_info):
@@ -399,10 +431,16 @@ class WeedGeotagger(Node):
                 best_distance = distance
 
         now_sec = self.get_clock().now().nanoseconds / 1e9
-        if best_track is None or best_distance is None or best_distance > self.merge_radius_m:
+        turning = self.is_turning(measurement)
+        match_radius = self.turning_merge_radius_m if turning else self.merge_radius_m
+        if best_track is None or best_distance is None or best_distance > match_radius:
             if self.should_suppress_new_track(measurement, now_sec):
                 return None, 'ignored_turn_new', math.nan
 
+            required_observations = (
+                self.turning_min_confirmed_observations if turning
+                else self.min_confirmed_observations
+            )
             track = WeedTrack(
                 track_id=self.next_track_id,
                 label=detection.label,
@@ -415,6 +453,7 @@ class WeedGeotagger(Node):
                 last_seen_sec=now_sec,
                 last_update_weight=1.0,
                 last_match_distance=math.nan,
+                required_observations=required_observations,
             )
             self.next_track_id += 1
             self.tracks.append(track)
@@ -423,6 +462,11 @@ class WeedGeotagger(Node):
 
         weight = self.measurement_update_weight(detection, measurement)
         was_confirmed = self.is_confirmed(best_track)
+        if turning and not was_confirmed:
+            best_track.required_observations = max(
+                best_track.required_observations,
+                self.turning_min_confirmed_observations,
+            )
         best_track.x = (1.0 - weight) * best_track.x + weight * measurement.x
         best_track.y = (1.0 - weight) * best_track.y + weight * measurement.y
         best_track.z = (1.0 - weight) * best_track.z + weight * measurement.z
@@ -440,14 +484,52 @@ class WeedGeotagger(Node):
         return best_track, event, best_distance
 
     def is_confirmed(self, track):
-        return track.observations >= self.min_confirmed_observations
+        return track.observations >= track.required_observations
+
+    def is_turning(self, measurement):
+        return abs(measurement.angular_z) > self.turn_tracking_angular_z
 
     def should_suppress_new_track(self, measurement, now_sec):
-        if abs(measurement.angular_z) > self.new_track_max_angular_z:
+        if self.new_track_max_angular_z < 999.0 and abs(measurement.angular_z) > self.new_track_max_angular_z:
             return True
         if self.last_turn_time_sec is None:
             return False
         return (now_sec - self.last_turn_time_sec) < self.new_track_turn_cooldown_sec
+
+    def merge_nearby_tracks(self):
+        merged = True
+        while merged:
+            merged = False
+            for i, first in enumerate(list(self.tracks)):
+                for second in list(self.tracks)[i + 1:]:
+                    if first.label != second.label:
+                        continue
+                    distance = math.hypot(first.x - second.x, first.y - second.y)
+                    if distance > self.track_merge_radius_m:
+                        continue
+
+                    keep, drop = (
+                        (first, second)
+                        if (first.observations, -first.track_id) >= (second.observations, -second.track_id)
+                        else (second, first)
+                    )
+                    total = keep.observations + drop.observations
+                    keep.x = (keep.x * keep.observations + drop.x * drop.observations) / total
+                    keep.y = (keep.y * keep.observations + drop.y * drop.observations) / total
+                    keep.z = (keep.z * keep.observations + drop.z * drop.observations) / total
+                    keep.score = max(keep.score, drop.score)
+                    keep.observations = total
+                    keep.first_seen_sec = min(keep.first_seen_sec, drop.first_seen_sec)
+                    keep.last_seen_sec = max(keep.last_seen_sec, drop.last_seen_sec)
+                    keep.required_observations = min(
+                        keep.required_observations,
+                        drop.required_observations,
+                    )
+                    self.tracks.remove(drop)
+                    merged = True
+                    break
+                if merged:
+                    break
 
     def measurement_update_weight(self, detection, measurement):
         score_quality = min(1.0, max(0.05, detection.score))
@@ -511,6 +593,7 @@ class WeedGeotagger(Node):
             track.last_update_weight,
             match_distance,
             track.observations,
+            track.required_observations,
             self.is_confirmed(track),
             measurement.x,
             measurement.y,
@@ -546,7 +629,8 @@ class WeedGeotagger(Node):
             detection.height,
             detection.area,
             stamp_to_sec(depth_msg.header.stamp),
-            stamp_to_sec(odom.header.stamp),
+            measurement.odom_stamp_sec,
+            measurement.odom_age_sec,
             camera_info.width,
             camera_info.height,
             depth.shape[1],

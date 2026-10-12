@@ -54,11 +54,11 @@ recorded as a new weed every frame. A new measurement is matched to an existing
 track when it is within `merge_radius_m`; otherwise a new `track_id` is created.
 Existing tracks are updated with a weighted moving average based on YOLO score,
 depth quality, distance, and current angular speed.
-New tracks are suppressed while turning faster than `new_track_max_angular_z`
-and briefly after turning via `new_track_turn_cooldown_sec`, but nearby existing
-tracks can still update. Tracks are only published as markers after
-`min_confirmed_observations` observations, so one-off false detections stay as
-CSV candidates instead of becoming map points.
+The geotagger buffers recent odometry and projects each detection using the odom
+message closest to the image timestamp, which is important while turning. During
+turns it uses a larger `turning_merge_radius_m` for matching existing tracks and
+requires `turning_min_confirmed_observations` before confirming turn-born
+candidates. Nearby duplicate tracks are also merged with `track_merge_radius_m`.
 
 The CSV includes both raw measurement columns and smoothed track columns. Useful
 accuracy/debug columns include `track_id`, `event`, `observations`,
@@ -82,7 +82,9 @@ Useful tracking/depth tuning args:
 ```bash
 merge_radius_m:=0.35 bbox_shrink_ratio:=0.2 max_depth_m:=3.0
 foreground_depth_percentile:=20.0 foreground_depth_tolerance_m:=0.6
-new_track_max_angular_z:=0.15 new_track_turn_cooldown_sec:=1.0 min_confirmed_observations:=3
+turn_tracking_angular_z:=0.15 turning_merge_radius_m:=0.75
+min_confirmed_observations:=3 turning_min_confirmed_observations:=6
+track_merge_radius_m:=0.25 odom_buffer_sec:=10.0
 max_depth_samples:=800 min_depth_samples:=20
 ```
 
