@@ -157,6 +157,7 @@ class WeedGeotagger(Node):
         self.foreground_depth_tolerance_m = float(self.declare_parameter('foreground_depth_tolerance_m', 0.6).value)
         self.merge_radius_m = float(self.declare_parameter('merge_radius_m', 0.35).value)
         self.new_track_max_angular_z = float(self.declare_parameter('new_track_max_angular_z', 0.15).value)
+        self.new_track_turn_cooldown_sec = float(self.declare_parameter('new_track_turn_cooldown_sec', 1.0).value)
         self.min_confirmed_observations = int(self.declare_parameter('min_confirmed_observations', 3).value)
         self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
         self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
@@ -171,6 +172,7 @@ class WeedGeotagger(Node):
         self.latest_depth = None
         self.latest_camera_info = None
         self.latest_odom = None
+        self.last_turn_time_sec = None
         self.next_track_id = 1
         self.tracks = []
         self.csv_file = None
@@ -221,6 +223,8 @@ class WeedGeotagger(Node):
 
     def odom_callback(self, msg):
         self.latest_odom = msg
+        if abs(msg.twist.twist.angular.z) > self.new_track_max_angular_z:
+            self.last_turn_time_sec = self.get_clock().now().nanoseconds / 1e9
 
     def detections_callback(self, msg):
         if self.latest_depth is None or self.latest_camera_info is None or self.latest_odom is None:
@@ -277,8 +281,9 @@ class WeedGeotagger(Node):
         y_cam_down = (depth_stats.pixel_v - cy) * depth_stats.depth_m / fy
         z_cam_forward = depth_stats.depth_m
 
-        x_robot = self.camera_x + z_cam_forward * math.cos(self.camera_yaw) - x_cam_right * math.sin(self.camera_yaw)
-        y_robot = self.camera_y + z_cam_forward * math.sin(self.camera_yaw) + x_cam_right * math.cos(self.camera_yaw)
+        # Optical x is right, while base_link y is left, so the lateral sign flips.
+        x_robot = self.camera_x + z_cam_forward * math.cos(self.camera_yaw) + x_cam_right * math.sin(self.camera_yaw)
+        y_robot = self.camera_y + z_cam_forward * math.sin(self.camera_yaw) - x_cam_right * math.cos(self.camera_yaw)
         z_robot = self.camera_z - y_cam_down
 
         odom_pose = odom.pose.pose
@@ -395,7 +400,7 @@ class WeedGeotagger(Node):
 
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if best_track is None or best_distance is None or best_distance > self.merge_radius_m:
-            if abs(measurement.angular_z) > self.new_track_max_angular_z:
+            if self.should_suppress_new_track(measurement, now_sec):
                 return None, 'ignored_turn_new', math.nan
 
             track = WeedTrack(
@@ -436,6 +441,13 @@ class WeedGeotagger(Node):
 
     def is_confirmed(self, track):
         return track.observations >= self.min_confirmed_observations
+
+    def should_suppress_new_track(self, measurement, now_sec):
+        if abs(measurement.angular_z) > self.new_track_max_angular_z:
+            return True
+        if self.last_turn_time_sec is None:
+            return False
+        return (now_sec - self.last_turn_time_sec) < self.new_track_turn_cooldown_sec
 
     def measurement_update_weight(self, detection, measurement):
         score_quality = min(1.0, max(0.05, detection.score))

@@ -23,6 +23,7 @@ def generate_launch_description():
         DeclareLaunchArgument('foreground_depth_tolerance_m', default_value='0.6'),
         DeclareLaunchArgument('merge_radius_m', default_value='0.35'),
         DeclareLaunchArgument('new_track_max_angular_z', default_value='0.15'),
+        DeclareLaunchArgument('new_track_turn_cooldown_sec', default_value='1.0'),
         DeclareLaunchArgument('min_confirmed_observations', default_value='3'),
         DeclareLaunchArgument('track_min_update_weight', default_value='0.10'),
         DeclareLaunchArgument('track_max_update_weight', default_value='0.45'),
@@ -61,6 +62,10 @@ def generate_launch_description():
                 'merge_radius_m': ParameterValue(LaunchConfiguration('merge_radius_m'), value_type=float),
                 'new_track_max_angular_z': ParameterValue(
                     LaunchConfiguration('new_track_max_angular_z'),
+                    value_type=float,
+                ),
+                'new_track_turn_cooldown_sec': ParameterValue(
+                    LaunchConfiguration('new_track_turn_cooldown_sec'),
                     value_type=float,
                 ),
                 'min_confirmed_observations': ParameterValue(
