@@ -1,3 +1,25 @@
+"""Align visual-odometry (VO) poses with wheel odometry for EKF fusion.
+
+By default, read PoseWithCovarianceStamped from
+/visual_slam/tracking/vo_pose_covariance and Odometry from /odometry/wheel.
+Wait for a VO pose and the latest wheel pose to have header timestamps within
+max_initial_time_gap (0.25 s). Use their XY positions and yaw angles to compute
+one fixed planar transform from the VO world frame into the wheel odometry
+frame, assuming both poses describe the same rover reference point.
+
+Apply that transform to subsequent VO XY positions and yaw, rotate the pose
+covariance, and increase its XY and yaw uncertainty using the multipliers in
+vo_callback. Preserve the source timestamp and Z position; output orientation
+contains yaw only. Publish PoseWithCovarianceStamped on /odometry/vo_pose_odom
+with frame_id set to output_frame (default: odom).
+
+This relay assumes planar motion and a wheel reference expressed in
+output_frame. It publishes poses rather than a TF transform or velocities.
+When the EKF enables pose0_differential, the EKF converts successive relayed
+poses into velocity measurements. The initial alignment remains fixed; it is
+not recomputed if the VO system resets its world frame.
+"""
+
 import math
 
 import rclpy
