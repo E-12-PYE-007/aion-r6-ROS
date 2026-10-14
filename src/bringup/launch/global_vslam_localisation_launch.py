@@ -16,14 +16,9 @@ LOCAL_EKF_CONFIG_FILE = os.path.join(
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf_local_gps.yaml',
+        'global_ekf_local_vslam.yaml',
     )
 
-NAVSAT_CONFIG_FILE = os.path.join(
-        get_package_share_directory('bringup'),
-        'config',
-        'navsat_transform_node.yaml',
-    )
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -97,22 +92,6 @@ def generate_launch_description():
         ],
     )
 
-    navsat_transform_node = Node(
-        package='robot_localization',
-        executable='navsat_transform_node',
-        name='navsat_transform_node',
-        output='screen',
-        parameters=[
-            NAVSAT_CONFIG_FILE,
-            {'use_sim_time': use_sim_time},
-        ],
-        remappings=[
-            ('imu', '/mavros_fcu/mavros_fcu/data'),
-            ('gps/fix', '/mavros_fcu/mavros_fcu/raw/fix'),
-            ('odometry/filtered', '/odometry/global'),
-            ('odometry/gps', '/odometry/gps'),
-        ],
-    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -124,6 +103,5 @@ def generate_launch_description():
         encoder_node,
         local_ekf_node,
         global_ekf_node,
-        navsat_transform_node,
         camera_launch,
     ])
