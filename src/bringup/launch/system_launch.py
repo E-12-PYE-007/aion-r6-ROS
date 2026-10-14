@@ -17,8 +17,14 @@ The controller drives on the local wheel+IMU EKF: /odometry/filtered in local mo
 is published for logging but is not in the control loop.
 
 The bag records every topic (-a) except the motor-driver topics, so it also captures the
-camera, VSLAM and nvblox topics from the separately-run containers. Uncompressed, written to
+camera, VSLAM and nvblox topics from the separately-run containers. Written to
 ~/testing_rosbags/<bag_name>, one subdir per run.
+
+Camera images are bagged compressed only: colour as JPEG (.../compressed), depth as lossless
+PNG (.../compressedDepth) and IR as lossless PNG (.../compressed, set in ag_vla camera.launch.py).
+The depth point cloud (/camera/depth/points, ~5.5 MB/msg) is not bagged; rebuild it from depth +
+camera_info. Measured ~10 MB/s total; raw_ir:=true records the IR pair as raw image_raw instead
+(~20 MB/s total).
 
 sys2 (the VLA backend), VSLAM and nvblox run separately.
 
@@ -26,8 +32,9 @@ sys2 (the VLA backend), VSLAM and nvblox run separately.
     ros2 launch bringup system_launch.py bag_name:=local_1 localisation:=local
     ros2 launch bringup system_launch.py bag_name:=pp_1 safety_layer:=false
     ros2 launch bringup system_launch.py bag:=false
+    ros2 launch bringup system_launch.py bag_name:=vslam_1 raw_ir:=true
 
-Arguments: safety_layer, localisation, bag, bag_name.
+Arguments: safety_layer, localisation, bag, bag_name, raw_ir, camera_fps.
 """
 import os
 from datetime import datetime
@@ -46,8 +53,14 @@ AG_VLA_LAUNCH_DIR = os.path.join(get_package_share_directory('ag_vla'), 'launch'
 # One subdir per run under here; created now so `ros2 bag record -o` only makes the leaf.
 BAG_ROOT = os.path.expanduser('~/testing_rosbags')
 
-# Motor-driver topics we don't bag; excluded from the otherwise-everything (-a) recording.
-BAG_EXCLUDE_REGEX = '(set_motor_|current_motor_|encoder_counts)'
+# Excluded from the otherwise-everything (-a) recording: motor-driver topics, raw images
+# (bagged via their compressed transports instead), the unused theora transport and the depth
+# point cloud (~90% of the bag otherwise).
+BAG_EXCLUDE_REGEX = '(set_motor_|current_motor_|encoder_counts|/image_raw$|/theora$|/depth/points$)'
+# raw_ir:=true -- keep raw IR, drop its now-redundant PNG copy (saves the encode CPU too).
+BAG_EXCLUDE_REGEX_RAW_IR = (
+    '(set_motor_|current_motor_|encoder_counts|/(color|depth)/image_raw$'
+    '|_ir/image_raw/compressed$|/theora$|/depth/points$)')
 
 
 def generate_launch_description():
@@ -102,11 +115,14 @@ def generate_launch_description():
     )
 
     # --- recording ---
+    bag_exclude = PythonExpression([
+        "'", BAG_EXCLUDE_REGEX_RAW_IR, "' if '", LaunchConfiguration('raw_ir'),
+        "'.lower() == 'true' else '", BAG_EXCLUDE_REGEX, "'"])
     record_bag = ExecuteProcess(
         condition=IfCondition(LaunchConfiguration('bag')),
         cmd=[
             'ros2', 'bag', 'record', '-a',
-            '-x', BAG_EXCLUDE_REGEX,
+            '-x', bag_exclude,
             '-o', [BAG_ROOT + os.sep, LaunchConfiguration('bag_name')],
         ],
         output='screen',
@@ -121,6 +137,8 @@ def generate_launch_description():
                               description='Record a rosbag of the run'),
         DeclareLaunchArgument('bag_name', default_value=datetime.now().strftime('run_%Y%m%d_%H%M%S'),
                               description='Subdir name under ~/testing_rosbags for this run\'s bag'),
+        DeclareLaunchArgument('raw_ir', default_value='false',
+                              description='Bag the left/right IR as raw image_raw instead of PNG-compressed'),
         DeclareLaunchArgument('camera_fps', default_value='30',
                               description='Camera frame rate [Hz] for IR, colour and depth (e.g. 30 or 60)'),
         local_localisation,

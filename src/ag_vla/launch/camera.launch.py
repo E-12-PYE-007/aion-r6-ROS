@@ -1,9 +1,38 @@
+import os
+import importlib.util
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch import LaunchDescriptionSource
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
+
+# Lossless PNG (not the default JPEG) for the IR .../image_raw/compressed topics, so bagged IR
+# is still usable for VSLAM replay. The leading '.' is how Humble's image_transport names these
+# (topic minus the node namespace); they are read once when the camera node starts.
+IR_PNG_PARAMS = {
+    '.left_ir.image_raw.format': 'png',
+    '.right_ir.image_raw.format': 'png',
+}
+
+
+def load_gemini_launch():
+    """The orbbec gemini_330_series launch, with IR_PNG_PARAMS added to the camera node.
+
+    That launch only forwards params it declares as arguments, and these names can't go through
+    SetParameter (it also hands them to the container as `-p`, which rcl fails to parse), so wrap
+    its load_parameters rather than patching the OrbbecSDK_ROS2 submodule.
+    """
+    path = os.path.join(get_package_share_directory('orbbec_camera'),
+                        'launch', 'gemini_330_series.launch.py')
+    spec = importlib.util.spec_from_file_location('gemini_330_series_launch', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    load_parameters = module.load_parameters
+    module.load_parameters = lambda context, args: {**load_parameters(context, args),
+                                                    **IR_PNG_PARAMS}
+    return module.generate_launch_description()
 
 
 def generate_launch_description():
@@ -40,13 +69,7 @@ def generate_launch_description():
     )
 
     gemini_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare('orbbec_camera'),
-                'launch',
-                'gemini_330_series.launch.py',
-            ])
-        ),
+        LaunchDescriptionSource(load_gemini_launch()),
         launch_arguments={
             'camera_name': 'camera',
             'enable_left_ir': 'true',
