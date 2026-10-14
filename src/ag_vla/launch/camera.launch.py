@@ -1,9 +1,9 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
@@ -25,6 +25,8 @@ def generate_launch_description():
     the chain base_link -> camera_link -> ... -> camera_*_ir_optical_frame
     that isaac_ros_visual_slam looks up at startup.
     """
+    camera_fps = LaunchConfiguration('camera_fps')
+
     base_to_camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -70,10 +72,16 @@ def generate_launch_description():
             'laser_index1_ir_ae_max_exposure': '16000',  # default 17000 -- kept under the 60fps frame period (~16.7ms); higher gets clamped anyway
             'laser_index1_depth_gain': '48',           # default 16 -- gain isn't limited by frame period like exposure is
 
-            'left_ir_fps': '30',
-            'right_ir_fps': '30',
-            'depth_fps': '30',
+            'left_ir_fps': camera_fps,
+            'right_ir_fps': camera_fps,
+            'color_fps': camera_fps,
+            'depth_fps': camera_fps,
         }.items(),
     )
 
-    return LaunchDescription([base_to_camera_tf, gemini_launch])
+    return LaunchDescription([
+        DeclareLaunchArgument('camera_fps', default_value='30',
+                              description='Camera frame rate [Hz] for IR, colour and depth (e.g. 30 or 60)'),
+        base_to_camera_tf,
+        gemini_launch,
+    ])
