@@ -152,6 +152,7 @@ class WeedGeotagger(Node):
         self.camera_info_topic = self.declare_parameter('camera_info_topic', '/camera/color/camera_info').value
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
         self.output_csv = self.declare_parameter('output_csv', '').value
+        self.output_odom_csv = self.declare_parameter('output_odom_csv', '').value
         self.target_label = self.declare_parameter('target_label', '').value
         self.min_score = float(self.declare_parameter('min_score', 0.0).value)
         self.max_depth_m = float(self.declare_parameter('max_depth_m', 8.0).value)
@@ -195,6 +196,8 @@ class WeedGeotagger(Node):
         self.tracks = []
         self.csv_file = None
         self.csv_writer = None
+        self.odom_csv_file = None
+        self.odom_csv_writer = None
 
         if self.output_csv:
             output_path = Path(self.output_csv)
@@ -218,7 +221,30 @@ class WeedGeotagger(Node):
                     'depth_stamp_sec', 'odom_stamp_sec', 'odom_age_sec',
                     'camera_info_width', 'camera_info_height',
                     'depth_image_width', 'depth_image_height',
+                    'robot_forward_m', 'robot_left_m',
+                    'local_ekf_x_m', 'local_ekf_y_m',
                 ])
+
+        odom_csv_path = self.output_odom_csv
+        if not odom_csv_path and self.output_csv:
+            detection_path = Path(self.output_csv)
+            suffix = detection_path.suffix or '.csv'
+            odom_csv_path = str(detection_path.with_name(f'{detection_path.stem}_odom{suffix}'))
+
+        if odom_csv_path:
+            output_path = Path(odom_csv_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self.odom_csv_file = output_path.open('a', newline='')
+            self.odom_csv_writer = csv.writer(self.odom_csv_file)
+            if output_path.stat().st_size == 0:
+                self.odom_csv_writer.writerow([
+                    'stamp_sec', 'odom_stamp_sec', 'frame_id', 'child_frame_id',
+                    'odom_x', 'odom_y', 'odom_z', 'odom_yaw',
+                    'orientation_x', 'orientation_y', 'orientation_z', 'orientation_w',
+                    'linear_x', 'linear_y', 'linear_z',
+                    'angular_x', 'angular_y', 'angular_z',
+                ])
+            self.get_logger().info(f'Writing odometry path CSV to {output_path}')
 
         self.create_subscription(String, self.detections_topic, self.detections_callback, 10)
         self.create_subscription(Image, self.depth_topic, self.depth_callback, 10)
@@ -256,6 +282,34 @@ class WeedGeotagger(Node):
             self.odom_buffer.popleft()
         if abs(msg.twist.twist.angular.z) > self.turn_tracking_angular_z:
             self.last_turn_time_sec = self.get_clock().now().nanoseconds / 1e9
+        self.write_odom_csv(msg, odom_stamp_sec)
+
+    def write_odom_csv(self, msg, odom_stamp_sec):
+        if self.odom_csv_writer is None:
+            return
+
+        pose = msg.pose.pose
+        twist = msg.twist.twist
+        self.odom_csv_writer.writerow([
+            self.get_clock().now().nanoseconds / 1e9,
+            odom_stamp_sec,
+            msg.header.frame_id,
+            msg.child_frame_id,
+            pose.position.x,
+            pose.position.y,
+            pose.position.z,
+            yaw_from_quaternion(pose.orientation),
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+            twist.linear.x,
+            twist.linear.y,
+            twist.linear.z,
+            twist.angular.x,
+            twist.angular.y,
+            twist.angular.z,
+        ])
 
     def detections_callback(self, msg):
         if self.latest_depth is None or self.latest_camera_info is None or self.latest_odom is None:
@@ -680,12 +734,18 @@ class WeedGeotagger(Node):
             camera_info.height,
             measurement.depth_image_width,
             measurement.depth_image_height,
+            measurement.x_robot,
+            measurement.y_robot,
+            track.x,
+            track.y,
         ])
         self.csv_file.flush()
 
     def destroy_node(self):
         if self.csv_file is not None:
             self.csv_file.close()
+        if self.odom_csv_file is not None:
+            self.odom_csv_file.close()
         super().destroy_node()
 
 

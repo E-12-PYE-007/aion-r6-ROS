@@ -70,6 +70,11 @@ accuracy/debug columns include `track_id`, `event`, `observations`,
 `depth_valid_ratio`, `depth_stamp_sec`, `odom_stamp_sec`, `odom_age_sec`,
 `match_distance_m`, `linear_x`, and `angular_z`.
 
+For tape-measured tests from the rover body, compare against
+`robot_forward_m` and `robot_left_m` (`x_robot` and `y_robot`). For local EKF
+map consistency while driving, use `local_ekf_x_m` and `local_ekf_y_m`
+(`track_weed_x` and `track_weed_y`).
+
 ## Run
 
 Run detection and geotagging together:
@@ -78,6 +83,7 @@ Run detection and geotagging together:
 ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
   model_path:=/home/vla-cap/models/best.pt \
   output_csv:=/home/vla-cap/weeds.csv \
+  output_odom_csv:=/home/vla-cap/weeds_odom.csv \
   odom_topic:=/odometry/filtered \
   publish_annotated:=false
 ```
