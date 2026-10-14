@@ -25,3 +25,10 @@ ODOM_FRAME = 'odom'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
 SLACK_TOPIC = 'safety_layer/slack'   # debug: constraint slack in use, one per tick
 CBF_H_TOPIC = 'cbf/h'                # debug: barrier value at the lookahead point, one per tick
+CMD_VEL_NOMINAL_TOPIC = 'safety_layer/cmd_vel_nominal'  # debug: pure-pursuit command before the CBF filter
+FILTERING_ACTIVE_TOPIC = 'safety_layer/filtering_active'  # debug: True when the CBF filter changed v or omega
+
+# --- Filtering-active detection ---
+FILTERING_EPS = 1e-3          # per-channel deadband; |v_safe - v_nom| or |omega_safe - omega_nom|
+                              # above this (in m/s / rad/s) counts as the filter intervening,
+                              # set just above the QP solver's numerical noise floor

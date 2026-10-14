@@ -6,7 +6,10 @@ filter (cbf_qp.py) changes it as little as needed to keep the robot outside the 
 margin.
 
 Subscribes: /odometry/filtered, /agvla/action_chunk, /nvblox_node/static_map_slice
-Publishes:  cmd_vel, safety_layer/slack, cbf/h
+Publishes:  cmd_vel, safety_layer/slack, cbf/h,
+            safety_layer/cmd_vel_nominal (pure-pursuit command before the filter; diff against
+            cmd_vel to see when and how much the CBF filter intervenes),
+            safety_layer/filtering_active (True when the filter changed v or omega)
 Parameters: patch_size, patch_resolution (ESDF patch geometry; defaults in safety_layer/constants.py),
             print_solve_time (log the QP solve time every tick as 'solve_time_ms=<value>')
 """
@@ -20,7 +23,7 @@ from nav_msgs.msg import Odometry
 from nvblox_msgs.msg import DistanceMapSlice
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from std_msgs.msg import Bool, Float32
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -30,7 +33,8 @@ from ..frames import yaw_from_quaternion
 from ..pure_pursuit import PurePursuit
 from .cbf_qp import CbfFilter
 from .constants import (
-    ESDF_TOPIC, SLACK_TOPIC, CBF_H_TOPIC, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION,
+    ESDF_TOPIC, SLACK_TOPIC, CBF_H_TOPIC, CMD_VEL_NOMINAL_TOPIC, FILTERING_ACTIVE_TOPIC,
+    FILTERING_EPS, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION,
 )
 from .esdf_map import EsdfMap
 
@@ -61,6 +65,8 @@ class CbfSafetyLayerNode(Node):
         self._cmd_vel_publisher = self.create_publisher(Twist, CMD_VEL_TOPIC, 10)
         self._h_publisher = self.create_publisher(Float32, CBF_H_TOPIC, 10)
         self._slack_publisher = self.create_publisher(Float32, SLACK_TOPIC, 10)
+        self._nominal_publisher = self.create_publisher(Twist, CMD_VEL_NOMINAL_TOPIC, 10)
+        self._filtering_active_publisher = self.create_publisher(Bool, FILTERING_ACTIVE_TOPIC, 10)
 
         self.create_timer(CONTROL_LOOP_DT, self.control_loop)
 
@@ -100,6 +106,15 @@ class CbfSafetyLayerNode(Node):
         self._slack_publisher.publish(Float32(data=slack))
         if slack > 1e-4:
             self.get_logger().warn(f'CBF constraint slack in use: {slack:.4f} (h={h:.4f})')
+
+        nominal = Twist()
+        nominal.linear.x = float(v_nom)
+        nominal.angular.z = float(omega_nom)
+        self._nominal_publisher.publish(nominal)
+        # Filter is intervening if it changed either channel beyond the solver noise floor.
+        filtering_active = (abs(u_safe[0] - v_nom) > FILTERING_EPS
+                            or abs(u_safe[1] - omega_nom) > FILTERING_EPS)
+        self._filtering_active_publisher.publish(Bool(data=bool(filtering_active)))
 
         cmd = Twist()
         cmd.linear.x = float(u_safe[0])
