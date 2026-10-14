@@ -22,6 +22,13 @@ CBF_WEIGHT_V = 1.0            # QP weight on deviation from nominal v
 CBF_WEIGHT_OMEGA = 2.0        # QP weight on deviation from nominal omega
 CBF_SLACK_WEIGHT = 500.0      # QP weight on constraint slack; keeps the QP feasible inside the clearance
 
+# --- Reverse recovery ---
+SLACK_REVERSE_THRESHOLD = 0.01   # slack above this means no command satisfies the barriers
+SLACK_REVERSE_TICKS = 8          # consecutive ticks above the threshold (about 0.5 s) that trigger the reverse
+REVERSE_DISTANCE_M = 0.5         # [m] straight back, measured on odometry
+REVERSE_SPEED_M_S = 0.1          # [m/s]
+REVERSE_TIMEOUT_FACTOR = 1.5     # give up after this multiple of the nominal reverse time
+
 # --- Topics and frames ---
 ODOM_FRAME = 'odom'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
@@ -29,6 +36,7 @@ SLACK_TOPIC = 'safety_layer/slack'   # debug: constraint slack in use, one per t
 CBF_H_TOPIC = 'cbf/h'                # debug: smallest barrier value over the body points, one per tick
 CMD_VEL_NOMINAL_TOPIC = 'safety_layer/cmd_vel_nominal'  # debug: pure-pursuit command before the CBF filter
 FILTERING_ACTIVE_TOPIC = 'safety_layer/filtering_active'  # debug: True when the CBF filter changed v or omega
+REVERSING_TOPIC = 'safety_layer/reversing'  # debug: True while the reverse recovery is driving
 
 # --- Filtering-active detection ---
 FILTERING_EPS = 1e-3          # per-channel deadband; |v_safe - v_nom| or |omega_safe - omega_nom|

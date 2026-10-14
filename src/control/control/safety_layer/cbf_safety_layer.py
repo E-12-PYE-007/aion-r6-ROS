@@ -6,7 +6,7 @@ filter (cbf_qp.py) changes it as little as needed to keep the robot outside the 
 margin.
 
 Subscribes: /odometry/filtered, /agvla/action_chunk, /nvblox_node/static_map_slice
-Publishes:  cmd_vel, safety_layer/slack, cbf/h,
+Publishes:  cmd_vel, safety_layer/slack, cbf/h, safety_layer/reversing (True while the reverse recovery drives),
             safety_layer/cmd_vel_nominal (pure-pursuit command before the filter; diff against
             cmd_vel to see when and how much the CBF filter intervenes),
             safety_layer/filtering_active (True when the filter changed v or omega)
@@ -34,9 +34,10 @@ from ..pure_pursuit import PurePursuit
 from .cbf_qp import CbfFilter
 from .constants import (
     ESDF_TOPIC, SLACK_TOPIC, CBF_H_TOPIC, CMD_VEL_NOMINAL_TOPIC, FILTERING_ACTIVE_TOPIC,
-    FILTERING_EPS, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION,
+    FILTERING_EPS, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION, REVERSING_TOPIC,
 )
 from .esdf_map import EsdfMap
+from .reverse_recovery import ReverseRecovery
 
 
 class CbfSafetyLayerNode(Node):
@@ -55,6 +56,7 @@ class CbfSafetyLayerNode(Node):
         self._cbf = CbfFilter(patch_size=patch_size, patch_resolution=patch_resolution)
         self._esdf_map = EsdfMap(patch_size)
         self._pure_pursuit = PurePursuit()
+        self._reverse_recovery = ReverseRecovery()
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -67,6 +69,7 @@ class CbfSafetyLayerNode(Node):
         self._slack_publisher = self.create_publisher(Float32, SLACK_TOPIC, 10)
         self._nominal_publisher = self.create_publisher(Twist, CMD_VEL_NOMINAL_TOPIC, 10)
         self._filtering_active_publisher = self.create_publisher(Bool, FILTERING_ACTIVE_TOPIC, 10)
+        self._reversing_publisher = self.create_publisher(Bool, REVERSING_TOPIC, 10)
 
         self.create_timer(CONTROL_LOOP_DT, self.control_loop)
 
@@ -116,9 +119,18 @@ class CbfSafetyLayerNode(Node):
                             or abs(u_safe[1] - omega_nom) > FILTERING_EPS)
         self._filtering_active_publisher.publish(Bool(data=bool(filtering_active)))
 
+        was_reversing = self._reverse_recovery.reversing
+        reverse_cmd = self._reverse_recovery.update(x0, slack)
+        if reverse_cmd is not None and not was_reversing:
+            self.get_logger().warn('Slack persists, reversing straight back')
+        elif reverse_cmd is None and was_reversing:
+            self.get_logger().info('Reverse finished, resuming the filter')
+        self._reversing_publisher.publish(Bool(data=reverse_cmd is not None))
+        v_out, omega_out = u_safe if reverse_cmd is None else reverse_cmd
+
         cmd = Twist()
-        cmd.linear.x = float(u_safe[0])
-        cmd.angular.z = float(u_safe[1])
+        cmd.linear.x = float(v_out)
+        cmd.angular.z = float(omega_out)
         self._cmd_vel_publisher.publish(cmd)
 
 
