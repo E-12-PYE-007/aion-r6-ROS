@@ -54,16 +54,21 @@ recorded as a new weed every frame. A new measurement is matched to an existing
 track when it is within `merge_radius_m`; otherwise a new `track_id` is created.
 Existing tracks are updated with a weighted moving average based on YOLO score,
 depth quality, distance, and current angular speed.
-The geotagger buffers recent odometry and projects each detection using the odom
-message closest to the image timestamp, which is important while turning. During
-turns it uses a larger `turning_merge_radius_m` for matching existing tracks and
-requires `turning_min_confirmed_observations` before confirming turn-born
-candidates. Nearby duplicate tracks are also merged with `track_merge_radius_m`.
+The geotagger buffers recent depth frames and odometry, then projects each
+detection using the depth and odom messages closest to the original image
+timestamp. If either one is farther than `max_sync_age_sec`, that detection is
+skipped instead of being geotagged with stale data. This is important because
+YOLO inference can publish detections after the rover has already moved or
+turned. During turns it uses a larger `turning_merge_radius_m` for matching
+existing tracks and requires `turning_min_confirmed_observations` before
+confirming turn-born candidates. Nearby duplicate tracks are also merged with
+`track_merge_radius_m`.
 
 The CSV includes both raw measurement columns and smoothed track columns. Useful
 accuracy/debug columns include `track_id`, `event`, `observations`,
 `raw_weed_x/y/z`, `track_weed_x/y/z`, `depth_std_m`, `depth_inlier_samples`,
-`depth_valid_ratio`, `match_distance_m`, `linear_x`, and `angular_z`.
+`depth_valid_ratio`, `depth_stamp_sec`, `odom_stamp_sec`, `odom_age_sec`,
+`match_distance_m`, `linear_x`, and `angular_z`.
 
 ## Run
 
@@ -85,6 +90,7 @@ foreground_depth_percentile:=20.0 foreground_depth_tolerance_m:=0.6
 turn_tracking_angular_z:=0.15 turning_merge_radius_m:=0.75
 min_confirmed_observations:=3 turning_min_confirmed_observations:=6
 track_merge_radius_m:=0.25 odom_buffer_sec:=10.0
+depth_buffer_sec:=10.0 max_sync_age_sec:=0.1
 max_depth_samples:=800 min_depth_samples:=20
 ```
 

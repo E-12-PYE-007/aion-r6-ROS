@@ -72,6 +72,9 @@ class WeedMeasurement:
     odom_yaw: float
     linear_x: float
     angular_z: float
+    depth_stamp_sec: float
+    depth_image_width: int
+    depth_image_height: int
     odom_stamp_sec: float
     odom_age_sec: float
 
@@ -170,6 +173,8 @@ class WeedGeotagger(Node):
         )
         self.track_merge_radius_m = float(self.declare_parameter('track_merge_radius_m', 0.25).value)
         self.odom_buffer_sec = float(self.declare_parameter('odom_buffer_sec', 10.0).value)
+        self.depth_buffer_sec = float(self.declare_parameter('depth_buffer_sec', 10.0).value)
+        self.max_sync_age_sec = float(self.declare_parameter('max_sync_age_sec', 0.1).value)
         self.track_min_update_weight = float(self.declare_parameter('track_min_update_weight', 0.10).value)
         self.track_max_update_weight = float(self.declare_parameter('track_max_update_weight', 0.45).value)
         self.angular_slowdown_start = float(self.declare_parameter('angular_slowdown_start', 0.2).value)
@@ -183,6 +188,7 @@ class WeedGeotagger(Node):
         self.latest_depth = None
         self.latest_camera_info = None
         self.latest_odom = None
+        self.depth_buffer = deque()
         self.odom_buffer = deque()
         self.last_turn_time_sec = None
         self.next_track_id = 1
@@ -228,9 +234,16 @@ class WeedGeotagger(Node):
 
     def depth_callback(self, msg):
         try:
-            self.latest_depth = (msg, depth_image_to_array(msg))
+            depth_array = depth_image_to_array(msg)
         except ValueError as exc:
             self.get_logger().warn(str(exc), throttle_duration_sec=5.0)
+            return
+
+        depth_stamp_sec = stamp_to_sec(msg.header.stamp)
+        self.latest_depth = (msg, depth_array)
+        self.depth_buffer.append((depth_stamp_sec, msg, depth_array))
+        while self.depth_buffer and (depth_stamp_sec - self.depth_buffer[0][0]) > self.depth_buffer_sec:
+            self.depth_buffer.popleft()
 
     def camera_info_callback(self, msg):
         self.latest_camera_info = msg
@@ -266,10 +279,11 @@ class WeedGeotagger(Node):
                 continue
 
             odom = self.odom_for_detection(detection)
-            if odom is None:
+            depth_sample = self.depth_for_detection(detection)
+            if odom is None or depth_sample is None:
                 continue
 
-            measurement = self.project_detection(detection, odom)
+            measurement = self.project_detection(detection, depth_sample, odom)
             if measurement is None:
                 continue
 
@@ -289,10 +303,40 @@ class WeedGeotagger(Node):
         detection_stamp_sec = detection.stamp_sec + detection.stamp_nanosec * 1e-9
         if detection_stamp_sec <= 0.0 or not self.odom_buffer:
             return self.latest_odom
-        return min(self.odom_buffer, key=lambda item: abs(item[0] - detection_stamp_sec))[1]
+        odom_stamp_sec, odom = min(
+            self.odom_buffer,
+            key=lambda item: abs(item[0] - detection_stamp_sec),
+        )
+        if abs(odom_stamp_sec - detection_stamp_sec) > self.max_sync_age_sec:
+            self.get_logger().warn(
+                'Skipping detection because closest odom is '
+                f'{odom_stamp_sec - detection_stamp_sec:.3f}s from image stamp',
+                throttle_duration_sec=2.0,
+            )
+            return None
+        return odom
 
-    def project_detection(self, detection, odom):
-        depth_msg, depth = self.latest_depth
+    def depth_for_detection(self, detection):
+        if self.latest_depth is None:
+            return None
+        detection_stamp_sec = detection.stamp_sec + detection.stamp_nanosec * 1e-9
+        if detection_stamp_sec <= 0.0 or not self.depth_buffer:
+            return self.latest_depth
+        depth_stamp_sec, depth_msg, depth = min(
+            self.depth_buffer,
+            key=lambda item: abs(item[0] - detection_stamp_sec),
+        )
+        if abs(depth_stamp_sec - detection_stamp_sec) > self.max_sync_age_sec:
+            self.get_logger().warn(
+                'Skipping detection because closest depth is '
+                f'{depth_stamp_sec - detection_stamp_sec:.3f}s from image stamp',
+                throttle_duration_sec=2.0,
+            )
+            return None
+        return depth_msg, depth
+
+    def project_detection(self, detection, depth_sample, odom):
+        depth_msg, depth = depth_sample
         camera_info = self.latest_camera_info
 
         fx = camera_info.k[0]
@@ -337,6 +381,9 @@ class WeedGeotagger(Node):
             odom_yaw=odom_yaw,
             linear_x=odom.twist.twist.linear.x,
             angular_z=odom.twist.twist.angular.z,
+            depth_stamp_sec=stamp_to_sec(depth_msg.header.stamp),
+            depth_image_width=depth.shape[1],
+            depth_image_height=depth.shape[0],
             odom_stamp_sec=stamp_to_sec(odom.header.stamp),
             odom_age_sec=(detection.stamp_sec + detection.stamp_nanosec * 1e-9) - stamp_to_sec(odom.header.stamp),
         )
@@ -580,9 +627,7 @@ class WeedGeotagger(Node):
     def write_csv(self, track, event, match_distance, measurement, detection):
         if self.csv_writer is None:
             return
-        depth_msg, depth = self.latest_depth
         camera_info = self.latest_camera_info
-        odom = self.latest_odom
         self.csv_writer.writerow([
             self.get_clock().now().nanoseconds / 1e9,
             detection.stamp_sec + detection.stamp_nanosec * 1e-9,
@@ -628,13 +673,13 @@ class WeedGeotagger(Node):
             detection.width,
             detection.height,
             detection.area,
-            stamp_to_sec(depth_msg.header.stamp),
+            measurement.depth_stamp_sec,
             measurement.odom_stamp_sec,
             measurement.odom_age_sec,
             camera_info.width,
             camera_info.height,
-            depth.shape[1],
-            depth.shape[0],
+            measurement.depth_image_width,
+            measurement.depth_image_height,
         ])
         self.csv_file.flush()
 

@@ -38,6 +38,8 @@ def generate_launch_description():
         DeclareLaunchArgument('turning_min_confirmed_observations', default_value='6'),
         DeclareLaunchArgument('track_merge_radius_m', default_value='0.25'),
         DeclareLaunchArgument('odom_buffer_sec', default_value='10.0'),
+        DeclareLaunchArgument('depth_buffer_sec', default_value='10.0'),
+        DeclareLaunchArgument('max_sync_age_sec', default_value='0.1'),
         DeclareLaunchArgument('track_min_update_weight', default_value='0.10'),
         DeclareLaunchArgument('track_max_update_weight', default_value='0.45'),
         DeclareLaunchArgument('angular_slowdown_start', default_value='0.2'),
@@ -123,6 +125,14 @@ def generate_launch_description():
                 ),
                 'odom_buffer_sec': ParameterValue(
                     LaunchConfiguration('odom_buffer_sec'),
+                    value_type=float,
+                ),
+                'depth_buffer_sec': ParameterValue(
+                    LaunchConfiguration('depth_buffer_sec'),
+                    value_type=float,
+                ),
+                'max_sync_age_sec': ParameterValue(
+                    LaunchConfiguration('max_sync_age_sec'),
                     value_type=float,
                 ),
                 'track_min_update_weight': ParameterValue(

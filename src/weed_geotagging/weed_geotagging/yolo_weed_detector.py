@@ -47,7 +47,7 @@ class YoloWeedDetector(Node):
             self.create_publisher(Image, self.annotated_topic, 10)
             if self.publish_annotated else None
         )
-        self.create_subscription(Image, self.image_topic, self.image_callback, 10)
+        self.create_subscription(Image, self.image_topic, self.image_callback, 1)
 
         self.get_logger().info(
             f'Loaded YOLO model {self.model_path}; subscribing {self.image_topic}, '
