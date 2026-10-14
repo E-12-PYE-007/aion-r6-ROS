@@ -33,13 +33,13 @@ class CbfFilter:
         self.omega_max = omega_max
         self.n_solve_failures = 0
 
-        # Parameter layout: [x0(3) | psi(1) | esdf_coeffs(n_coeffs) | u_nom(2)]
-        self.n_params = 3 + 1 + self.n_coeffs + 2
+        # Parameter layout: [x0(3) | psi(1) | delta(2) | esdf_coeffs(n_coeffs) | u_nom(2)]
+        self.n_params = 3 + 1 + 2 + self.n_coeffs + 2
 
         qp, self.lbw, self.ubw, self.lbg, self.ubg = self._build_qp(weight_v, weight_omega, slack_weight)
         self.solver = ca.qpsol('cbf_qp', 'qpoases', qp, {'printLevel': 'none', 'error_on_fail': False})
 
-    def _barrier(self, pose, anchor_xy, psi, coeffs, body_point):
+    def _barrier(self, pose, anchor_xy, psi, delta, coeffs, body_point):
         """h = ESDF distance at `body_point` of `pose` - clearance, for a patch centred on
         `anchor_xy`. The anchor must stay fixed when h is differentiated: the patch moves with
         the robot, so differentiating with the anchor tied to the pose would cancel the position
@@ -47,14 +47,15 @@ class CbfFilter:
         c, s = ca.cos(pose[2]), ca.sin(pose[2])
         point = pose[0:2] + ca.vertcat(c * body_point[0] - s * body_point[1],
                                        s * body_point[0] + c * body_point[1])
-        return self._esdf.distance(point, anchor_xy, psi, coeffs) - self.clearance
+        return self._esdf.distance(point, anchor_xy, psi, coeffs, delta) - self.clearance
 
     def _build_qp(self, weight_v, weight_omega, slack_weight):
         P = ca.MX.sym('P', self.n_params)
         p_x0 = P[0:3]
         p_psi = P[3]
-        p_coeffs = P[4:4 + self.n_coeffs]
-        p_u_nom = P[4 + self.n_coeffs: 6 + self.n_coeffs]
+        p_delta = P[4:6]
+        p_coeffs = P[6:6 + self.n_coeffs]
+        p_u_nom = P[6 + self.n_coeffs: 8 + self.n_coeffs]
 
         u = ca.MX.sym('u', 2)      # [v, omega]
         s = ca.MX.sym('s')         # CBF constraint slack, >= 0, shared by all body points
@@ -71,7 +72,7 @@ class CbfFilter:
         pose_sym = ca.MX.sym('pose_sym', 3)
         constraints, barriers = [], []
         for body_point in self.body_points:
-            h_sym = self._barrier(pose_sym, p_x0[0:2], p_psi, p_coeffs, body_point)
+            h_sym = self._barrier(pose_sym, p_x0[0:2], p_psi, p_delta, p_coeffs, body_point)
             grad_h_sym = ca.gradient(h_sym, pose_sym)   # dh/d[x, y, theta]
             h, grad_h = ca.substitute([h_sym, grad_h_sym], [pose_sym], [p_x0])
             # Slacked CBF condition: dh/dt + s >= -alpha * h
@@ -89,17 +90,19 @@ class CbfFilter:
         ubw = [self.v_max, self.omega_max, ca.inf]
         return qp, lbw, ubw, [0.0] * n, [ca.inf] * n
 
-    def pack_params(self, x0, psi, esdf_patch, u_nom):
+    def pack_params(self, x0, psi, delta, esdf_patch, u_nom):
         return np.concatenate([
-            np.asarray(x0, dtype=float), [psi], self._esdf.pack(esdf_patch),
+            np.asarray(x0, dtype=float), [psi], np.asarray(delta, dtype=float), self._esdf.pack(esdf_patch),
             np.asarray(u_nom, dtype=float),
         ])
 
-    def filter(self, x0, psi, esdf_patch, u_nom):
-        """Returns (u_safe, h, slack): the safe [v, omega], the smallest barrier value over the
+    def filter(self, x0, psi, delta, esdf_patch, u_nom):
+        """`delta` is the robot's offset from the patch's centre cell (EsdfMap.get_patch), 0 if
+        the patch is centred exactly on the robot.
+        Returns (u_safe, h, slack): the safe [v, omega], the smallest barrier value over the
         body points (positive = every point outside its clearance), and the slack the constraints
         needed (0 normally). If the QP solver fails, u_safe is a stop and n_solve_failures counts it."""
-        p = self.pack_params(x0, psi, esdf_patch, u_nom)
+        p = self.pack_params(x0, psi, delta, esdf_patch, u_nom)
         sol = self.solver(p=p, lbx=self.lbw, ubx=self.ubw, lbg=self.lbg, ubg=self.ubg,
                           x0=np.concatenate([u_nom, [0.0]]))
         w_opt = np.array(sol['x']).flatten()
@@ -116,7 +119,8 @@ if __name__ == '__main__':
     psi = 0.0
     esdf_patch = np.full((cbf.patch_size, cbf.patch_size), 2.0)  # free space
     u_nom = np.array([0.3, 0.0])
-    u_safe, h, slack = cbf.filter(x0, psi, esdf_patch, u_nom)
+    delta = np.zeros(2)
+    u_safe, h, slack = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
     print(f"free space: u_safe={u_safe}, h={h:.3f}, slack={slack:.4f}")
 
     # A disc obstacle 0.5 m ahead and 0.3 m to the left of the robot.
@@ -124,5 +128,5 @@ if __name__ == '__main__':
     x = (cols - cbf.half_patch) * cbf.patch_resolution
     y = (rows - cbf.half_patch) * cbf.patch_resolution
     esdf_patch = np.clip(np.hypot(x - 0.5, y - 0.3) - 0.15, -0.2, 2.0)
-    u_safe, h, slack = cbf.filter(x0, psi, esdf_patch, u_nom)
+    u_safe, h, slack = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
     print(f"obstacle ahead-left: u_safe={u_safe}, h={h:.3f}, slack={slack:.4f}")

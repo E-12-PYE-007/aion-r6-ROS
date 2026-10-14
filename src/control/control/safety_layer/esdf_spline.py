@@ -31,15 +31,16 @@ class EsdfSpline:
         patch = np.asarray(esdf_patch, dtype=float).reshape(self.patch_size, self.patch_size)
         return (patch - NVBLOX_MAX_DISTANCE_M).ravel(order='C')
 
-    def distance(self, p_xy, p_x0_xy, psi, coeffs):
-        """ESDF distance at odom-frame point `p_xy`, for a patch centred on odom-frame `p_x0_xy`
+    def distance(self, p_xy, p_x0_xy, psi, coeffs, delta):
+        """ESDF distance at odom-frame point `p_xy`, for a patch cut around odom-frame `p_x0_xy`
         (`coeffs` from pack()). `psi` is the yaw of the odom frame in the ESDF frame; only the
-        offset from p_x0_xy is rotated, since the translation cancels."""
+        offset from p_x0_xy is rotated, since the translation cancels. `delta` is p_x0_xy's
+        offset from the patch's centre cell in the ESDF frame (EsdfMap.get_patch)."""
         offset_odom = p_xy - p_x0_xy
         c, s = ca.cos(psi), ca.sin(psi)
         rotation = ca.vertcat(ca.horzcat(c, -s), ca.horzcat(s, c))
         offset_map = rotation @ offset_odom
         centre = self.half_patch * self.patch_resolution
-        query = ca.vertcat(centre + offset_map[0], centre + offset_map[1])
+        query = ca.vertcat(centre + offset_map[0] + delta[0], centre + offset_map[1] + delta[1])
         knots = self._knots
         return ca.bspline(query, coeffs, [knots, knots], [self.spline_degree] * 2, 1, {}) + NVBLOX_MAX_DISTANCE_M

@@ -94,11 +94,11 @@ class CbfSafetyLayerNode(Node):
         if esdf_result is None:
             self.get_logger().warn('No ESDF/transform available yet, skipping tick')
             return
-        psi, esdf_patch = esdf_result
+        psi, esdf_patch, patch_offset = esdf_result
 
         v_nom, omega_nom = self._pure_pursuit.nominal(self._current_action_chunk, x0)
         solve_start = time.perf_counter()
-        u_safe, h, slack = self._cbf.filter(x0, psi, esdf_patch, [v_nom, omega_nom])
+        u_safe, h, slack = self._cbf.filter(x0, psi, patch_offset, esdf_patch, [v_nom, omega_nom])
         if self._print_solve_time:
             self.get_logger().info(f'solve_time_ms={(time.perf_counter() - solve_start) * 1e3:.3f}')
 
