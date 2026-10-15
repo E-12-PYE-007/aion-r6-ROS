@@ -1,0 +1,7 @@
+# The plants the display offers as tickboxes. `label` is the class name the YOLO model reports and is what
+# target_classes is set to; `name` is what the page shows. Edit this to rename plants.
+plants:
+  - {label: plant1, name: Plant 1}
+  - {label: plant2, name: Plant 2}
+  - {label: plant3, name: Plant 3}
+  - {label: plant4, name: Plant 4}
