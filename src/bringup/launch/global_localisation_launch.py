@@ -10,13 +10,13 @@ from launch_ros.actions import Node
 LOCAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'local_ekf_wheel_imu.yaml',
+        'local_ekf.yaml',
     )
 
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf_local_gps.yaml',
+        'global_ekf.yaml',
     )
 
 NAVSAT_CONFIG_FILE = os.path.join(
@@ -100,7 +100,7 @@ def generate_launch_description():
         remappings=[
             ('imu', '/mavros_fcu/mavros_fcu/data'),
             ('gps/fix', '/mavros_fcu/mavros_fcu/raw/fix'),
-            ('odometry/filtered', '/odometry/global'),
+            ('odometry/filtered', '/odometry/local'),
             ('odometry/gps', '/odometry/gps'),
         ],
     )
