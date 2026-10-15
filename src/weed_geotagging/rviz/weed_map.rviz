@@ -1,0 +1,80 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: odom
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Metre Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 100
+      Color: 90; 90; 90
+      Alpha: 0.5
+      Plane: XY
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Rover and Heading
+      Enabled: true
+      Topic:
+        Value: /rover_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Path
+      Name: Rover Route
+      Enabled: true
+      Topic:
+        Value: /rover_path
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+      Buffer Length: 1
+      Color: 70; 200; 240
+      Alpha: 1
+      Line Style: Lines
+      Line Width: 0.03
+      Pose Style: None
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Plants and Class Labels
+      Enabled: true
+      Topic:
+        Value: /weed_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+    - Class: rviz_default_plugins/Image
+      Name: Camera
+      Enabled: false
+      Topic:
+        Value: /camera/color/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Transport Hint: raw
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top Down
+      Target Frame: odom
+      Angle: 0
+      Scale: 60
+      X: 0
+      Y: 0
+Window Geometry:
+  Width: 1280
+  Height: 800
