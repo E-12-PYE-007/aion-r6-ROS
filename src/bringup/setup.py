@@ -17,6 +17,11 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
     maintainer='dstrahan',
     maintainer_email='dan.strahan08@gmail.com',
     description='Launch files for bringing up the Aion R6 rover.',
