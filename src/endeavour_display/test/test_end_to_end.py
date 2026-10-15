@@ -139,7 +139,8 @@ def test_the_display_from_connection_to_start_data_stop_and_loss(rig):
     assert rig.script('status').returncode == 3
     rig.chrome.js(HOLD_START)
     rig.wait_for(lambda u: u['go'] in ('Starting', 'Stop'), 10, 'the start to begin')
-    ui = rig.wait_for(lambda u: u['go'] == 'Stop' and u['camLive'] and u['pins'] >= 6, 30, 'a running stack with data')
+    ui = rig.wait_for(lambda u: u['go'] == 'Stop' and u['camLive'] and u['camWidth'] > 0 and u['pins'] >= 6, 30,
+                      'a running stack with data and a decoded camera frame')
     assert rig.args_given_to_the_stack() == 'target_classes:=plant1,plant3,plant4'
     assert ui['weeds'] == '6' and ui['camWidth'] > 0 and all(t[2] for t in ui['ticks'])   # locked while running
     assert ui['light'] == 'light g'

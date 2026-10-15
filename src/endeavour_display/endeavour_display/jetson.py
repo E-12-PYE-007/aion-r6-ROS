@@ -49,8 +49,17 @@ def parse_status(output):
     return stack, nvblox
 
 
+def ssh_reachable(host, user='vla-cap', runner=subprocess.run, timeout=8):
+    """Whether a passwordless ssh to the host works right now."""
+    try:
+        return runner(['ssh', *SSH_OPTIONS, f'{user}@{host}', 'true'], capture_output=True, timeout=timeout).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 class JetsonControl:
-    def __init__(self, hosts, user='vla-cap', script=DEFAULT_SCRIPT, runner=subprocess.run, local=False, env=None):
+    def __init__(self, hosts, user='vla-cap', script=DEFAULT_SCRIPT, runner=subprocess.run, local=False, env=None,
+                 multicast=False):
         """hosts: addresses to try in order (the usual one, then the hotspot). local runs the script in a
         local shell instead of over ssh, for tests."""
         self.hosts = [h for h in hosts if h]
@@ -59,6 +68,7 @@ class JetsonControl:
         self._run = runner
         self.local = local
         self.env = env
+        self.multicast = multicast      # the Jetson stack finds its peers by multicast, not the discovery server
         self.last_host = self.hosts[0] if self.hosts else None
 
     def _argv(self, host, remote_command):
@@ -103,7 +113,8 @@ class JetsonControl:
         return result, stack, nvblox
 
     def start(self, selected_labels):
-        return self._command('start', start_arguments(selected_labels))
+        flags = ['--multicast'] if self.multicast else []
+        return self._command('start', flags + start_arguments(selected_labels))
 
     def stop(self):
         return self._command('stop', ())

@@ -4,6 +4,7 @@ Run it on the workstation, in a shell with the usual ROS_DOMAIN_ID and ROS_DISCO
 http://localhost:8080 in a browser.
 """
 import math
+import os
 import threading
 from pathlib import Path
 
@@ -58,6 +59,7 @@ class BridgeNode(Node):
         self.declare_parameter('script_path', DEFAULT_SCRIPT)
         self.declare_parameter('plants_file', '')
         self.declare_parameter('poll_period_s', 5.0)
+        self.declare_parameter('discovery', 'auto')   # server, multicast, or auto: mirror this shell's environment
         self.declare_parameter('local_test', False)   # run the script in a local shell instead of over ssh
 
     def param(self, name):
@@ -91,14 +93,17 @@ def main(args=None):
     camera = CameraBuffer()
     node.subscribe(state, camera)
 
+    discovery = node.param('discovery')
+    multicast = discovery == 'multicast' or (discovery == 'auto' and not os.environ.get('ROS_DISCOVERY_SERVER'))
     control = JetsonControl([node.param('jetson_host'), node.param('jetson_fallback_host')],
                             user=node.param('jetson_user'), script=node.param('script_path'),
-                            local=node.param('local_test'))
+                            local=node.param('local_test'), multicast=multicast)
     commander = Commander(control, state, poll_s=node.param('poll_period_s'))
     server = DisplayServer(state, commander, camera, find_web_dir(), host=node.param('host'), port=node.param('port'))
     threading.Thread(target=commander.run_forever, daemon=True).start()
     server.start()
-    node.get_logger().info(f'Display on http://{node.param("host")}:{server.port}, Jetson {node.param("jetson_host")}')
+    node.get_logger().info(f'Display on http://{node.param("host")}:{server.port}, Jetson {node.param("jetson_host")}, '
+                           f'discovery {"multicast" if multicast else "server " + os.environ.get("ROS_DISCOVERY_SERVER", "")}')
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
