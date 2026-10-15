@@ -122,6 +122,41 @@ ros2 launch bringup weed_geotagging_bringup_launch.py \
 ```
 
 
+## Live RViz map
+
+With the robot stack and detector/geotagger running on the Jetson, run this in a
+local desktop terminal (not the SSH terminal), after building and sourcing this
+package on the desktop:
+
+```bash
+ros2 launch weed_geotagging weed_visualisation_launch.py
+```
+
+The desktop must use the same ROS domain and discovery configuration as the
+Jetson. This launch starts only RViz and the odometry visualiser; it does not
+start another camera, motor driver or YOLO instance.
+
+The saved top-down view shows a metre grid, a rover box with a red heading arrow,
+a cyan route, and confirmed plant markers labelled with the YOLO class and stable
+track ID. Classes have deterministic colours; different classes can share a
+colour, so the text label identifies the type. A model trained with only one
+weed class cannot identify additional species. Enable the optional Camera display
+for RGB, or change its topic to `/weed_detections/image` when annotated publishing
+is enabled.
+
+The rover shape is schematic. Set `rover_length_m`, `rover_width_m`, and
+`rover_height_m` to adjust its size. The route samples positions every 0.03 m and
+keeps at most 10000 poses by default; set `path_spacing_m` and `max_path_points`
+to change this. Route history starts when the desktop visualiser starts and
+resets on restart. Use `start_rviz:=false` to publish the rover displays without
+opening a window.
+
+Topics: `/rover_markers` (MarkerArray), `/rover_path` (Path), and `/weed_markers`
+(MarkerArray). Plant snapshots clear obsolete markers and labels after track
+merges, and are retained for RViz opened later. The display uses the odometry
+header frame; the saved RViz fixed frame defaults to `odom`. Change Fixed Frame
+and the view's Target Frame if using a differently named local EKF frame.
+
 ## Runtime dependencies
 
 The ROS package declares the ROS-side dependencies. The YOLO node also needs

@@ -2,6 +2,7 @@
 """Project YOLO weed detections into persistent local-map weed tracks."""
 
 import csv
+import hashlib
 import json
 import math
 from collections import deque
@@ -13,6 +14,7 @@ import rclpy
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
@@ -250,7 +252,9 @@ class WeedGeotagger(Node):
         self.create_subscription(Image, self.depth_topic, self.depth_callback, 10)
         self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, 10)
         self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 20)
-        self.marker_pub = self.create_publisher(MarkerArray, 'weed_markers', 10)
+        marker_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.marker_pub = self.create_publisher(MarkerArray, 'weed_markers', marker_qos)
+        self.create_timer(1.0, self.publish_track_markers)
 
         self.get_logger().info(
             'Weed geotagger waiting for detections/depth/camera_info/odom: '
@@ -651,16 +655,31 @@ class WeedGeotagger(Node):
 
     def publish_track_markers(self):
         markers = MarkerArray()
+        # This dedicated topic carries a complete snapshot, including removals.
+        clear = Marker()
+        clear.action = Marker.DELETEALL
+        markers.markers.append(clear)
         for track in self.tracks:
             if not self.is_confirmed(track):
                 continue
             markers.markers.append(self.make_marker(track))
-        if markers.markers:
-            self.marker_pub.publish(markers)
+            markers.markers.append(self.make_label_marker(track))
+        self.marker_pub.publish(markers)
+
+    @staticmethod
+    def class_colour(label):
+        palette = (
+            (0.25, 0.85, 0.35), (1.0, 0.75, 0.20), (0.35, 0.75, 1.0),
+            (1.0, 0.40, 0.45), (0.85, 0.55, 1.0), (0.20, 0.90, 0.80),
+        )
+        index = int.from_bytes(hashlib.sha256(label.encode('utf-8')).digest()[:4], 'big')
+        return palette[index % len(palette)]
 
     def make_marker(self, track):
         marker = Marker()
-        marker.header.frame_id = 'odom'
+        marker.header.frame_id = (
+            self.latest_odom.header.frame_id if self.latest_odom is not None else 'odom'
+        ) or 'odom'
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'weeds'
         marker.id = track.track_id
@@ -671,11 +690,21 @@ class WeedGeotagger(Node):
         marker.scale.x = 0.15
         marker.scale.y = 0.15
         marker.scale.z = 0.15
-        marker.color.r = 0.1
-        marker.color.g = 0.9
-        marker.color.b = 0.1
+        marker.color.r, marker.color.g, marker.color.b = self.class_colour(track.label)
         marker.color.a = 0.9
         marker.lifetime.sec = 0
+        return marker
+
+    def make_label_marker(self, track):
+        marker = self.make_marker(track)
+        marker.ns = 'weed_labels'
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.pose.position.z += 0.25
+        marker.scale.x = 0.0
+        marker.scale.y = 0.0
+        marker.scale.z = 0.18
+        marker.color.a = 1.0
+        marker.text = f'{track.label} | ID {track.track_id}'
         return marker
 
     def write_csv(self, track, event, match_distance, measurement, detection):

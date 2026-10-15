@@ -14,6 +14,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,6 +31,7 @@ setup(
         'console_scripts': [
             'weed_geotagger = weed_geotagging.weed_geotagger:main',
             'yolo_weed_detector = weed_geotagging.yolo_weed_detector:main',
+            'rover_visualiser = weed_geotagging.rover_visualiser:main',
         ],
     },
 )
