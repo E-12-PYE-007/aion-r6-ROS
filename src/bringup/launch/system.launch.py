@@ -68,7 +68,7 @@ def validate(context):
 
 
 def start_bag(context):
-    if LaunchConfiguration('rosbag').perform(context).lower() not in ('true', '1'):
+    if not IfCondition(LaunchConfiguration('rosbag')).evaluate(context):
         return []
     topics = list(BAG_TOPICS)
     if LaunchConfiguration('localisation').perform(context) == 'global':
