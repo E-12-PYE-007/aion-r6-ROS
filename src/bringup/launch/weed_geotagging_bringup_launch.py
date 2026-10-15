@@ -1,6 +1,6 @@
 """Bring up the rover stack needed for weed geotagging.
 
-This launch starts the depth-enabled Gemini camera, the existing local EKF
+This launch starts the RGB-registered depth Gemini camera, the existing local EKF
 localisation stack, and the weed_geotagging package's combined YOLO + geotagger
 launch. Joystick teleop is still started from the workstation with
 teleop_launch.py.
@@ -63,6 +63,10 @@ def generate_launch_description():
             'camera_name': 'camera',
             'enable_color': 'true',
             'enable_depth': 'true',
+            # RGB bounding boxes must sample depth in the colour camera viewpoint.
+            'depth_registration': 'true',
+            'align_mode': 'SW',
+            'align_target_stream': 'COLOR',
             'enable_point_cloud': 'true',
             'publish_tf': 'true',
             'enable_laser': 'true',

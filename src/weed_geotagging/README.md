@@ -41,8 +41,8 @@ Accepted JSON examples:
 
 - `image_topic` (`sensor_msgs/Image`) - RGB image for YOLO
 - `detections_topic` (`std_msgs/String`) - JSON detections
-- `depth_topic` (`sensor_msgs/Image`) - `16UC1` in millimetres or `32FC1` in metres
-- `camera_info_topic` (`sensor_msgs/CameraInfo`) — camera intrinsics
+- `depth_topic` (`sensor_msgs/Image`) - depth registered to RGB, `16UC1` in millimetres or `32FC1` in metres
+- `camera_info_topic` (`sensor_msgs/CameraInfo`) — matching RGB camera intrinsics
 - `odom_topic` (`nav_msgs/Odometry`) — robot pose, default `/odometry/filtered`
 
 ## Outputs
@@ -120,6 +120,43 @@ ros2 launch bringup weed_geotagging_bringup_launch.py \
   model_path:=/home/vla-cap/models/best.pt \
   output_csv:=/home/vla-cap/weeds.csv
 ```
+
+### Required RGB/depth alignment
+
+The full weed bringup above explicitly enables software depth-to-colour
+registration in the included Orbbec camera launch:
+
+```text
+depth_registration:=true
+align_mode:=SW
+align_target_stream:=COLOR
+```
+
+These settings are supplied automatically; operators do not need to add them to
+the full weed bringup command. RGB bounding boxes must be paired with registered
+depth. Resizing an unregistered depth image does not align the sensor viewpoints.
+
+The detector/geotagger-only launch does not start or configure a camera. If the
+camera is already running as part of another system, apply the same settings in
+that camera launch and reuse its streams. Do not start a second camera driver.
+For a standalone camera test:
+
+```bash
+ros2 launch orbbec_camera gemini_330_series.launch.py \
+  camera_name:=camera \
+  enable_color:=true \
+  enable_depth:=true \
+  depth_registration:=true \
+  align_mode:=SW \
+  align_target_stream:=COLOR
+```
+
+With the tested Orbbec driver, the registered output remains
+`/camera/depth/image_raw`; `/camera/depth/image_unaligned` is not suitable for
+the geotagger. Use `/camera/color/camera_info` for the matching RGB intrinsics.
+After changing camera drivers or profiles, verify the output topics, colour
+optical frame, image dimensions and calibration, then visually check alignment
+at plant boundaries. Matching metadata alone is not an alignment-quality test.
 
 
 ## Live RViz map
