@@ -1,6 +1,6 @@
 """Drive on VLA action chunks through the CBF safety layer.
 
-  local localisation (roboclaw driver, encoders, local EKF) -> /odometry/filtered
+  local localisation (roboclaw driver, encoders, local EKF) -> /odometry/local
   /agvla/action_chunk + nvblox ESDF -> cbf_safety_layer -> cmd_vel -> motor control
 
 nvblox and the VLA run separately.

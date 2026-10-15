@@ -3,11 +3,11 @@ navsat_transform_node:
     frequency: 30.0
     delay: 1.0
 
-    magnetic_declination_radians: 0.37821285
-    yaw_offset: 0.0
+    # magnetic_declination_radians: 0.37821285
+    magnetic_declination_radians: 0.0 # the PX4 already applies declination
+    yaw_offset: -0.0
 
     use_odometry_yaw: false
-
     zero_altitude: true
     publish_filtered_gps: true
 

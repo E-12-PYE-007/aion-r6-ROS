@@ -10,13 +10,13 @@ from launch_ros.actions import Node
 LOCAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'local_ekf_wheel_imu.yaml',
+        'local_ekf.yaml',
     )
 
 GLOBAL_EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'global_ekf_local_gps.yaml',
+        'global_ekf.yaml',
     )
 
 NAVSAT_CONFIG_FILE = os.path.join(
@@ -45,7 +45,7 @@ def generate_launch_description():
         )
     )
 
-    
+
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
@@ -81,17 +81,17 @@ def generate_launch_description():
             GLOBAL_EKF_CONFIG_FILE,
             {
                 'use_sim_time': use_sim_time,
-            },  
+            },
         ],
         remappings=[
             ('odometry/filtered', '/odometry/global'),
         ],
     )
 
-    navsat_node = Node(
+    navsat_transform_node = Node(
         package='robot_localization',
         executable='navsat_transform_node',
-        name='navsat_transform',
+        name='navsat_transform_node',
         output='screen',
         parameters=[
             NAVSAT_CONFIG_FILE,
@@ -99,8 +99,7 @@ def generate_launch_description():
         ],
         remappings=[
             ('imu', '/mavros_fcu/mavros_fcu/data'),
-            ('gps/fix',
-            '/mavros_fcu/mavros_fcu/global_position/raw/fix'),
+            ('gps/fix', '/mavros_fcu/mavros_fcu/raw/fix'),
             ('odometry/filtered', '/odometry/local'),
             ('odometry/gps', '/odometry/gps'),
         ],
@@ -116,5 +115,5 @@ def generate_launch_description():
         encoder_node,
         local_ekf_node,
         global_ekf_node,
-        navsat_node,
+        navsat_transform_node,
     ])

@@ -29,7 +29,6 @@ yaw_rate_std = 0.05 # rad/s
 yaw_variance_multiplier = 0.05
 
 
-
 class EncoderLocalisationNode(Node):
     def __init__(self):
         super().__init__('encoder_localisation')

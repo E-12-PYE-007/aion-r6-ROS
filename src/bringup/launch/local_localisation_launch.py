@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 EKF_CONFIG_FILE = os.path.join(
         get_package_share_directory('localisation'),
         'config',
-        'local_ekf_wheel_imu.yaml',
+        'local_ekf.yaml',
     )
 
 
@@ -34,6 +34,7 @@ def generate_launch_description():
         )
     )
 
+
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
@@ -54,6 +55,9 @@ def generate_launch_description():
             {
                 'use_sim_time': use_sim_time,
             },
+        ],
+        remappings=[
+            ('odometry/filtered', '/odometry/local'),
         ],
     )
 
