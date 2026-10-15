@@ -11,6 +11,7 @@
   <exec_depend>localisation</exec_depend>
   <exec_depend>ag_vla</exec_depend>
   <exec_depend>weed_geotagging</exec_depend>
+  <exec_depend>data_collection</exec_depend>
   <exec_depend>orbbec_camera</exec_depend>
 
   <exec_depend>tf2_ros</exec_depend>
