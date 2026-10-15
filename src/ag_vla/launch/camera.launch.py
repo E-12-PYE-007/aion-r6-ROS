@@ -10,20 +10,17 @@ def generate_launch_description():
     """
     Bring up the front Gemini 336 with left/right IR enabled.
 
-    Publishes camera_left_ir_optical_frame / camera_right_ir_optical_frame
-    (+ TF from camera_link down to them) that the isaac_ros_visual_slam
-    container -- running separately in the Isaac ROS docker workspace -- subscribes to.
-    Color/depth are left off here since VSLAM only needs the IR pair.
+    Publishes left/right IR optical frames and their transforms, along with
+    color, depth, and synchronized camera IMU streams.
 
-    Accel/gyro are enabled and synced into one combined IMU stream (camera/
-    gyro_accel/sample, frame camera_accel_gyro_optical_frame) for VSLAM's
-    enable_imu_fusion -- see vslam.launch.py.
+    Accel and gyro are synced into the combined camera/gyro_accel/sample
+    stream in camera_accel_gyro_optical_frame.
 
     Also publishes the base_link -> camera_link mounting transform, measured
     from the FCU (base_link origin) to the camera housing: 0.2m forward, 0m left,
     0.05m up, mounted level and forward-facing (identity rotation). This completes
     the chain base_link -> camera_link -> ... -> camera_*_ir_optical_frame
-    that isaac_ros_visual_slam looks up at startup.
+    used by downstream camera processing.
     """
     base_to_camera_tf = Node(
         package='tf2_ros',

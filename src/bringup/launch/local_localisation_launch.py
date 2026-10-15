@@ -35,10 +35,6 @@ def generate_launch_description():
     )
 
 
-def generate_launch_description():
-    use_sim_time = LaunchConfiguration('use_sim_time')
-
-
     encoder_node = Node(
         package='localisation',
         executable='encoder_localisation',
