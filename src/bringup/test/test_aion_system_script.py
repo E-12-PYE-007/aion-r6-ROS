@@ -1,5 +1,7 @@
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -74,3 +76,31 @@ def test_a_pid_the_script_does_not_own_is_never_signalled(state_dir):
     (state_dir / 'pid').write_text('1\nanything\n')
     assert run(state_dir, 'status').returncode == 3
     assert 'not running' in run(state_dir, 'stop').stdout
+
+
+def start_in_background(state_dir, *args, launch=None):
+    env = {**os.environ, 'AION_STATE_DIR': str(state_dir), 'AION_STOP_TIMEOUT': '3', 'AION_TERM_TIMEOUT': '2'}
+    if launch is not None:
+        env['AION_LAUNCH_CMD'] = launch
+    return subprocess.Popen([str(SCRIPT), *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def test_stop_finishes_escalating_when_the_connection_that_ran_it_drops(state_dir):
+    assert run(state_dir, 'start', launch=STUBBORN_STACK).returncode == 0
+    stopper = start_in_background(state_dir, 'stop')
+    time.sleep(0.8)                      # mid-wait, after SIGINT was ignored by the stack
+    stopper.send_signal(signal.SIGHUP)   # what sshd sends when the connection drops
+    out, _ = stopper.communicate(timeout=20)
+    assert stopper.returncode == 0 and 'SIGKILL' in out
+    assert run(state_dir, 'status').returncode == 3
+
+
+def test_two_starts_at_once_launch_one_stack(state_dir):
+    counter = '$AION_STATE_DIR/launches'
+    launch = f'echo launched >> "{counter}"; while :; do sleep 0.1; done'
+    first = start_in_background(state_dir, 'start', launch=launch)
+    second = start_in_background(state_dir, 'start', launch=launch)
+    outputs = [first.communicate(timeout=30)[0], second.communicate(timeout=30)[0]]
+    assert first.returncode == 0 and second.returncode == 0
+    assert sum('started (pid' in o for o in outputs) == 1 and sum('already running' in o for o in outputs) == 1
+    assert (state_dir / 'launches').read_text().count('launched') == 1

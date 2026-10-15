@@ -32,6 +32,14 @@ running_pid() {
     echo "$pid"
 }
 
+# Serialises start and stop, so two presses at once cannot launch two stacks. The stack is started
+# without this descriptor, otherwise it would hold the lock for as long as it runs.
+take_lock() {
+    mkdir -p "$STATE_DIR"
+    exec 9> "$STATE_DIR/lock"
+    flock -w 40 9 || { echo "another start or stop is still in progress" >&2; exit 1; }
+}
+
 group_gone() { ! kill -0 -- "-$1" 2>/dev/null; }
 
 wait_for_exit() {   # wait_for_exit <pgid> <seconds>
@@ -44,12 +52,12 @@ wait_for_exit() {   # wait_for_exit <pgid> <seconds>
 }
 
 cmd_start() {
+    take_lock
     local pid
     if pid="$(running_pid)"; then
         echo "already running (pid $pid)"
         return 0
     fi
-    mkdir -p "$STATE_DIR"
     rm -f "$PID_FILE"
 
     local launch
@@ -71,7 +79,7 @@ cmd_start() {
     # --fork, not a shell "&": a backgrounded command in a non-interactive shell starts with SIGINT ignored,
     # and the stack would inherit that, so stop could never interrupt it.
     PID_FILE="$PID_FILE" setsid --fork bash -c '{ echo $$; ps -o lstart= -p $$; } > "$PID_FILE"; eval "$1"' _ "$launch" \
-        > "$log" 2>&1 < /dev/null
+        9>&- > "$log" 2>&1 < /dev/null
 
     local waited=0
     until pid="$(running_pid)"; do
@@ -94,6 +102,8 @@ cmd_start() {
 }
 
 cmd_stop() {
+    take_lock
+    trap '' HUP   # a dropped ssh connection must not cut the escalation short
     local pid
     if ! pid="$(running_pid)"; then
         rm -f "$PID_FILE"
