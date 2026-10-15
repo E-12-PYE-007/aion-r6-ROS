@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure-pursuit controller node for the Aion R6, without the safety layer.
 
-Subscribes: /odometry/filtered, /agvla/action_chunk
+Subscribes: /odometry/local, /agvla/action_chunk
 Publishes:  cmd_vel
 """
 import rclpy

@@ -5,7 +5,7 @@ A pure-pursuit controller turns the latest chunk into a nominal (v, omega), and 
 filter (cbf_qp.py) changes it as little as needed to keep the robot outside the ESDF safety
 margin.
 
-Subscribes: /odometry/filtered, /agvla/action_chunk, /nvblox_node/static_map_slice
+Subscribes: /odometry/local, /agvla/action_chunk, /nvblox_node/static_map_slice
 Publishes:  cmd_vel, safety_layer/slack, cbf/h, safety_layer/reversing (True while the reverse recovery drives),
             safety_layer/cmd_vel_nominal (pure-pursuit command before the filter; diff against
             cmd_vel to see when and how much the CBF filter intervenes),

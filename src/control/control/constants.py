@@ -4,5 +4,5 @@ V_MAX = 0.3                         # [m/s] rover speed limit
 OMEGA_MAX = 0.4                     # [rad/s] rover yaw rate limit
 
 ACTION_CHUNK_TOPIC = '/agvla/action_chunk'
-ODOM_TOPIC = '/odometry/filtered'   # local EKF output: pose of base_link in the odom frame
+ODOM_TOPIC = '/odometry/local'   # local EKF output: pose of base_link in the odom frame
 CMD_VEL_TOPIC = 'cmd_vel'
