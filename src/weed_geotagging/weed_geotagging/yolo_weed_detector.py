@@ -2,7 +2,7 @@
 """Run a YOLO weed detector on camera images and publish JSON detections.
 
 With publish_annotated, the detections are also drawn on the image and published as a JPEG
-CompressedImage on <annotated_topic>/compressed.
+CompressedImage on <annotated_topic>/compressed, only while something is subscribed.
 """
 
 import json
@@ -123,7 +123,7 @@ class YoloWeedDetector(Node):
                     },
                 })
 
-            if self.annotated_pub is not None:
+            if self.annotated_pub is not None and self.annotated_pub.get_subscription_count() > 0:
                 try:
                     self.annotated_pub.publish(to_compressed_image(result.plot(), msg.header))
                 except Exception as exc:

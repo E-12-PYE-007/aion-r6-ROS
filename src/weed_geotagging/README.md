@@ -22,10 +22,12 @@ Optional useful args:
 confidence:=0.25 iou:=0.45 device:=0 target_classes:=weed publish_annotated:=true
 ```
 
-The detector publishes annotated images as JPEG `sensor_msgs/CompressedImage` on
-`/weed_detections/image/compressed` when `publish_annotated` is true. View them live
-with `ros2 run rqt_image_view rqt_image_view` and pick `/weed_detections/image` (needs
-`compressed_image_transport` on the viewing machine).
+When `publish_annotated` is true, the detector publishes annotated images as JPEG
+`sensor_msgs/CompressedImage` on `/weed_detections/image/compressed`. The boxes are only
+drawn and encoded while something is subscribed. View them live with
+`ros2 run rqt_image_view rqt_image_view` (needs `compressed_image_transport` on the
+viewing machine). The rosbag does not record this topic: the detections plus the
+compressed colour image carry the same information.
 
 ## Detection adapter
 
@@ -179,8 +181,7 @@ a cyan route, and confirmed plant markers labelled with the YOLO class and stabl
 track ID. Classes have deterministic colours; different classes can share a
 colour, so the text label identifies the type. A model trained with only one
 weed class cannot identify additional species. Enable the optional Camera display
-for RGB, or change its topic to `/weed_detections/image` with Transport Hint
-`compressed` when annotated publishing is enabled.
+for RGB.
 
 The rover shape is schematic. Set `rover_length_m`, `rover_width_m`, and
 `rover_height_m` to adjust its size. The route samples positions every 0.03 m and

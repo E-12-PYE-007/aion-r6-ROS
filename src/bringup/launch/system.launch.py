@@ -39,10 +39,11 @@ BAG_TOPICS = [
     '/agvla/action_chunk', '/cmd_vel',
     '/safety_layer/cmd_vel_nominal', '/safety_layer/filtering_active', '/safety_layer/reversing',
     '/safety_layer/slack', '/cbf/h', '/nvblox_node/static_map_slice',
-    '/weed_markers', '/weed_detections_json', '/weed_detections/image/compressed',
+    '/weed_markers', '/weed_detections_json',
     '/camera/color/image_raw/compressed', '/camera/color/camera_info',
     '/system_diagnostics',
 ]
+BAG_TOPICS_GLOBAL = ['/gps/filtered']
 
 
 def include(package, launch_file, condition=None, **launch_arguments):
@@ -69,10 +70,13 @@ def validate(context):
 def start_bag(context):
     if LaunchConfiguration('rosbag').perform(context).lower() not in ('true', '1'):
         return []
+    topics = list(BAG_TOPICS)
+    if LaunchConfiguration('localisation').perform(context) == 'global':
+        topics += BAG_TOPICS_GLOBAL
     bag_dir = os.path.expanduser(os.path.join(BAG_DIR, 'system_' + time.strftime('%Y%m%d_%H%M%S')))
     os.makedirs(os.path.dirname(bag_dir), exist_ok=True)
     return [ExecuteProcess(
-        cmd=['ros2', 'bag', 'record', '-o', bag_dir, '--max-bag-size', str(BAG_MAX_BYTES), *BAG_TOPICS],
+        cmd=['ros2', 'bag', 'record', '-o', bag_dir, '--max-bag-size', str(BAG_MAX_BYTES), *topics],
         output='screen',
     )]
 
