@@ -227,3 +227,9 @@ def test_a_system_clock_adjustment_does_not_make_a_live_stack_look_stopped(state
         assert run(state_dir, 'status', extra=extra).stdout.startswith('running ')
     assert run(state_dir, 'stop', extra=extra).stdout.strip() == 'stopped'
     assert run(state_dir, 'status', extra=extra).returncode == 3
+
+
+def test_the_launch_arguments_reach_a_test_stack_through_the_environment(state_dir):
+    launch = 'echo "$AION_LAUNCH_ARGS" > "$AION_STATE_DIR/args"; while :; do sleep 0.1; done'
+    assert run(state_dir, 'start', 'target_classes:=plant1,plant3', 'weed:=true', launch=launch).returncode == 0
+    assert (state_dir / 'args').read_text().split() == ['target_classes:=plant1,plant3', 'weed:=true']

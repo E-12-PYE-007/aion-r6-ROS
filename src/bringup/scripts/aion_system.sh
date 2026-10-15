@@ -91,7 +91,7 @@ stack_start() {   # stack_start <launch args...>
 
     local launch
     if [[ -n "${AION_LAUNCH_CMD:-}" ]]; then
-        launch="$AION_LAUNCH_CMD"   # used by the tests
+        launch="export AION_LAUNCH_ARGS=$(printf '%q' "$*"); $AION_LAUNCH_CMD"   # used by the tests
     else
         if [[ ! -f "$WORKSPACE/install/setup.bash" ]]; then
             echo "no built workspace at $WORKSPACE (install/setup.bash is missing)" >&2
