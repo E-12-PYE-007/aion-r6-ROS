@@ -12,8 +12,8 @@ The model weights are passed as a launch parameter instead of being stored in
 this repository. The main launch starts both YOLO and geotagging:
 
 ```bash
-ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
-  model_path:=/home/vla-cap/models/best.pt
+ros2 launch weed_geotagging weed_detection_geotagging.launch.py \
+  model_path:=/home/vla-cap/YOLO_release/best.pt
 ```
 
 Optional useful args:
@@ -84,8 +84,8 @@ map consistency while driving, use `local_ekf_x_m` and `local_ekf_y_m`
 Run detection and geotagging together:
 
 ```bash
-ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
-  model_path:=/home/vla-cap/models/best.pt \
+ros2 launch weed_geotagging weed_detection_geotagging.launch.py \
+  model_path:=/home/vla-cap/YOLO_release/best.pt \
   output_csv:=/home/vla-cap/weeds.csv \
   output_odom_csv:=/home/vla-cap/weeds_odom.csv \
   odom_topic:=/odometry/local \
@@ -112,19 +112,18 @@ using background depth behind thin plants.
 `target_label` defaults to empty, which accepts every YOLO class. Set it if you
 only want one class, for example `target_label:=plant2`.
 
-For a full Jetson-side rover launch, including depth camera, local EKF,
-`roboclaw_for_motors`, `cmd_vel_to_roboclaw`, YOLO, and geotagging:
+For the full rover system, including camera, localisation, controller, YOLO and
+geotagging, use the bringup system launch (`weed` defaults to true):
 
 ```bash
-ros2 launch bringup weed_geotagging_bringup_launch.py \
-  model_path:=/home/vla-cap/models/best.pt \
+ros2 launch bringup system.launch.py \
   output_csv:=/home/vla-cap/weeds.csv
 ```
 
 ### Required RGB/depth alignment
 
-The full weed bringup above explicitly enables software depth-to-colour
-registration in the included Orbbec camera launch:
+`bringup/launch/camera.launch.py` enables software depth-to-colour
+registration in the Orbbec camera launch:
 
 ```text
 depth_registration:=true
@@ -133,7 +132,7 @@ align_target_stream:=COLOR
 ```
 
 These settings are supplied automatically; operators do not need to add them to
-the full weed bringup command. RGB bounding boxes must be paired with registered
+the system launch. RGB bounding boxes must be paired with registered
 depth. Resizing an unregistered depth image does not align the sensor viewpoints.
 
 The detector/geotagger-only launch does not start or configure a camera. If the
@@ -166,7 +165,7 @@ local desktop terminal (not the SSH terminal), after building and sourcing this
 package on the desktop:
 
 ```bash
-ros2 launch weed_geotagging weed_visualisation_launch.py
+ros2 launch weed_geotagging weed_visualisation.launch.py
 ```
 
 The desktop must use the same ROS domain and discovery configuration as the
