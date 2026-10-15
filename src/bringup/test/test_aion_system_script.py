@@ -233,3 +233,57 @@ def test_the_launch_arguments_reach_a_test_stack_through_the_environment(state_d
     launch = 'echo "$AION_LAUNCH_ARGS" > "$AION_STATE_DIR/args"; while :; do sleep 0.1; done'
     assert run(state_dir, 'start', 'target_classes:=plant1,plant3', 'weed:=true', launch=launch).returncode == 0
     assert (state_dir / 'args').read_text().split() == ['target_classes:=plant1,plant3', 'weed:=true']
+
+
+# ------------------------------------------------------------------ discovery mode
+
+@pytest.fixture
+def fake_ros(tmp_path):
+    """A workspace whose ros2 just records the environment it was launched in, so the real launch path is exercised."""
+    fake_bin = tmp_path / 'fakebin'
+    fake_bin.mkdir()
+    ros2 = fake_bin / 'ros2'
+    ros2.write_text('#!/usr/bin/env bash\n'
+                    '{ echo "args: $*"; for v in ROS_DOMAIN_ID ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT; do\n'
+                    '    if [[ -n "${!v+x}" ]]; then echo "$v=${!v}"; else echo "$v is unset"; fi; done; } > "$AION_STATE_DIR/ros_env"\n'
+                    'while :; do sleep 0.1; done\n')
+    ros2.chmod(0o755)
+    workspace = tmp_path / 'ws'
+    (workspace / 'install').mkdir(parents=True)
+    (workspace / 'install' / 'setup.bash').write_text(f'export PATH="{fake_bin}:$PATH"\n')
+    return {'AION_WORKSPACE': str(workspace)}
+
+
+def ros_env(state_dir):
+    time.sleep(0.3)
+    return dict(line.split('=', 1) if '=' in line else (line.split(' is unset')[0], None)
+                for line in (state_dir / 'ros_env').read_text().splitlines() if not line.startswith('args:'))
+
+
+def test_the_stack_gets_the_discovery_server_unless_multicast_is_asked_for(state_dir, fake_ros):
+    env = script_env(state_dir, extra=fake_ros)
+    env.pop('ROS_DISCOVERY_SERVER', None)
+    result = subprocess.run([str(SCRIPT), 'start', 'target_classes:=plant1'], env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    seen = ros_env(state_dir)
+    assert seen['ROS_DISCOVERY_SERVER'] == '10.43.254.23:11811' and seen['ROS_SUPER_CLIENT'] == 'TRUE' and seen['ROS_DOMAIN_ID'] == '42'
+    assert 'launch bringup system.launch.py target_classes:=plant1' in (state_dir / 'ros_env').read_text()
+    subprocess.run([str(SCRIPT), 'stop'], env=env, capture_output=True, timeout=60)
+
+
+def test_multicast_mode_unsets_the_discovery_settings_for_the_stack(state_dir, fake_ros):
+    env = script_env(state_dir, extra={**fake_ros, 'ROS_DISCOVERY_SERVER': '10.9.9.9:1', 'ROS_SUPER_CLIENT': 'TRUE'})
+    result = subprocess.run([str(SCRIPT), 'start', '--multicast', 'weed:=false'], env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    seen = ros_env(state_dir)
+    assert seen['ROS_DISCOVERY_SERVER'] is None and seen['ROS_SUPER_CLIENT'] is None and seen['ROS_DOMAIN_ID'] == '42'
+    assert 'weed:=false' in (state_dir / 'ros_env').read_text() and '--multicast' not in (state_dir / 'ros_env').read_text()
+    subprocess.run([str(SCRIPT), 'stop'], env=env, capture_output=True, timeout=60)
+
+
+def test_multicast_mode_leaves_the_discovery_server_out_of_the_nvblox_container(state_dir, docker):
+    extra, fake_dir = docker
+    assert run(state_dir, 'start', '--multicast', launch=CLEAN_STACK, extra=extra).returncode == 0
+    run_call = next(c for c in calls(fake_dir) if c.startswith('docker run '))
+    assert 'ROS_DISCOVERY_SERVER' not in run_call and '-e ROS_DOMAIN_ID=42' in run_call
+    run(state_dir, 'stop', extra=extra)

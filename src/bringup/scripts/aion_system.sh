@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Start, stop and query the rover stack from a remote shell. The Endeavour display runs this over ssh.
 #
-#   aion_system.sh start [--no-nvblox] [launch args]
+#   aion_system.sh start [--no-nvblox] [--multicast] [launch args]
 #                                        ros2 launch bringup system.launch.py [launch args], detached, then
-#                                        the nvblox container (skipped with --no-nvblox or controller:=pure_pursuit)
+#                                        the nvblox container (skipped with --no-nvblox or controller:=pure_pursuit).
+#                                        --multicast finds peers by multicast instead of the discovery server
+#                                        (ROS_DISCOVERY_SERVER and ROS_SUPER_CLIENT are unset), for when the wifi is down
 #   aion_system.sh stop                  the stack first (SIGINT, then SIGTERM and SIGKILL if it does not exit),
 #                                        then nvblox
 #   aion_system.sh status                "running <pid>" or "stopped" (exit 0 or 3), then the nvblox state
@@ -28,6 +30,7 @@ KEEP_LOGS=10
 
 ROS_DOMAIN="${ROS_DOMAIN_ID:-42}"
 DISCOVERY_SERVER="${ROS_DISCOVERY_SERVER:-10.43.254.23:11811}"
+DISCOVERY_MODE="${AION_DISCOVERY:-server}"   # server, or multicast (no discovery server)
 
 NVBLOX_ENABLED="${AION_NVBLOX:-1}"
 ISAAC_ROS_WS="${AION_ISAAC_ROS_WS:-/home/vla-cap/vla-cap-ws/isaac-ros-ws}"
@@ -38,6 +41,15 @@ NVBLOX_SETTLE="${AION_NVBLOX_SETTLE:-3}"                      # seconds the cont
 DOCKER_STOP_TIMEOUT="${AION_DOCKER_STOP_TIMEOUT:-15}"          # seconds after SIGINT before docker kills it
 
 # ---------------------------------------------------------------- the ROS stack
+
+# The shell commands that put the discovery settings in the environment of the stack.
+discovery_exports() {
+    if [[ "$DISCOVERY_MODE" == "multicast" ]]; then
+        echo "unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT; export ROS_DOMAIN_ID=$ROS_DOMAIN"
+    else
+        echo "export ROS_DOMAIN_ID=$ROS_DOMAIN ROS_DISCOVERY_SERVER=$DISCOVERY_SERVER ROS_SUPER_CLIENT=TRUE"
+    fi
+}
 
 # When a process started, in clock ticks since boot (field 22 of /proc/<pid>/stat). Unlike the wall-clock
 # time from ps, it cannot change when the system clock is adjusted.
@@ -98,7 +110,7 @@ stack_start() {   # stack_start <launch args...>
             return 1
         fi
         launch="source /opt/ros/humble/setup.bash; source '$WORKSPACE/install/setup.bash'; "
-        launch+="export ROS_DOMAIN_ID=$ROS_DOMAIN ROS_DISCOVERY_SERVER=$DISCOVERY_SERVER ROS_SUPER_CLIENT=TRUE; "
+        launch+="$(discovery_exports); "
         launch+="exec ros2 launch bringup system.launch.py $(printf '%q ' "$@")"
     fi
 
@@ -172,13 +184,16 @@ nvblox_start() {
     # Only ever removes the container this script owns.
     docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
 
+    local discovery_args=()
+    [[ "$DISCOVERY_MODE" == "multicast" ]] || discovery_args=(-e ROS_DISCOVERY_SERVER="$DISCOVERY_SERVER")
+
     # The same flags and mounts as isaac_ros_common/scripts/run_dev.sh on aarch64, detached and with a command.
     local args=(
         run -d --init --name "$NVBLOX_CONTAINER"
         --privileged --network host --ipc=host --pid=host --runtime nvidia
         -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=all,nvidia.com/pva=all
         -e NVIDIA_DRIVER_CAPABILITIES=all
-        -e ROS_DOMAIN_ID="$ROS_DOMAIN" -e ROS_DISCOVERY_SERVER="$DISCOVERY_SERVER"
+        -e ROS_DOMAIN_ID="$ROS_DOMAIN" "${discovery_args[@]}"
         -e USER="$(id -un)" -e ISAAC_ROS_WS=/workspaces/isaac_ros-dev
         -e HOST_USER_UID="$(id -u)" -e HOST_USER_GID="$(id -g)"
         -v "$ISAAC_ROS_WS":/workspaces/isaac_ros-dev
@@ -247,6 +262,7 @@ cmd_start() {
     for arg in "$@"; do
         case "$arg" in
             --no-nvblox) want_nvblox=0 ;;
+            --multicast) DISCOVERY_MODE=multicast ;;
             controller:=pure_pursuit) want_nvblox=0; launch_args+=("$arg") ;;   # only the CBF reads the nvblox map
             *) launch_args+=("$arg") ;;
         esac
@@ -293,5 +309,5 @@ case "${1:-}" in
     start) shift; cmd_start "$@" ;;
     stop) cmd_stop ;;
     status) cmd_status ;;
-    *) echo "usage: $0 start [--no-nvblox] [launch args] | stop | status" >&2; exit 2 ;;
+    *) echo "usage: $0 start [--no-nvblox] [--multicast] [launch args] | stop | status" >&2; exit 2 ;;
 esac
