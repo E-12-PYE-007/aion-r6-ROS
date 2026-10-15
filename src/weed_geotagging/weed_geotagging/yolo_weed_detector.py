@@ -1,14 +1,33 @@
 #!/usr/bin/env python3
-"""Run a YOLO weed detector on camera images and publish JSON detections."""
+"""Run a YOLO weed detector on camera images and publish JSON detections.
+
+With publish_annotated, the detections are also drawn on the image and published as a JPEG
+CompressedImage on <annotated_topic>/compressed.
+"""
 
 import json
 from pathlib import Path
 
+import cv2
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
+
+JPEG_QUALITY = 80
+
+
+def to_compressed_image(image, header):
+    """Encode a BGR image as a JPEG CompressedImage carrying the given header."""
+    ok, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+    if not ok:
+        raise RuntimeError('JPEG encoding failed')
+    msg = CompressedImage()
+    msg.header = header
+    msg.format = 'jpeg'
+    msg.data = buffer.tobytes()
+    return msg
 
 
 class YoloWeedDetector(Node):
@@ -44,7 +63,7 @@ class YoloWeedDetector(Node):
         self.model = YOLO(self.model_path)
         self.detections_pub = self.create_publisher(String, self.detections_topic, 10)
         self.annotated_pub = (
-            self.create_publisher(Image, self.annotated_topic, 10)
+            self.create_publisher(CompressedImage, f'{self.annotated_topic}/compressed', 10)
             if self.publish_annotated else None
         )
         self.create_subscription(Image, self.image_topic, self.image_callback, 1)
@@ -106,10 +125,7 @@ class YoloWeedDetector(Node):
 
             if self.annotated_pub is not None:
                 try:
-                    annotated = result.plot()
-                    out = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
-                    out.header = msg.header
-                    self.annotated_pub.publish(out)
+                    self.annotated_pub.publish(to_compressed_image(result.plot(), msg.header))
                 except Exception as exc:
                     self.get_logger().warn(
                         f'Failed to publish annotated detection image: {exc}',

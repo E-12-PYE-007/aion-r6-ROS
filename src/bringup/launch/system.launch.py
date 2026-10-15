@@ -39,7 +39,7 @@ BAG_TOPICS = [
     '/agvla/action_chunk', '/cmd_vel',
     '/safety_layer/cmd_vel_nominal', '/safety_layer/filtering_active', '/safety_layer/reversing',
     '/safety_layer/slack', '/cbf/h', '/nvblox_node/static_map_slice',
-    '/weed_markers', '/weed_detections_json',
+    '/weed_markers', '/weed_detections_json', '/weed_detections/image/compressed',
     '/camera/color/image_raw/compressed', '/camera/color/camera_info',
     '/system_diagnostics',
 ]
@@ -114,7 +114,7 @@ def generate_launch_description():
                 condition=IfCondition(LaunchConfiguration('weed')),
                 model_path=LaunchConfiguration('model_path'),
                 output_csv=LaunchConfiguration('output_csv'),
-                publish_annotated='false',
+                publish_annotated='true',
                 max_depth_m='3.0',
                 foreground_depth_percentile='40.0',
                 foreground_depth_tolerance_m='0.4',
