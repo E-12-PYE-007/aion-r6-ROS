@@ -75,12 +75,16 @@ class DisplayState:
     def on_link(self, stack, nvblox=None):
         """A status poll or a command reached the Jetson and told us the stack is 'running' or 'stopped'."""
         with self._lock:
+            if stack == RUNNING and self._stack == STOPPED and self._command != STARTING:
+                self._weeds = {}      # a run that was started from somewhere else: its map starts empty too
             self._link_ok_t = self._clock()
             self._stack = stack
             self._nvblox = nvblox
 
     def begin_command(self, name):
         with self._lock:
+            if name == STARTING:
+                self._weeds = {}      # a new run starts with an empty map, the old one stays on screen until then
             self._command = name
             self._message = (None, None)
 

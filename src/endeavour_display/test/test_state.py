@@ -111,3 +111,26 @@ def test_the_plants_can_only_be_chosen_while_the_stack_is_stopped(state):
     assert state.selected() == ['plant2'] and state.snapshot()['can_edit_selection'] is True
     state.on_link('running')
     assert state.set_selected(['plant1']) is False and state.selected() == ['plant2']
+
+
+def test_a_new_run_starts_with_an_empty_map_but_a_stop_keeps_the_last_one(state):
+    state.on_link('running')
+    state.on_weeds([Weed(1, 'plant1', 1.0, 1.0)])
+    state.on_link('stopped')
+    assert len(state.snapshot()['weeds']) == 1            # the finished run's map stays visible
+    state.begin_command('starting')
+    assert state.snapshot()['weeds'] == []
+    state.on_weeds([Weed(2, 'plant2', 2.0, 2.0)])         # data arrives before the start command returns
+    state.on_link('running')
+    state.end_command()
+    assert [w['id'] for w in state.snapshot()['weeds']] == [2]
+
+
+def test_a_run_started_elsewhere_clears_the_map_but_connecting_to_a_running_stack_does_not(state):
+    state.on_weeds([Weed(1, 'plant1', 1.0, 1.0)])
+    state.on_link('running')                              # first contact: the display just started, keep what it has
+    assert len(state.snapshot()['weeds']) == 1
+    state.on_link('stopped')
+    state.on_weeds([Weed(1, 'plant1', 1.0, 1.0)])
+    state.on_link('running')                              # stopped, then running without a Start press
+    assert state.snapshot()['weeds'] == []

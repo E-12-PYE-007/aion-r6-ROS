@@ -11,6 +11,7 @@ import rclpy
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
@@ -100,7 +101,7 @@ def main(args=None):
     node.get_logger().info(f'Display on http://{node.param("host")}:{server.port}, Jetson {node.param("jetson_host")}')
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         commander.close()
