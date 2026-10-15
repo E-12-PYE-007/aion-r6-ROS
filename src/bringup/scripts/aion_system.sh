@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Start, stop and query the rover stack from a remote shell. The Endeavour display runs this over ssh.
 #
-#   aion_system.sh start [launch args]   ros2 launch bringup system.launch.py [launch args], detached
-#   aion_system.sh stop                  SIGINT the stack, then SIGTERM and SIGKILL if it does not exit
-#   aion_system.sh status                prints "running <pid>" or "stopped" (exit 0 or 3)
+#   aion_system.sh start [--no-nvblox] [launch args]
+#                                        ros2 launch bringup system.launch.py [launch args], detached, then
+#                                        the nvblox container (skipped with --no-nvblox or controller:=pure_pursuit)
+#   aion_system.sh stop                  the stack first (SIGINT, then SIGTERM and SIGKILL if it does not exit),
+#                                        then nvblox
+#   aion_system.sh status                "running <pid>" or "stopped" (exit 0 or 3), then the nvblox state
 #
 # The stack runs in its own session, so it survives the ssh connection that started it. Its pid and logs
 # are kept in ~/.local/state/aion-system. stop only signals the process group that start created, and
 # only after checking that the pid file still points at it.
+#
+# nvblox lives in the Isaac ROS docker image. It is started with the same docker run as
+# isaac_ros_common/scripts/run_dev.sh, detached, in a container named aion-nvblox (not the interactive dev
+# container). If nvblox does not come up, start stops the stack again so nothing is half started.
 
 set -u
 
@@ -19,16 +26,39 @@ STOP_TIMEOUT="${AION_STOP_TIMEOUT:-20}"   # seconds to wait after SIGINT
 TERM_TIMEOUT="${AION_TERM_TIMEOUT:-5}"    # seconds to wait after SIGTERM
 KEEP_LOGS=10
 
+ROS_DOMAIN="${ROS_DOMAIN_ID:-42}"
+DISCOVERY_SERVER="${ROS_DISCOVERY_SERVER:-10.43.254.23:11811}"
+
+NVBLOX_ENABLED="${AION_NVBLOX:-1}"
+ISAAC_ROS_WS="${AION_ISAAC_ROS_WS:-/home/vla-cap/vla-cap-ws/isaac-ros-ws}"
+NVBLOX_CONTAINER="${AION_NVBLOX_CONTAINER:-aion-nvblox}"
+NVBLOX_IMAGE="${AION_NVBLOX_IMAGE:-isaac_ros_dev-aarch64}"
+NVBLOX_LAUNCH="${AION_NVBLOX_LAUNCH:-ros2 launch aion_vslam nvblox_camera.launch.py}"
+NVBLOX_SETTLE="${AION_NVBLOX_SETTLE:-3}"                      # seconds the container must stay up
+DOCKER_STOP_TIMEOUT="${AION_DOCKER_STOP_TIMEOUT:-15}"          # seconds after SIGINT before docker kills it
+
+# ---------------------------------------------------------------- the ROS stack
+
+# When a process started, in clock ticks since boot (field 22 of /proc/<pid>/stat). Unlike the wall-clock
+# time from ps, it cannot change when the system clock is adjusted.
+proc_start_ticks() {
+    local stat
+    stat="$(< "/proc/$1/stat")" 2>/dev/null || return 1
+    stat="${stat##*) }"      # drop "pid (comm) ", leaving the fields from the third on
+    set -- $stat
+    echo "${20}"
+}
+
 # Prints the pid of a live stack started by this script, or nothing. The pid file holds the pid and the
 # process start time, so a recycled pid is not mistaken for the stack.
 running_pid() {
     [[ -f "$PID_FILE" ]] || return 1
     local pid started
     { read -r pid; read -r started; } < "$PID_FILE"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [[ "$pid" =~ ^[0-9]+$ && -n "$started" ]] || return 1
     [[ "$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')" == "$pid" ]] || return 1
     [[ "$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')" == "$(id -un)" ]] || return 1
-    [[ "$(ps -o lstart= -p "$pid" 2>/dev/null)" == "$started" ]] || return 1
+    [[ "$(proc_start_ticks "$pid")" == "$started" ]] || return 1
     echo "$pid"
 }
 
@@ -51,8 +81,7 @@ wait_for_exit() {   # wait_for_exit <pgid> <seconds>
     group_gone "$1"
 }
 
-cmd_start() {
-    take_lock
+stack_start() {   # stack_start <launch args...>
     local pid
     if pid="$(running_pid)"; then
         echo "already running (pid $pid)"
@@ -69,7 +98,7 @@ cmd_start() {
             return 1
         fi
         launch="source /opt/ros/humble/setup.bash; source '$WORKSPACE/install/setup.bash'; "
-        launch+="export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42} ROS_DISCOVERY_SERVER=${ROS_DISCOVERY_SERVER:-10.43.254.23:11811} ROS_SUPER_CLIENT=TRUE; "
+        launch+="export ROS_DOMAIN_ID=$ROS_DOMAIN ROS_DISCOVERY_SERVER=$DISCOVERY_SERVER ROS_SUPER_CLIENT=TRUE; "
         launch+="exec ros2 launch bringup system.launch.py $(printf '%q ' "$@")"
     fi
 
@@ -78,8 +107,9 @@ cmd_start() {
     # The inner shell becomes the session leader, records its own pid and start time, then runs the stack.
     # --fork, not a shell "&": a backgrounded command in a non-interactive shell starts with SIGINT ignored,
     # and the stack would inherit that, so stop could never interrupt it.
-    PID_FILE="$PID_FILE" setsid --fork bash -c '{ echo $$; ps -o lstart= -p $$; } > "$PID_FILE"; eval "$1"' _ "$launch" \
-        9>&- > "$log" 2>&1 < /dev/null
+    PID_FILE="$PID_FILE" setsid --fork bash -c \
+        'cmd=$1; s=$(< /proc/$$/stat); s=${s##*) }; set -- $s; { echo $$; echo ${20}; } > "$PID_FILE"; eval "$cmd"' \
+        _ "$launch" 9>&- > "$log" 2>&1 < /dev/null
 
     local waited=0
     until pid="$(running_pid)"; do
@@ -97,13 +127,9 @@ cmd_start() {
         return 1
     fi
     echo "started (pid $pid), log $log"
-    # Keep only the newest logs.
-    ls -t "$STATE_DIR"/system_*.log 2>/dev/null | tail -n +"$(( KEEP_LOGS + 1 ))" | while read -r old; do rm -f -- "$old"; done
 }
 
-cmd_stop() {
-    take_lock
-    trap '' HUP   # a dropped ssh connection must not cut the escalation short
+stack_stop() {
     local pid
     if ! pid="$(running_pid)"; then
         rm -f "$PID_FILE"
@@ -128,19 +154,144 @@ cmd_stop() {
     return 1
 }
 
+# ---------------------------------------------------------------- nvblox in docker
+
+nvblox_managed() { [[ "$NVBLOX_ENABLED" == "1" ]] && command -v docker > /dev/null; }
+
+nvblox_exists() { [[ -n "$(docker ps -aq --filter "name=^/${NVBLOX_CONTAINER}\$" 2>/dev/null)" ]]; }
+
+nvblox_running() {
+    [[ -n "$(docker ps -aq --filter "name=^/${NVBLOX_CONTAINER}\$" --filter status=running 2>/dev/null)" ]]
+}
+
+nvblox_start() {
+    if [[ ! -d "$ISAAC_ROS_WS" ]]; then
+        echo "no Isaac ROS workspace at $ISAAC_ROS_WS" >&2
+        return 1
+    fi
+    # Only ever removes the container this script owns.
+    docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
+
+    # The same flags and mounts as isaac_ros_common/scripts/run_dev.sh on aarch64, detached and with a command.
+    local args=(
+        run -d --init --name "$NVBLOX_CONTAINER"
+        --privileged --network host --ipc=host --pid=host --runtime nvidia
+        -e NVIDIA_VISIBLE_DEVICES=nvidia.com/gpu=all,nvidia.com/pva=all
+        -e NVIDIA_DRIVER_CAPABILITIES=all
+        -e ROS_DOMAIN_ID="$ROS_DOMAIN" -e ROS_DISCOVERY_SERVER="$DISCOVERY_SERVER"
+        -e USER="$(id -un)" -e ISAAC_ROS_WS=/workspaces/isaac_ros-dev
+        -e HOST_USER_UID="$(id -u)" -e HOST_USER_GID="$(id -g)"
+        -v "$ISAAC_ROS_WS":/workspaces/isaac_ros-dev
+        -v /etc/localtime:/etc/localtime:ro
+        -v /tmp/:/tmp/
+        -v /usr/bin/tegrastats:/usr/bin/tegrastats
+        -v /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra
+        -v /usr/src/jetson_multimedia_api:/usr/src/jetson_multimedia_api
+        -v /usr/share/vpi3:/usr/share/vpi3
+        -v /dev/input:/dev/input
+        --entrypoint /usr/local/bin/scripts/workspace-entrypoint.sh
+        --workdir /workspaces/isaac_ros-dev
+        "$NVBLOX_IMAGE"
+        bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && exec $NVBLOX_LAUNCH"
+    )
+    local out
+    if ! out="$(docker "${args[@]}" 2>&1)"; then
+        echo "docker could not start nvblox: $out" >&2
+        return 1
+    fi
+
+    local waited=0
+    until nvblox_running; do
+        if (( waited++ >= 50 )); then
+            echo "nvblox is not running, last log lines:" >&2
+            docker logs --tail 15 "$NVBLOX_CONTAINER" >&2 2>&1
+            docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
+            return 1
+        fi
+        sleep 0.1
+    done
+    sleep "$NVBLOX_SETTLE"
+    if ! nvblox_running; then
+        echo "nvblox exited right after starting, last log lines:" >&2
+        docker logs --tail 15 "$NVBLOX_CONTAINER" >&2 2>&1
+        docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
+        return 1
+    fi
+    echo "nvblox started (container $NVBLOX_CONTAINER)"
+}
+
+nvblox_stop() {
+    nvblox_managed || return 0
+    nvblox_exists || return 0
+    mkdir -p "$STATE_DIR"
+    docker logs --tail 3000 "$NVBLOX_CONTAINER" > "$STATE_DIR/nvblox_$(date +%Y%m%d_%H%M%S).log" 2>&1
+    docker stop --signal SIGINT --time "$DOCKER_STOP_TIMEOUT" "$NVBLOX_CONTAINER" > /dev/null 2>&1
+    docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
+    if nvblox_exists; then
+        echo "could not stop the nvblox container $NVBLOX_CONTAINER" >&2
+        return 1
+    fi
+    echo "nvblox stopped"
+}
+
+# ---------------------------------------------------------------- commands
+
+prune_logs() {
+    ls -t "$STATE_DIR"/system_*.log 2>/dev/null | tail -n +"$(( KEEP_LOGS + 1 ))" | while read -r old; do rm -f -- "$old"; done
+    ls -t "$STATE_DIR"/nvblox_*.log 2>/dev/null | tail -n +"$(( KEEP_LOGS + 1 ))" | while read -r old; do rm -f -- "$old"; done
+}
+
+cmd_start() {
+    take_lock
+    local launch_args=() want_nvblox=1 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --no-nvblox) want_nvblox=0 ;;
+            controller:=pure_pursuit) want_nvblox=0; launch_args+=("$arg") ;;   # only the CBF reads the nvblox map
+            *) launch_args+=("$arg") ;;
+        esac
+    done
+    nvblox_managed || want_nvblox=0
+
+    if ! stack_start "${launch_args[@]}"; then
+        return 1
+    fi
+    if (( want_nvblox )); then
+        if ! nvblox_start; then
+            echo "nvblox did not start, stopping the stack again" >&2
+            stack_stop > /dev/null
+            return 1
+        fi
+    fi
+    prune_logs
+}
+
+cmd_stop() {
+    take_lock
+    trap '' HUP   # a dropped ssh connection must not cut the escalation short
+    local rc=0
+    stack_stop || rc=1      # the robot first, then the map
+    nvblox_stop || rc=1
+    return "$rc"
+}
+
 cmd_status() {
-    local pid
+    local pid rc=3
     if pid="$(running_pid)"; then
         echo "running $pid"
-        return 0
+        rc=0
+    else
+        echo "stopped"
     fi
-    echo "stopped"
-    return 3
+    if nvblox_managed; then
+        if nvblox_running; then echo "nvblox running"; else echo "nvblox stopped"; fi
+    fi
+    return "$rc"
 }
 
 case "${1:-}" in
     start) shift; cmd_start "$@" ;;
     stop) cmd_stop ;;
     status) cmd_status ;;
-    *) echo "usage: $0 start [launch args] | stop | status" >&2; exit 2 ;;
+    *) echo "usage: $0 start [--no-nvblox] [launch args] | stop | status" >&2; exit 2 ;;
 esac

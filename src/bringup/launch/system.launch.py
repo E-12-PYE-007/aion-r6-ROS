@@ -6,15 +6,16 @@
   + global localisation (optional) + weed detection and geotagging (optional)
   + system monitor (CPU, GPU and memory on /system_diagnostics)
 
-nvblox runs separately in the Isaac ROS docker, and the VLA's sys2 on the workstation
-(matching ROS_DOMAIN_ID). Weed visualisation is a workstation launch:
-weed_geotagging weed_visualisation.launch.py.
+nvblox runs in the Isaac ROS docker, which bringup/scripts/aion_system.sh starts and stops with this
+launch, and the VLA's sys2 on the workstation (matching ROS_DOMAIN_ID). Weed visualisation is a workstation
+launch: weed_geotagging weed_visualisation.launch.py.
 
 rosbag:=true records the plotting topics to ~/rosbags/system_<timestamp> (split at 1 GiB);
 bag_name:=<name> overrides that folder name.
 
-Arguments: controller (cbf | pure_pursuit), localisation (local | global), weed,
-model_path, output_csv, rosbag, bag_name, use_sim_time.
+Arguments: controller (cbf | pure_pursuit), localisation (local | global), weed, model_path,
+target_classes (comma-separated YOLO labels counted as weeds, empty for every class), output_csv, rosbag,
+bag_name, use_sim_time.
 """
 import os
 import time
@@ -104,6 +105,8 @@ def generate_launch_description():
                               description='Run weed detection and geotagging'),
         DeclareLaunchArgument('model_path', default_value='/home/vla-cap/YOLO_release/best.pt',
                               description='YOLO weights for weed detection'),
+        DeclareLaunchArgument('target_classes', default_value='',
+                              description='Comma-separated YOLO labels counted as weeds (empty: every class)'),
         DeclareLaunchArgument('output_csv', default_value='',
                               description='Weed geotag CSV path (empty: no CSV)'),
         DeclareLaunchArgument('rosbag', default_value='false',
@@ -130,6 +133,7 @@ def generate_launch_description():
         include('weed_geotagging', 'weed_detection_geotagging.launch.py',
                 condition=IfCondition(LaunchConfiguration('weed')),
                 model_path=LaunchConfiguration('model_path'),
+                target_classes=LaunchConfiguration('target_classes'),
                 output_csv=LaunchConfiguration('output_csv'),
                 publish_annotated='true',
                 max_depth_m='3.0',
