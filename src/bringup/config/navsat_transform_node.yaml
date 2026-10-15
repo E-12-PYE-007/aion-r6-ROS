@@ -1,10 +1,11 @@
-navsat_transform_node:
+navsat_transform:
   ros__parameters:
     frequency: 30.0
     delay: 1.0
 
-    magnetic_declination_radians: 0.37821285
-    yaw_offset: 0.0
+    # magnetic_declination_radians: 0.37821285
+    magnetic_declination_radians: 0.0
+    yaw_offset: 0.0 
 
     use_odometry_yaw: false
 

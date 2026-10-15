@@ -13,12 +13,12 @@ SAFETY_MARGIN_M = 0.20        # [m] robot half-width plus clearance; check again
 CONTROL_LOOP_DT = 1 / 15      # [s] must stay <= 0.125 s so no 8 Hz VLA chunk is missed
 
 # --- CBF-QP tuning ---
-LOOKAHEAD_M = 0.2             # [m] barrier is evaluated this far ahead, so the QP can steer as well as brake
-CBF_EXTRA_MARGIN_M = 0.15     # [m] added to SAFETY_MARGIN_M; the centre cuts closer than the lookahead point in turns
-CBF_ALPHA = 2.0               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
-CBF_WEIGHT_V = 1.0            # QP weight on deviation from nominal v
-CBF_WEIGHT_OMEGA = 0.03      # QP weight on deviation from nominal omega; small so the filter steers round obstacles
-CBF_SLACK_WEIGHT = 500.0     # QP weight on constraint slack; keeps the QP feasible inside the margin
+LOOKAHEAD_M = 0.15            # [m] barrier is evaluated this far ahead, so the QP can steer as well as brake
+CBF_EXTRA_MARGIN_M = 0     # [m] added to SAFETY_MARGIN_M; the centre cuts closer than the lookahead point in turns
+CBF_ALPHA = 2.5               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
+CBF_WEIGHT_V = 0.5            # QP weight on deviation from nominal v
+CBF_WEIGHT_OMEGA = 0.0005      # QP weight on deviation from nominal omega; small so the filter steers round obstacles
+CBF_SLACK_WEIGHT = 1000.0     # QP weight on constraint slack; keeps the QP feasible inside the margin
 
 # --- Topics and frames ---
 ODOM_FRAME = 'odom'
