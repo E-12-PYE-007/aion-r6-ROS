@@ -70,7 +70,7 @@ class CbfFilter:
         # ca.gradient needs a purely symbolic argument, and p_x0 is a slice of P: differentiate
         # against a standalone pose symbol (the patch anchor stays p_x0), then substitute p_x0 in.
         pose_sym = ca.MX.sym('pose_sym', 3)
-        constraints, barriers = [], []
+        constraints, barriers, grads_xy = [], [], []
         for body_point in self.body_points:
             h_sym = self._barrier(pose_sym, p_x0[0:2], p_psi, p_delta, p_coeffs, body_point)
             grad_h_sym = ca.gradient(h_sym, pose_sym)   # dh/d[x, y, theta]
@@ -78,7 +78,12 @@ class CbfFilter:
             # Slacked CBF condition: dh/dt + s >= -alpha * h
             constraints.append(ca.dot(grad_h, g_v) * u[0] + ca.dot(grad_h, g_omega) * u[1] + s + self.alpha * h)
             barriers.append(h)
+            grads_xy.append(grad_h[0:2].T)              # ESDF spatial gradient (odom frame), points away from obstacle
         self._h_all = ca.Function('h_all', [P], [ca.vertcat(*barriers)])
+        # Per-body-point ESDF spatial gradient; row i is (dd/dx, dd/dy) at body point i. Used to
+        # steer the reverse recovery away from the binding obstacle -- a side evaluation, not part
+        # of the QP solve.
+        self._grad_all = ca.Function('grad_all', [P], [ca.vertcat(*grads_xy)])
 
         u_err = u - p_u_nom
         W = ca.diag(ca.vertcat(weight_v, weight_omega))
@@ -99,18 +104,24 @@ class CbfFilter:
     def filter(self, x0, psi, delta, esdf_patch, u_nom):
         """`delta` is the robot's offset from the patch's centre cell (EsdfMap.get_patch), 0 if
         the patch is centred exactly on the robot.
-        Returns (u_safe, h, slack): the safe [v, omega], the smallest barrier value over the
-        body points (positive = every point outside its clearance), and the slack the constraints
-        needed (0 normally). If the QP solver fails, u_safe is a stop and n_solve_failures counts it."""
+        Returns (u_safe, h, slack, escape_dir): the safe [v, omega], the smallest barrier value
+        over the body points (positive = every point outside its clearance), the slack the
+        constraints needed (0 normally), and the odom-frame ESDF gradient (dd/dx, dd/dy) at the
+        binding (min-h) body point -- points away from the nearest obstacle, for the reverse
+        recovery to angle toward. If the QP solver fails, u_safe is a stop and n_solve_failures
+        counts it."""
         p = self.pack_params(x0, psi, delta, esdf_patch, u_nom)
         sol = self.solver(p=p, lbx=self.lbw, ubx=self.ubw, lbg=self.lbg, ubg=self.ubg,
                           x0=np.concatenate([u_nom, [0.0]]))
         w_opt = np.array(sol['x']).flatten()
-        h = float(np.min(np.array(self._h_all(p))))
+        barriers = np.array(self._h_all(p)).flatten()
+        i_bind = int(np.argmin(barriers))
+        h = float(barriers[i_bind])
+        escape_dir = np.array(self._grad_all(p))[i_bind]   # (dd/dx, dd/dy) at the binding point
         if not self.solver.stats()['success'] or not np.all(np.isfinite(w_opt)):
             self.n_solve_failures += 1
-            return np.zeros(2), h, 0.0
-        return w_opt[0:2], h, float(w_opt[2])
+            return np.zeros(2), h, 0.0, escape_dir
+        return w_opt[0:2], h, float(w_opt[2]), escape_dir
 
 
 if __name__ == '__main__':
@@ -120,7 +131,7 @@ if __name__ == '__main__':
     esdf_patch = np.full((cbf.patch_size, cbf.patch_size), 2.0)  # free space
     u_nom = np.array([0.3, 0.0])
     delta = np.zeros(2)
-    u_safe, h, slack = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
+    u_safe, h, slack, escape_dir = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
     print(f"free space: u_safe={u_safe}, h={h:.3f}, slack={slack:.4f}")
 
     # A disc obstacle 0.5 m ahead and 0.3 m to the left of the robot.
@@ -128,5 +139,5 @@ if __name__ == '__main__':
     x = (cols - cbf.half_patch) * cbf.patch_resolution
     y = (rows - cbf.half_patch) * cbf.patch_resolution
     esdf_patch = np.clip(np.hypot(x - 0.5, y - 0.3) - 0.15, -0.2, 2.0)
-    u_safe, h, slack = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
+    u_safe, h, slack, escape_dir = cbf.filter(x0, psi, delta, esdf_patch, u_nom)
     print(f"obstacle ahead-left: u_safe={u_safe}, h={h:.3f}, slack={slack:.4f}")

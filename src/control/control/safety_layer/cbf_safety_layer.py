@@ -35,6 +35,7 @@ from .cbf_qp import CbfFilter
 from .constants import (
     ESDF_TOPIC, SLACK_TOPIC, CBF_H_TOPIC, CMD_VEL_NOMINAL_TOPIC, FILTERING_ACTIVE_TOPIC,
     FILTERING_EPS, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION, REVERSING_TOPIC,
+    REVERSE_GRAD_MIN,
 )
 from .esdf_map import EsdfMap
 from .reverse_recovery import ReverseRecovery
@@ -101,7 +102,7 @@ class CbfSafetyLayerNode(Node):
 
         v_nom, omega_nom = self._pure_pursuit.nominal(self._current_action_chunk, x0)
         solve_start = time.perf_counter()
-        u_safe, h, slack = self._cbf.filter(x0, psi, patch_offset, esdf_patch, [v_nom, omega_nom])
+        u_safe, h, slack, escape_dir = self._cbf.filter(x0, psi, patch_offset, esdf_patch, [v_nom, omega_nom])
         if self._print_solve_time:
             self.get_logger().info(f'solve_time_ms={(time.perf_counter() - solve_start) * 1e3:.3f}')
 
@@ -120,9 +121,14 @@ class CbfSafetyLayerNode(Node):
         self._filtering_active_publisher.publish(Bool(data=bool(filtering_active)))
 
         was_reversing = self._reverse_recovery.reversing
-        reverse_cmd = self._reverse_recovery.update(x0, slack)
+        # Heading away from the binding obstacle (odom frame) for the reverse to angle toward;
+        # None when the ESDF gradient is too weak to trust, so the reverse goes straight back.
+        away_yaw = None
+        if np.hypot(escape_dir[0], escape_dir[1]) > REVERSE_GRAD_MIN:
+            away_yaw = float(np.arctan2(escape_dir[1], escape_dir[0]))
+        reverse_cmd = self._reverse_recovery.update(x0, slack, [v_nom, omega_nom], u_safe, away_yaw)
         if reverse_cmd is not None and not was_reversing:
-            self.get_logger().warn('Slack persists, reversing straight back')
+            self.get_logger().warn('Robot stuck (slack high or stalled at clearance boundary), reversing straight back')
         elif reverse_cmd is None and was_reversing:
             self.get_logger().info('Reverse finished, resuming the filter')
         self._reversing_publisher.publish(Bool(data=reverse_cmd is not None))
