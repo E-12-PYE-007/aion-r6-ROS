@@ -113,7 +113,7 @@ def generate_launch_description():
         DeclareLaunchArgument('model_path', default_value=''),
         DeclareLaunchArgument('output_csv', default_value=''),
         DeclareLaunchArgument('output_odom_csv', default_value=''),
-        DeclareLaunchArgument('odom_topic', default_value='/odometry/filtered'),
+        DeclareLaunchArgument('odom_topic', default_value='/odometry/local'),
         DeclareLaunchArgument('publish_annotated', default_value='false'),
         DeclareLaunchArgument('max_depth_m', default_value='3.0'),
         DeclareLaunchArgument('foreground_depth_percentile', default_value='40.0'),

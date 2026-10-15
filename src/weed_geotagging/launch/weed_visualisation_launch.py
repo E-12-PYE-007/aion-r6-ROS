@@ -14,7 +14,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     config = os.path.join(get_package_share_directory('weed_geotagging'), 'rviz', 'weed_map.rviz')
     return LaunchDescription([
-        DeclareLaunchArgument('odom_topic', default_value='/odometry/filtered'),
+        DeclareLaunchArgument('odom_topic', default_value='/odometry/local'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('start_rviz', default_value='true'),
         DeclareLaunchArgument('rviz_config', default_value=config),

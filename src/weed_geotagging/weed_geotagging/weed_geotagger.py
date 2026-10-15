@@ -152,7 +152,7 @@ class WeedGeotagger(Node):
         self.detections_topic = self.declare_parameter('detections_topic', '/weed_detections_json').value
         self.depth_topic = self.declare_parameter('depth_topic', '/camera/depth/image_raw').value
         self.camera_info_topic = self.declare_parameter('camera_info_topic', '/camera/color/camera_info').value
-        self.odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
+        self.odom_topic = self.declare_parameter('odom_topic', '/odometry/local').value
         self.output_csv = self.declare_parameter('output_csv', '').value
         self.output_odom_csv = self.declare_parameter('output_odom_csv', '').value
         self.target_label = self.declare_parameter('target_label', '').value

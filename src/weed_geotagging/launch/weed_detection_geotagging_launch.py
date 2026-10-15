@@ -12,7 +12,7 @@ def generate_launch_description():
         DeclareLaunchArgument('detections_topic', default_value='/weed_detections_json'),
         DeclareLaunchArgument('depth_topic', default_value='/camera/depth/image_raw'),
         DeclareLaunchArgument('camera_info_topic', default_value='/camera/color/camera_info'),
-        DeclareLaunchArgument('odom_topic', default_value='/odometry/filtered'),
+        DeclareLaunchArgument('odom_topic', default_value='/odometry/local'),
         DeclareLaunchArgument('output_csv', default_value=''),
         DeclareLaunchArgument('output_odom_csv', default_value=''),
         DeclareLaunchArgument('target_label', default_value=''),

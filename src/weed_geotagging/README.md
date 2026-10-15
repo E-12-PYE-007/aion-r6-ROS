@@ -43,7 +43,7 @@ Accepted JSON examples:
 - `detections_topic` (`std_msgs/String`) - JSON detections
 - `depth_topic` (`sensor_msgs/Image`) - depth registered to RGB, `16UC1` in millimetres or `32FC1` in metres
 - `camera_info_topic` (`sensor_msgs/CameraInfo`) — matching RGB camera intrinsics
-- `odom_topic` (`nav_msgs/Odometry`) — robot pose, default `/odometry/filtered`
+- `odom_topic` (`nav_msgs/Odometry`) — robot pose, default `/odometry/local`
 
 ## Outputs
 
@@ -88,7 +88,7 @@ ros2 launch weed_geotagging weed_detection_geotagging_launch.py \
   model_path:=/home/vla-cap/models/best.pt \
   output_csv:=/home/vla-cap/weeds.csv \
   output_odom_csv:=/home/vla-cap/weeds_odom.csv \
-  odom_topic:=/odometry/filtered \
+  odom_topic:=/odometry/local \
   publish_annotated:=false
 ```
 

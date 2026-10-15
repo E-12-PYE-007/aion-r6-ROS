@@ -16,7 +16,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 class RoverVisualiser(Node):
     def __init__(self):
         super().__init__('rover_visualiser')
-        odom_topic = self.declare_parameter('odom_topic', '/odometry/filtered').value
+        odom_topic = self.declare_parameter('odom_topic', '/odometry/local').value
         self.length = float(self.declare_parameter('rover_length_m', 0.65).value)
         self.width = float(self.declare_parameter('rover_width_m', 0.50).value)
         self.height = float(self.declare_parameter('rover_height_m', 0.15).value)
