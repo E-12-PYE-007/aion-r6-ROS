@@ -44,7 +44,7 @@ def start_bridge(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('jetson_host', default_value='10.43.254.23', description='Address of the Jetson on the LAN'),
-        DeclareLaunchArgument('jetson_fallback_host', default_value='',
+        DeclareLaunchArgument('jetson_fallback_host', default_value='10.42.0.1',
                               description="The Jetson's address on its hotspot, tried if the first does not answer"),
         DeclareLaunchArgument('discovery_server', default_value=DEFAULT_SERVER,
                               description='Fast DDS discovery server, used on the LAN'),

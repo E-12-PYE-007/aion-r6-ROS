@@ -184,8 +184,17 @@ nvblox_start() {
     # Only ever removes the container this script owns.
     docker rm -f "$NVBLOX_CONTAINER" > /dev/null 2>&1
 
-    local discovery_args=()
-    [[ "$DISCOVERY_MODE" == "multicast" ]] || discovery_args=(-e ROS_DISCOVERY_SERVER="$DISCOVERY_SERVER")
+    # In multicast mode the container must not use a discovery server. Omitting the -e below is not enough:
+    # the image's own environment may still carry ROS_DISCOVERY_SERVER/ROS_SUPER_CLIENT, in which case the
+    # nvblox participant looks for the (absent) server and never discovers the stack over multicast -- the
+    # ESDF never reaches the CBF and the robot sits still while the camera (its own node) streams fine. So
+    # unset them inside the container too, mirroring discovery_exports() for the stack.
+    local discovery_args=() discovery_prep=""
+    if [[ "$DISCOVERY_MODE" == "multicast" ]]; then
+        discovery_prep="unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT && "
+    else
+        discovery_args=(-e ROS_DISCOVERY_SERVER="$DISCOVERY_SERVER")
+    fi
 
     # The same flags and mounts as isaac_ros_common/scripts/run_dev.sh on aarch64, detached and with a command.
     local args=(
@@ -207,7 +216,7 @@ nvblox_start() {
         --entrypoint /usr/local/bin/scripts/workspace-entrypoint.sh
         --workdir /workspaces/isaac_ros-dev
         "$NVBLOX_IMAGE"
-        bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && exec $NVBLOX_LAUNCH"
+        bash -c "source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash && ${discovery_prep}exec $NVBLOX_LAUNCH"
     )
     local out
     if ! out="$(docker "${args[@]}" 2>&1)"; then
