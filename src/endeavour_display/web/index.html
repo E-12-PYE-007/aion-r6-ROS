@@ -57,9 +57,6 @@
   #ticks { left: 1000px; top: 790px; width: 400px; }
   #status { left: 1480px; top: 724px; width: 344px; font-size: 24px; font-weight: 500; color: var(--mute); }
   #status.error { color: var(--bad); }
-  #big { left: 1480px; top: 758px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #big b { font-size: 112px; font-weight: 700; color: var(--coral-ink); line-height: 1; margin-right: 14px; }
-  #big span { font-size: 40px; font-weight: 600; }
   #go { left: 1480px; top: 884px; width: 344px; height: 88px; border-radius: 44px; border: 2px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--font); font-weight: 600; font-size: 34px; cursor: pointer; transition: background .3s cubic-bezier(.33,1,.68,1), color .3s cubic-bezier(.33,1,.68,1); }
   #go.stop { background: transparent; color: var(--ink); }
   #go.start { background: linear-gradient(to right, var(--fill2) var(--p, 0%), transparent var(--p, 0%)); color: var(--ink); touch-action: none; }
@@ -91,7 +88,7 @@
         <mask id="maskX" maskUnits="userSpaceOnUse" x="190" y="200" width="700" height="700"><rect x="190" y="200" width="700" height="700" fill="url(#fadeX)"/></mask>
         <mask id="maskY" maskUnits="userSpaceOnUse" x="190" y="200" width="700" height="700"><rect x="190" y="200" width="700" height="700" fill="url(#fadeY)"/></mask>
       </defs>
-      <g mask="url(#maskY)"><g mask="url(#maskX)"><g id="trail"></g><g id="pins"></g><g id="robot"></g></g></g>
+      <g mask="url(#maskY)"><g mask="url(#maskX)"><g id="grid"></g><g id="trail"></g><g id="pins"></g><g id="robot"></g></g></g>
     </svg>
 
     <div class="abs cap" style="left:1000px; top:190px;">Live Camera With Detections</div>
@@ -101,9 +98,8 @@
     <div id="ticks" class="abs"></div>
 
     <div id="status" class="abs">Connecting</div>
-    <div id="big" class="abs"><b id="nweeds">0</b><span>weeds logged</span></div>
     <button id="go" class="abs" type="button" disabled>Start</button>
-    <div id="ind" class="abs"><i id="light" class="light n"></i><span id="indtext">Stack Off</span></div>
+    <div id="ind" class="abs"><i id="light" class="light n"></i><span id="indtext">System Off</span></div>
 
     <div class="abs footer"><b>AG-VLA</b>E-12-PYE-007</div>
   </div>
@@ -132,8 +128,9 @@
   }
   window.addEventListener('resize', fit); fit();
 
-  /* ---- the 1.5 m square window, centred on the robot ---- */
-  var PL = 190, PR = 890, PT = 200, PB = 900, CX = (PL + PR) / 2, CY = (PT + PB) / 2, SC = (PR - PL) / 1.5;
+  /* ---- the square window, centred on the robot ---- */
+  var WINDOW_M = 6, GRID_M = 1;   // metres shown across the window, and grid spacing in metres
+  var PL = 190, PR = 890, PT = 200, PB = 900, CX = (PL + PR) / 2, CY = (PT + PB) / 2, SC = (PR - PL) / WINDOW_M;
   var FADE = 30;
   var view = { x: 0, y: 0 }, shown = { x: 0, y: 0, yaw: 0, have: false };
   function sx(x) { return CX + (x - view.x) * SC; }
@@ -143,9 +140,23 @@
 
   var trailG = $('trail'), pinsG = $('pins'), robotG = $('robot');
   var robotNode = mk('g', {}, robotG);
-  mk('rect', { x: -9, y: -7, width: 18, height: 14, rx: 3.5, fill: '#f6f9fc', stroke: INK, 'stroke-width': 2.5 }, robotNode);
-  mk('rect', { x: 3.5, y: -3, width: 3.5, height: 6, rx: 1.5, fill: INK }, robotNode);
+  mk('rect', { x: -18, y: -14, width: 36, height: 28, rx: 7, fill: '#f6f9fc', stroke: INK, 'stroke-width': 3 }, robotNode);
+  mk('rect', { x: 7, y: -6, width: 7, height: 12, rx: 3, fill: INK }, robotNode);
   robotNode.setAttribute('opacity', 0);
+
+  /* ---- a world-aligned grid that scrolls under the robot ---- */
+  var gridG = $('grid'), gridLines = [];
+  function drawGrid() {
+    var k = 0, i, x, y;
+    function line(x1, y1, x2, y2) {
+      var ln = gridLines[k] || (gridLines[k] = mk('line', { stroke: '#cfe3f1', 'stroke-width': 1.5 }, gridG));
+      ln.setAttribute('x1', x1); ln.setAttribute('y1', y1); ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+      ln.style.display = ''; k++;
+    }
+    for (i = Math.ceil((view.x + (PL - CX) / SC) / GRID_M); (x = sx(i * GRID_M)) <= PR; i++) line(x, PT, x, PB);
+    for (i = Math.ceil((view.y - (PB - CY) / SC) / GRID_M); (y = sy(i * GRID_M)) >= PT; i++) line(PL, y, PR, y);
+    for (; k < gridLines.length; k++) gridLines[k].style.display = 'none';
+  }
 
   var trail = [], segPool = [], pins = {};   // pins: id -> { node, ageAtMsg, msgTime, popAt }
 
@@ -174,8 +185,9 @@
       if (!p) {
         p = pins[w.id] = { node: mk('g', {}, pinsG), popAt: now };
         mk('use', { href: '#sprig' }, p.node); mk('use', { href: '#pin' }, p.node);
+        p.text = mk('text', { y: 18, 'text-anchor': 'middle', 'font-size': 22, 'font-weight': 600, fill: '#3a6586' }, p.node);
       } else if (w.age < p.ageAtMsg - 0.5) p.popAt = now;      // seen again after fading
-      p.ageAtMsg = w.age; p.msgTime = now; p.x = w.x; p.y = w.y;
+      p.ageAtMsg = w.age; p.msgTime = now; p.x = w.x; p.y = w.y; p.text.textContent = w.label;
     });
     Object.keys(pins).forEach(function (id) { if (!seen[id]) { pinsG.removeChild(pins[id].node); delete pins[id]; } });
     if (s.stack !== prevStack) { runningSince = s.stack === 'running' ? now : null; prevStack = s.stack; }
@@ -239,7 +251,6 @@
       inp.disabled = !s.can_edit_selection;
       inp.parentNode.classList.toggle('locked', !s.can_edit_selection);
     });
-    $('nweeds').textContent = s.weeds.length;
 
     var busy = s.stack === 'starting' || s.stack === 'stopping';
     go.disabled = busy;
@@ -257,7 +268,7 @@
     statusEl.textContent = message || text;
     statusEl.classList.toggle('error', !!message);
 
-    var modes = { vla: ['g', 'VLA Active'], cbf: ['o', 'CBF Active'], recovery: ['r', 'Recovery Mode'], off: ['n', 'Stack Off'] };
+    var modes = { vla: ['g', 'VLA Active'], cbf: ['o', 'CBF Active'], recovery: ['r', 'Recovery Mode'], off: ['n', 'System Off'] };
     var m = modes[s.mode] || modes.off;
     $('light').className = 'light ' + m[0]; $('indtext').textContent = m[1];
 
@@ -303,6 +314,8 @@
       robotNode.setAttribute('transform', 'translate(' + sx(shown.x) + ' ' + sy(shown.y) + ') rotate(' + (-shown.yaw * 180 / Math.PI).toFixed(2) + ')');
       robotNode.setAttribute('opacity', snap && snap.stack === 'running' ? 1 : 0.45);
     }
+
+    drawGrid();
 
     while (trail.length && now - trail[0].t > FADE * 1000) trail.shift();
     var n = trail.length - 1;
