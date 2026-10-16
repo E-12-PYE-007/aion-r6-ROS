@@ -1,0 +1,7 @@
+#!/home/vla-cap/venvs/ag_sys1/bin/python3
+# Runs the YOLO detector under the ag_sys1 venv, whose torch is the CUDA (Orin) build.
+# System /usr/bin/python3 has a generic +cuXXX torch wheel with cuda unavailable, so the
+# detector would silently fall back to CPU (~1 Hz instead of ~35 Hz). Mirrors sys1_hw.
+import sys
+from weed_geotagging.yolo_weed_detector import main
+sys.exit(main())

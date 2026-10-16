@@ -15,6 +15,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
+        # weed_detector_hw pins the ag_sys1 venv interpreter (CUDA torch); see the script.
+        (os.path.join('lib', package_name), glob('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
