@@ -6,22 +6,45 @@ PATCH_RESOLUTION = 0.1        # [m/cell], the deployment voxel size
 SPLINE_DEGREE = 3
 NVBLOX_MAX_DISTANCE_M = 2.0   # nvblox's ESDF clamp; unknown cells are read as this
 
-# --- Safety ---
-SAFETY_MARGIN_M = 0.20        # [m] robot half-width plus clearance; check against the real robot
+# --- Robot body (base_link frame, x forward) ---
+BODY_LENGTH_M = 0.49          # [m] measured
+BODY_WIDTH_M = 0.35           # [m] measured
 
 # --- Control loop ---
 CONTROL_LOOP_DT = 1 / 15      # [s] must stay <= 0.125 s so no 8 Hz VLA chunk is missed
 
 # --- CBF-QP tuning ---
-LOOKAHEAD_M = 0.4             # [m] barrier is evaluated this far ahead, so the QP can steer as well as brake
-CBF_EXTRA_MARGIN_M = 0.15     # [m] added to SAFETY_MARGIN_M; the centre cuts closer than the lookahead point in turns
-CBF_ALPHA = 2.0               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
-CBF_WEIGHT_V = 1.0            # QP weight on deviation from nominal v
-CBF_WEIGHT_OMEGA = 0.003      # QP weight on deviation from nominal omega; small so the filter steers round obstacles
-CBF_SLACK_WEIGHT = 1000.0     # QP weight on constraint slack; keeps the QP feasible inside the margin
+# One barrier per body point, so the front corners and nose are each kept CBF_BODY_CLEARANCE_M from obstacles.
+CBF_BODY_POINTS_M = [(BODY_LENGTH_M / 2, BODY_WIDTH_M / 2), (BODY_LENGTH_M / 2, -BODY_WIDTH_M / 2), (BODY_LENGTH_M / 2, 0.0)]
+CBF_BODY_CLEARANCE_M = 0.08   # [m] ESDF distance each body point must keep
+CBF_ALPHA = 0.5               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
+CBF_WEIGHT_V = 3.0            # QP weight on deviation from nominal v
+CBF_WEIGHT_OMEGA = 1.0        # QP weight on deviation from nominal omega
+CBF_SLACK_WEIGHT = 500.0      # QP weight on constraint slack; keeps the QP feasible inside the clearance
+
+# --- Reverse recovery ---
+SLACK_REVERSE_THRESHOLD = 0.01   # slack above this means no command satisfies the barriers
+SLACK_REVERSE_TICKS = 8          # consecutive ticks above the threshold (about 0.5 s) that trigger the reverse
+REVERSE_DISTANCE_M = 0.25        # [m] straight back, measured on odometry
+REVERSE_SPEED_M_S = 0.1          # [m/s]
+REVERSE_TIMEOUT_FACTOR = 1.5     # give up after this multiple of the nominal reverse time
+STALL_REVERSE_TICKS = 8          # consecutive stalled ticks (about 0.5 s) that trigger the reverse
+STALL_SPEED_EPS = 0.05           # [m/s, rad/s] filtered |v| and |omega| below this count as stationary
+STALL_NOMINAL_V_EPS = 0.02       # [m/s] nominal forward speed above this means the robot is being asked to move
+REVERSE_TURN_OMEGA = 0.3         # [rad/s] gentle arc applied while reversing to angle away from the obstacle
+REVERSE_MAX_YAW = 0.5            # [rad] cap on heading change during a reverse (~30 deg); keeps it a nudge, not a U-turn
+REVERSE_GRAD_MIN = 1e-3          # ESDF gradient magnitude below this is treated as no clear direction -> straight back
 
 # --- Topics and frames ---
 ODOM_FRAME = 'odom'
 ESDF_TOPIC = '/nvblox_node/static_map_slice'
 SLACK_TOPIC = 'safety_layer/slack'   # debug: constraint slack in use, one per tick
-CBF_H_TOPIC = 'cbf/h'                # debug: barrier value at the lookahead point, one per tick
+CBF_H_TOPIC = 'cbf/h'                # debug: smallest barrier value over the body points, one per tick
+CMD_VEL_NOMINAL_TOPIC = 'safety_layer/cmd_vel_nominal'  # debug: pure-pursuit command before the CBF filter
+FILTERING_ACTIVE_TOPIC = 'safety_layer/filtering_active'  # debug: True when the CBF filter changed v or omega
+REVERSING_TOPIC = 'safety_layer/reversing'  # debug: True while the reverse recovery is driving
+
+# --- Filtering-active detection ---
+FILTERING_EPS = 1e-3          # per-channel deadband; |v_safe - v_nom| or |omega_safe - omega_nom|
+                              # above this (in m/s / rad/s) counts as the filter intervening,
+                              # set just above the QP solver's numerical noise floor

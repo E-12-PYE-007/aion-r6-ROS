@@ -37,8 +37,9 @@ class EsdfMap:
         return source_slice, patch_slice
 
     def get_patch(self, cp, source=None, fill_value=None):
-        """Square patch cut from `source` (default: the ESDF), centred on `cp` in the map frame.
-        Cells outside the ESDF are `fill_value` (default: the max distance)."""
+        """(patch, offset): a square patch cut from `source` (default: the ESDF) around the cell
+        nearest `cp` in the map frame, and `cp` minus the centre of that cell (|offset| <= half a
+        cell). Cells outside the ESDF are `fill_value` (default: the max distance)."""
         if source is None:
             source = self.vals
         if fill_value is None:
@@ -54,11 +55,13 @@ class EsdfMap:
         grid_cols, patch_cols = self._clipped_range(col0 - self.half_patch, col0 + self.half_patch, source.shape[1])
 
         patch[patch_rows, patch_cols] = source[grid_rows, grid_cols]
-        return patch
+        centre_cell = self.origin + self.resolution * np.array([col0, row0])
+        return patch, np.asarray(cp, dtype=float) - centre_cell
 
     def patch_at(self, tf_buffer, x0):
-        """(psi, patch) for the robot pose `x0` = (x, y, theta) in the odom frame: the patch
-        centred on the robot, and the yaw of the odom frame in the ESDF frame. Returns None
+        """(psi, patch, offset) for the robot pose `x0` = (x, y, theta) in the odom frame: the yaw
+        of the odom frame in the ESDF frame, the patch around the robot, and the robot's offset
+        from the patch's centre cell in the ESDF frame. Returns None
         if no ESDF has arrived yet; raises tf2_ros.TransformException if the odom -> ESDF
         transform is unavailable."""
         if self.vals is None:
@@ -66,4 +69,5 @@ class EsdfMap:
         tf = tf_buffer.lookup_transform(self.frame_id, ODOM_FRAME, Time())
         x_esdf, y_esdf, _ = transform_pose_2d(x0[0], x0[1], x0[2], tf)
         psi = yaw_from_quaternion(tf.transform.rotation)
-        return psi, self.get_patch([x_esdf, y_esdf])
+        patch, offset = self.get_patch([x_esdf, y_esdf])
+        return psi, patch, offset

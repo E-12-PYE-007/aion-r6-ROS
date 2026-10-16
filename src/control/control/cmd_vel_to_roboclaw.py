@@ -15,7 +15,7 @@ from rclpy.node import Node
 
 WHEEL_RADIUS_M = 0.0804              # Must match roboclaw_tests.py.
 ENCODER_COUNTS_PER_WHEEL_REV = 1100  # Must match roboclaw_tests.py.
-EFFECTIVE_TRACK_WIDTH_M = 0.5132     # Must match roboclaw_tests.py.
+EFFECTIVE_TRACK_WIDTH_M = 0.75     # Must match roboclaw_tests.py.
 
 METERS_PER_TICK = (2.0 * math.pi * WHEEL_RADIUS_M) / ENCODER_COUNTS_PER_WHEEL_REV
 
