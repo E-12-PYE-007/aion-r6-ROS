@@ -10,10 +10,11 @@ nvblox runs separately in the Isaac ROS docker, and the VLA's sys2 on the workst
 (matching ROS_DOMAIN_ID). Weed visualisation is a workstation launch:
 weed_geotagging weed_visualisation.launch.py.
 
-rosbag:=true records the plotting topics to ~/rosbags/system_<timestamp> (split at 1 GiB).
+rosbag:=true records the plotting topics to ~/rosbags/system_<timestamp> (split at 1 GiB);
+bag_name:=<name> overrides that folder name.
 
 Arguments: controller (cbf | pure_pursuit), localisation (local | global), weed,
-model_path, output_csv, rosbag, use_sim_time.
+model_path, output_csv, rosbag, bag_name, use_sim_time.
 """
 import os
 import time
@@ -82,7 +83,8 @@ def start_bag(context):
         topics.append(BAG_TOPIC_IMAGE_RAW)
     if LaunchConfiguration('localisation').perform(context) == 'global':
         topics += BAG_TOPICS_GLOBAL
-    bag_dir = os.path.expanduser(os.path.join(BAG_DIR, 'system_' + time.strftime('%Y%m%d_%H%M%S')))
+    name = LaunchConfiguration('bag_name').perform(context) or 'system_' + time.strftime('%Y%m%d_%H%M%S')
+    bag_dir = os.path.expanduser(os.path.join(BAG_DIR, name))
     os.makedirs(os.path.dirname(bag_dir), exist_ok=True)
     return [ExecuteProcess(
         cmd=['ros2', 'bag', 'record', '-o', bag_dir, '--max-bag-size', str(BAG_MAX_BYTES), *topics],
@@ -106,6 +108,8 @@ def generate_launch_description():
                               description='Weed geotag CSV path (empty: no CSV)'),
         DeclareLaunchArgument('rosbag', default_value='false',
                               description='Record the plotting topics to ~/rosbags'),
+        DeclareLaunchArgument('bag_name', default_value='',
+                              description='Bag folder name under ~/rosbags (default: system_<timestamp>)'),
         DeclareLaunchArgument('use_sim_time', default_value='false',
                               description='Use simulation clock'),
         OpaqueFunction(function=validate),
