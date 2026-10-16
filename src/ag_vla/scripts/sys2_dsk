@@ -1,0 +1,6 @@
+#!/home/vla-cap/miniconda3/envs/asyncvla/bin/python3
+import sys
+sys.path = [p for p in sys.path if '/miniconda3/envs/' not in p or '/asyncvla/' in p]
+sys.path.insert(0, '/home/vla-cap/AsyncVLA')
+from ag_vla.sys2 import main
+sys.exit(main())
