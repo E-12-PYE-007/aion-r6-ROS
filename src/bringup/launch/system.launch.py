@@ -40,10 +40,15 @@ BAG_TOPICS = [
     '/safety_layer/cmd_vel_nominal', '/safety_layer/filtering_active', '/safety_layer/reversing',
     '/safety_layer/slack', '/cbf/h', '/nvblox_node/static_map_slice',
     '/weed_markers', '/weed_detections_json',
-    '/camera/color/image_raw/compressed', '/camera/color/camera_info',
+    '/camera/color/camera_info',
     '/system_diagnostics',
 ]
 BAG_TOPICS_GLOBAL = ['/gps/filtered']
+# Camera image to record: annotated detections (JPEG) when weed detection is running,
+# otherwise the raw frame. The detector only emits the annotated topic while something is
+# subscribed, and the bag is that subscriber.
+BAG_TOPIC_IMAGE_WEED = '/weed_detections/image/compressed'
+BAG_TOPIC_IMAGE_RAW = '/camera/color/image_raw/compressed'
 
 
 def include(package, launch_file, condition=None, **launch_arguments):
@@ -71,6 +76,10 @@ def start_bag(context):
     if not IfCondition(LaunchConfiguration('rosbag')).evaluate(context):
         return []
     topics = list(BAG_TOPICS)
+    if IfCondition(LaunchConfiguration('weed')).evaluate(context):
+        topics.append(BAG_TOPIC_IMAGE_WEED)
+    else:
+        topics.append(BAG_TOPIC_IMAGE_RAW)
     if LaunchConfiguration('localisation').perform(context) == 'global':
         topics += BAG_TOPICS_GLOBAL
     bag_dir = os.path.expanduser(os.path.join(BAG_DIR, 'system_' + time.strftime('%Y%m%d_%H%M%S')))
