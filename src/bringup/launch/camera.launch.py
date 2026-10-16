@@ -8,26 +8,20 @@ from launch.substitutions import PathJoinSubstitution
 
 def generate_launch_description():
     """
-    Bring up the front Gemini 336 with left/right IR enabled.
+    Bring up the front Gemini 336 with colour, depth, and left/right IR enabled.
 
-    Publishes left/right IR optical frames and their transforms, along with
-    color, depth, and synchronized camera IMU streams.
+    /camera/depth/image_raw is the depth image aligned to the colour viewpoint (software
+    alignment), in camera_color_optical_frame; the original is on /camera/depth/image_unaligned.
 
-    Accel and gyro are synced into the combined camera/gyro_accel/sample
-    stream in camera_accel_gyro_optical_frame.
-
-    Also publishes the base_link -> camera_link mounting transform, measured
-    from the FCU (base_link origin) to the camera housing: 0.2m forward, 0m left,
-    0.05m up, mounted level and forward-facing (identity rotation). This completes
-    the chain base_link -> camera_link -> ... -> camera_*_ir_optical_frame
-    used by downstream camera processing.
+    The laser is interleaved per-frame so IR frames stay laser-off (clean passive stereo for
+    VSLAM) while depth frames get the laser (for ranging).
     """
     base_to_camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_link_to_camera_link',
         arguments=[
-            '--x', '0.2', '--y', '0', '--z', '0.235',
+            '--x', '0.2', '--y', '0', '--z', '0.225',
             '--roll', '0', '--pitch', '0', '--yaw', '0',
             '--frame-id', 'base_link',
             '--child-frame-id', 'camera_link',
@@ -44,10 +38,13 @@ def generate_launch_description():
         ),
         launch_arguments={
             'camera_name': 'camera',
-            'enable_left_ir': 'true',
-            'enable_right_ir': 'true',
             'enable_color': 'true',
             'enable_depth': 'true',
+            'depth_registration': 'true',
+            'align_mode': 'SW',
+            'align_target_stream': 'COLOR',
+            'enable_left_ir': 'true',
+            'enable_right_ir': 'true',
             'enable_frame_sync': 'true',
             'publish_tf': 'true',
             'enable_accel': 'true',
@@ -55,8 +52,9 @@ def generate_launch_description():
             'enable_sync_output_accel_gyro': 'true',
             'accel_rate': '200hz',
             'gyro_rate': '200hz',
+            'enable_laser': 'true',
 
-            # laser
+            # laser interleaving
             'interleave_ae_mode': 'laser',
             'interleave_frame_enable': 'true',
             'interleave_skip_enable': 'true',
@@ -67,9 +65,9 @@ def generate_launch_description():
             'laser_index1_ir_ae_max_exposure': '16000',  # default 17000 -- kept under the 60fps frame period (~16.7ms); higher gets clamped anyway
             'laser_index1_depth_gain': '48',           # default 16 -- gain isn't limited by frame period like exposure is
 
-            'left_ir_fps': '30',
-            'right_ir_fps': '30',
-            'depth_fps': '30',
+            'left_ir_fps': '60',
+            'right_ir_fps': '60',
+            'depth_fps': '60',
         }.items(),
     )
 

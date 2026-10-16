@@ -1,39 +1,26 @@
+"""Local localisation: wheel encoders + mavros IMU -> /odometry/local.
+
+Needs roboclaw_for_motors (encoders) and mavros (IMU) running.
+
+Arguments: use_sim_time.
+"""
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 EKF_CONFIG_FILE = os.path.join(
-        get_package_share_directory('localisation'),
-        'config',
-        'local_ekf.yaml',
-    )
+    get_package_share_directory('localisation'),
+    'config',
+    'local_ekf.yaml',
+)
 
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
-
-    roboclaw_node = Node(
-        package='control',
-        executable='roboclaw_for_motors',
-        name='roboclaw_for_motors',
-        output='screen',
-      )
-
-    mavros_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('bringup'),
-                'launch',
-                'mavros-test.py',
-            )
-        )
-    )
-
 
     encoder_node = Node(
         package='localisation',
@@ -67,8 +54,6 @@ def generate_launch_description():
             default_value='false',
             description='Use simulation clock',
         ),
-        roboclaw_node,
-        mavros_launch,
         encoder_node,
         ekf_node,
     ])

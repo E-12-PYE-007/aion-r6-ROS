@@ -17,6 +17,7 @@ from rclpy.node import Node
 from custom_msgs.msg import ActionChunk, HiddenState, ImageWithSeqNum
 
 from ag_vla.edge_adapter import Edge_adapter
+from ag_vla.quiet_watchdog import QuietWatchdog
 
 
 RESUME_STEP = 750000
@@ -30,6 +31,7 @@ METRIC_WAYPOINT_SPACING = 0.1
 IMAGE_BUFFER_SIZE = 80  # 8 secs worth of data
 SYS1_RATE_HZ = 8.0
 NUM_ACTIONS_CHUNK = 8
+HIDDEN_STATE_TIMEOUT_S = 5.0  # no action chunks are published once the embeddings are this stale
 
 SHEAD_PATH = "/home/vla-cap/AsyncVLA_release"
 
@@ -58,6 +60,8 @@ class Sys1(Node):
         self.img_buffer_keys = deque(maxlen=IMAGE_BUFFER_SIZE)
         self.latest_hidden_state = None
         self.latest_hidden_seq_num = None
+        self.hidden_state_watchdog = QuietWatchdog(HIDDEN_STATE_TIMEOUT_S)
+        self.hidden_state_lost = False
 
         # Publishers
         self.action_chunk_pub = self.create_publisher(ActionChunk, "/agvla/action_chunk", 1)
@@ -89,8 +93,22 @@ class Sys1(Node):
     def hidden_state_callback(self, msg: HiddenState):
         self.latest_hidden_state = torch.tensor(msg.hidden_states.data, dtype=torch.float32).reshape(1, 8, 1024).to(torch.bfloat16).to(self.device)
         self.latest_hidden_seq_num = msg.img_seq_num
+        self.hidden_state_watchdog.feed(self._now_s())
+
+    def _now_s(self):
+        return self.get_clock().now().nanoseconds / 1e9
 
     def timer_callback(self):
+        if self.hidden_state_watchdog.expired(self._now_s()):
+            if not self.hidden_state_lost:
+                self.get_logger().warn(
+                    f"[AgVLA Sys1] No hidden state for {HIDDEN_STATE_TIMEOUT_S} s, not publishing action chunks")
+                self.hidden_state_lost = True
+            return
+        if self.hidden_state_lost:
+            self.get_logger().info("[AgVLA Sys1] Hidden state is back, publishing action chunks again")
+            self.hidden_state_lost = False
+
         projected_actions = self.latest_hidden_state
         old_img_seq_num = self.latest_hidden_seq_num
         past_img = self.img_buffer.get(old_img_seq_num)

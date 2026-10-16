@@ -51,7 +51,7 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_yaw', default_value='0.0'),
         Node(
             package='weed_geotagging',
-            executable='yolo_weed_detector',
+            executable='weed_detector_hw',
             name='yolo_weed_detector',
             output='screen',
             parameters=[{

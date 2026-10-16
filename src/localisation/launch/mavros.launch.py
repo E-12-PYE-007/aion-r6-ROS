@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('bringup')
+    pkg_share = get_package_share_directory('localisation')
     plugin_yaml = os.path.join(pkg_share, 'config', 'mavros_pluginlists.yaml')
     config_yaml = os.path.join(pkg_share, 'config', 'mavros_config.yaml')
 
