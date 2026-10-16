@@ -121,16 +121,16 @@ class CbfSafetyLayerNode(Node):
         self._filtering_active_publisher.publish(Bool(data=bool(filtering_active)))
 
         was_reversing = self._reverse_recovery.reversing
-        # Heading away from the binding obstacle (odom frame) for the reverse to angle toward;
-        # None when the ESDF gradient is too weak to trust, so the reverse goes straight back.
+        # Heading away from the binding obstacle (odom frame) for the in-place turn to face toward;
+        # None when the ESDF gradient is too weak to trust, so the turn phase is skipped.
         away_yaw = None
         if np.hypot(escape_dir[0], escape_dir[1]) > REVERSE_GRAD_MIN:
             away_yaw = float(np.arctan2(escape_dir[1], escape_dir[0]))
         reverse_cmd = self._reverse_recovery.update(x0, slack, [v_nom, omega_nom], u_safe, away_yaw)
         if reverse_cmd is not None and not was_reversing:
-            self.get_logger().warn('Robot stuck (slack high or stalled at clearance boundary), reversing straight back')
+            self.get_logger().warn('Robot stuck (slack high or stalled at clearance boundary), turning in place then backing up')
         elif reverse_cmd is None and was_reversing:
-            self.get_logger().info('Reverse finished, resuming the filter')
+            self.get_logger().info('Recovery finished, resuming the filter')
         self._reversing_publisher.publish(Bool(data=reverse_cmd is not None))
         v_out, omega_out = u_safe if reverse_cmd is None else reverse_cmd
 

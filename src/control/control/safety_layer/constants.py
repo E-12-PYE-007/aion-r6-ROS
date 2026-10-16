@@ -14,9 +14,14 @@ BODY_WIDTH_M = 0.35           # [m] measured
 CONTROL_LOOP_DT = 1 / 15      # [s] must stay <= 0.125 s so no 8 Hz VLA chunk is missed
 
 # --- CBF-QP tuning ---
-# One barrier per body point, so the front corners and nose are each kept CBF_BODY_CLEARANCE_M from obstacles.
-CBF_BODY_POINTS_M = [(BODY_LENGTH_M / 2, BODY_WIDTH_M / 2), (BODY_LENGTH_M / 2, -BODY_WIDTH_M / 2), (BODY_LENGTH_M / 2, 0.0)]
-CBF_BODY_CLEARANCE_M = 0.08   # [m] ESDF distance each body point must keep
+# A single disc at the nose (front-centre, ahead of the pivot). Being offset ahead keeps omega in the
+# barrier, so the CBF can steer around obstacles and not only brake; a point at the pivot would make h
+# independent of heading and drop omega entirely. The clearance is sized so the disc spans the full
+# front width. Rear/side coverage is intentionally dropped -- the barrier guards forward driving.
+CBF_BODY_POINTS_M = [(BODY_LENGTH_M / 2, 0.0)]
+# [m] ESDF distance the nose point must keep = half-width (so the disc reaches the front corners) + an
+# ~0.08 m true safety margin, so the front corners still clear obstacles by ~0.08 m as they did before.
+CBF_BODY_CLEARANCE_M = BODY_WIDTH_M / 2 + 0.08
 CBF_ALPHA = 0.5               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
 CBF_WEIGHT_V = 3.0            # QP weight on deviation from nominal v
 CBF_WEIGHT_OMEGA = 1.0        # QP weight on deviation from nominal omega
@@ -25,14 +30,14 @@ CBF_SLACK_WEIGHT = 500.0      # QP weight on constraint slack; keeps the QP feas
 # --- Reverse recovery ---
 SLACK_REVERSE_THRESHOLD = 0.01   # slack above this means no command satisfies the barriers
 SLACK_REVERSE_TICKS = 8          # consecutive ticks above the threshold (about 0.5 s) that trigger the reverse
-REVERSE_DISTANCE_M = 0.25        # [m] straight back, measured on odometry
+REVERSE_DISTANCE_M = 0.10        # [m] backed up straight after the in-place turn, measured on odometry
 REVERSE_SPEED_M_S = 0.1          # [m/s]
 REVERSE_TIMEOUT_FACTOR = 1.5     # give up after this multiple of the nominal reverse time
 STALL_REVERSE_TICKS = 8          # consecutive stalled ticks (about 0.5 s) that trigger the reverse
 STALL_SPEED_EPS = 0.05           # [m/s, rad/s] filtered |v| and |omega| below this count as stationary
 STALL_NOMINAL_V_EPS = 0.02       # [m/s] nominal forward speed above this means the robot is being asked to move
-REVERSE_TURN_OMEGA = 0.3         # [rad/s] gentle arc applied while reversing to angle away from the obstacle
-REVERSE_MAX_YAW = 0.5            # [rad] cap on heading change during a reverse (~30 deg); keeps it a nudge, not a U-turn
+REVERSE_TURN_OMEGA = 0.3         # [rad/s] in-place turn rate toward the open side, before backing up
+REVERSE_MAX_YAW = 0.5            # [rad] how far to turn in place (~30 deg) before backing up straight
 REVERSE_GRAD_MIN = 1e-3          # ESDF gradient magnitude below this is treated as no clear direction -> straight back
 
 # --- Topics and frames ---
