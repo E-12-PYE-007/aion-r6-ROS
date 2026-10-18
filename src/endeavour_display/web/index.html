@@ -167,6 +167,7 @@
 
   function onSnapshot(s) {
     var now = performance.now();
+    s.plants.forEach(function (p) { plantNames[p.label] = p.name; });
     if (s.pose) {
       shown.target = s.pose;
       if (!shown.have) { shown.x = s.pose.x; shown.y = s.pose.y; shown.yaw = s.pose.yaw; shown.have = true; view.x = s.pose.x; view.y = s.pose.y; }
@@ -183,7 +184,7 @@
         p = pins[w.id] = { node: mk('g', {}, pinsG), popAt: now };
         var marker = mk('g', {}, p.node);
         mk('circle', { cx: 0, cy: -26, r: 20, fill: 'white', stroke: '#abbcca', 'stroke-width': 1.5 }, marker);
-        mk('image', { href: '/images/' + w.label + '.png', x: -20, y: -46, width: 40, height: 40, 'clip-path': 'url(#pinclip)', preserveAspectRatio: 'xMidYMid slice' }, marker);
+        mk('image', { href: '/images/' + w.label + '.png', x: -20, y: -46, width: 40, height: 40, 'clip-path': 'url(#pinclip)', preserveAspectRatio: 'xMidYMid meet' }, marker);
         mk('circle', { cx: 0, cy: -26, r: 20, fill: 'none', stroke: '#ff8a6e', 'stroke-width': 2.5 }, marker);
         mk('circle', { cx: 0, cy: -4, r: 4, fill: '#ff8a6e' }, marker);
         p.marker = marker;
