@@ -8,6 +8,7 @@ from pathlib import Path
 EVENT_PERIOD_S = 0.1
 MAX_BODY_BYTES = 4096
 FONT_TYPES = {'.ttf': 'font/ttf'}
+IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg'}
 BOUNDARY = 'frame'
 
 
@@ -81,6 +82,9 @@ def make_handler(state, commander, camera, web_dir):
             if path.startswith('/fonts/'):
                 font = web_dir / 'fonts' / Path(path).name
                 return self._file(font, FONT_TYPES.get(font.suffix, 'application/octet-stream'))
+            if path.startswith('/images/'):
+                img = web_dir / 'images' / Path(path).name
+                return self._file(img, IMAGE_TYPES.get(img.suffix.lower(), 'application/octet-stream'))
             if path == '/events':
                 return self._events()
             if path == '/camera.mjpg':

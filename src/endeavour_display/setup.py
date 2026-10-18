@@ -17,6 +17,7 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'web'), glob('web/*.html')),
         (os.path.join('share', package_name, 'web', 'fonts'), glob('web/fonts/*.ttf')),
+        (os.path.join('share', package_name, 'web', 'images'), glob('web/images/*.png')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

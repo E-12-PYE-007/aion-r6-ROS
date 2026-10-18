@@ -48,12 +48,13 @@
   #camoff { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 500; color: var(--mute); transition: opacity .5s cubic-bezier(.33,1,.68,1); }
   #camwrap.live #camoff { opacity: 0; }
 
-  .tick { display: flex; align-items: center; gap: 22px; height: 56px; cursor: pointer; font-size: 32px; font-weight: 500; user-select: none; }
+  .tick { display: flex; align-items: center; gap: 22px; height: 64px; cursor: pointer; font-size: 32px; font-weight: 500; user-select: none; }
   .tick.locked { cursor: default; opacity: .55; }
   .tick input { appearance: none; -webkit-appearance: none; width: 38px; height: 38px; margin: 0; border: 2px solid var(--ink); border-radius: 9px; background: transparent; position: relative; cursor: inherit; flex: none; transition: background .25s cubic-bezier(.33,1,.68,1); }
   .tick input:checked { background: var(--ink); }
   .tick input:checked::after { content: ''; position: absolute; left: 11px; top: 4px; width: 10px; height: 20px; border: solid var(--paper); border-width: 0 4px 4px 0; transform: rotate(45deg); border-radius: 1px; }
   .tick input:focus-visible, #go:focus-visible { outline: 3px solid var(--ink2); outline-offset: 4px; }
+  .tick-img { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; flex: none; border: 2px solid var(--fill2); }
   #ticks { left: 1000px; top: 790px; width: 400px; }
   #status { left: 1480px; top: 724px; width: 344px; font-size: 24px; font-weight: 500; color: var(--mute); }
   #status.error { color: var(--bad); }
@@ -72,17 +73,12 @@
 
     <div class="abs legend" aria-hidden="true">
       <span><svg width="46" height="12"><line x1="3" y1="6" x2="43" y2="6" stroke="#12436a" stroke-width="3" stroke-linecap="round"/></svg>Rover path</span>
-      <span><svg width="22" height="30" viewBox="-14 -34 28 40"><use href="#pin"/></svg>Weed</span>
+      <span><svg width="22" height="30" viewBox="-11 -34 22 36"><circle cx="0" cy="-20" r="9" fill="white" stroke="#abbcca" stroke-width="1.5"/><circle cx="0" cy="-20" r="9" fill="none" stroke="#ff8a6e" stroke-width="2"/><circle cx="0" cy="-4" r="3.5" fill="#ff8a6e"/></svg>Weed</span>
     </div>
 
     <svg id="plot" class="abs" viewBox="0 0 960 1080" aria-label="Rover path and weed locations">
       <defs>
-        <g id="pin">
-          <path d="M0 0 C-5 -9 -14 -17 -14 -26 A14 14 0 1 1 14 -26 C14 -17 5 -9 0 0 Z" fill="#ff8a6e"/>
-          <rect x="-2" y="-36" width="4" height="13" rx="2" fill="#f6f9fc"/>
-          <circle cx="0" cy="-17" r="2.4" fill="#f6f9fc"/>
-        </g>
-        <g id="sprig" stroke="#7f9f86" stroke-width="2" stroke-linecap="round" fill="none"><path d="M-6 3 L6 -3 M-6 -3 L6 3 M0 -5 L0 5"/></g>
+        <clipPath id="pinclip"><circle cx="0" cy="-26" r="20"/></clipPath>
         <linearGradient id="fadeX" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#000"/><stop offset=".14" stop-color="#fff"/><stop offset=".86" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient>
         <linearGradient id="fadeY" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#000"/><stop offset=".14" stop-color="#fff"/><stop offset=".86" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient>
         <mask id="maskX" maskUnits="userSpaceOnUse" x="190" y="200" width="700" height="700"><rect x="190" y="200" width="700" height="700" fill="url(#fadeX)"/></mask>
@@ -158,7 +154,8 @@
     for (; k < gridLines.length; k++) gridLines[k].style.display = 'none';
   }
 
-  var trail = [], segPool = [], pins = {};   // pins: id -> { node, ageAtMsg, msgTime, popAt }
+  var trail = [], segPool = [], pins = {};   // pins: id -> { node, marker, text, ageAtMsg, msgTime, popAt }
+  var plantNames = {};
 
   /* ---- the latest state from the bridge ---- */
   var snap = null, lastEvent = 0, lastSampleT = 0, runningSince = null, prevStack = null;
@@ -184,10 +181,15 @@
       var p = pins[w.id];
       if (!p) {
         p = pins[w.id] = { node: mk('g', {}, pinsG), popAt: now };
-        mk('use', { href: '#sprig' }, p.node); mk('use', { href: '#pin' }, p.node);
-        p.text = mk('text', { y: 18, 'text-anchor': 'middle', 'font-size': 22, 'font-weight': 600, fill: '#3a6586' }, p.node);
+        var marker = mk('g', {}, p.node);
+        mk('circle', { cx: 0, cy: -26, r: 20, fill: 'white', stroke: '#abbcca', 'stroke-width': 1.5 }, marker);
+        mk('image', { href: '/images/' + w.label + '.png', x: -20, y: -46, width: 40, height: 40, 'clip-path': 'url(#pinclip)', preserveAspectRatio: 'xMidYMid slice' }, marker);
+        mk('circle', { cx: 0, cy: -26, r: 20, fill: 'none', stroke: '#ff8a6e', 'stroke-width': 2.5 }, marker);
+        mk('circle', { cx: 0, cy: -4, r: 4, fill: '#ff8a6e' }, marker);
+        p.marker = marker;
+        p.text = mk('text', { y: 14, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 600, fill: '#3a6586' }, p.node);
       } else if (w.age < p.ageAtMsg - 0.5) p.popAt = now;      // seen again after fading
-      p.ageAtMsg = w.age; p.msgTime = now; p.x = w.x; p.y = w.y; p.text.textContent = w.label;
+      p.ageAtMsg = w.age; p.msgTime = now; p.x = w.x; p.y = w.y; p.text.textContent = plantNames[w.label] || w.label;
     });
     Object.keys(pins).forEach(function (id) { if (!seen[id]) { pinsG.removeChild(pins[id].node); delete pins[id]; } });
     if (s.stack !== prevStack) { runningSince = s.stack === 'running' ? now : null; prevStack = s.stack; }
@@ -225,6 +227,8 @@
     var key = JSON.stringify(s.plants);
     if (key === tickBuilt) return;
     tickBuilt = key; ticks.textContent = '';
+    plantNames = {};
+    s.plants.forEach(function (p) { plantNames[p.label] = p.name; });
     s.plants.forEach(function (p) {
       var lab = document.createElement('label'); lab.className = 'tick';
       var inp = document.createElement('input'); inp.type = 'checkbox'; inp.id = 'plant-' + p.label; inp.dataset.label = p.label;
@@ -235,8 +239,9 @@
         pendingSel = chosen; pendingAt = performance.now();
         sendSelection(chosen);
       });
+      var img = document.createElement('img'); img.src = '/images/' + p.label + '.png'; img.className = 'tick-img'; img.alt = p.name;
       var txt = document.createElement('span'); txt.textContent = p.name;
-      lab.appendChild(inp); lab.appendChild(txt); ticks.appendChild(lab);
+      lab.appendChild(inp); lab.appendChild(img); lab.appendChild(txt); ticks.appendChild(lab);
     });
   }
 
@@ -335,7 +340,7 @@
       p.node.style.display = '';
       p.node.setAttribute('transform', 'translate(' + sx(p.x) + ' ' + sy(p.y) + ')');
       p.node.setAttribute('opacity', al.toFixed(3));
-      p.node.children[1].setAttribute('transform', 'scale(' + (0.5 + 0.5 * ease3((now - p.popAt) / 700)).toFixed(3) + ')');
+      p.marker.setAttribute('transform', 'scale(' + (0.5 + 0.5 * ease3((now - p.popAt) / 700)).toFixed(3) + ')');
     });
 
     // The light at the top: the robot link as the bridge sees it, and the bridge itself.
