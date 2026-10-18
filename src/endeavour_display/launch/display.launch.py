@@ -13,6 +13,7 @@ from launch.actions import (DeclareLaunchArgument, LogInfo, OpaqueFunction, SetE
                             UnsetEnvironmentVariable)
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
 
 from endeavour_display.jetson import ssh_reachable
 from endeavour_display.profiles import DEFAULT_SERVER, choose_profile
@@ -26,6 +27,7 @@ def start_bridge(context):
     for name, setting in profile.environment.items():
         actions.append(UnsetEnvironmentVariable(name) if setting is None else SetEnvironmentVariable(name, setting))
     hosts = [h for h in profile.hosts if h]
+    plants_file = os.path.join(get_package_share_directory('endeavour_display'), 'config', 'plants.yaml')
     actions.append(Node(
         package='endeavour_display',
         executable='bridge',
@@ -36,6 +38,7 @@ def start_bridge(context):
             'jetson_fallback_host': hosts[1] if len(hosts) > 1 else '',
             'discovery': profile.discovery,
             'port': int(value('port')),
+            'plants_file': plants_file,
         }],
     ))
     return actions
