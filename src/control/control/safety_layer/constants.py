@@ -49,10 +49,6 @@ CMD_VEL_NOMINAL_TOPIC = 'safety_layer/cmd_vel_nominal'  # debug: pure-pursuit co
 FILTERING_ACTIVE_TOPIC = 'safety_layer/filtering_active'  # debug: True when the CBF filter changed v or omega
 REVERSING_TOPIC = 'safety_layer/reversing'  # debug: True while the reverse recovery is driving
 
-# --- Odometry readiness gate ---
-ODOM_READY_TICKS = 15         # consecutive odom callbacks with stable yaw before trusting pose
-ODOM_YAW_JUMP_RAD = 0.15     # yaw change larger than this (~9 deg) resets the stability counter
-
 # --- Filtering-active detection ---
 FILTERING_EPS = 1e-3          # per-channel deadband; |v_safe - v_nom| or |omega_safe - omega_nom|
                               # above this (in m/s / rad/s) counts as the filter intervening,
