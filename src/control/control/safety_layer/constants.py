@@ -24,7 +24,7 @@ CBF_BODY_POINTS_M = [(BODY_LENGTH_M / 2, 0.0)]
 CBF_BODY_CLEARANCE_M = BODY_WIDTH_M / 2 + 0.08
 CBF_ALPHA = 0.5               # class-K gain in dh/dt >= -alpha * h; larger = later, harder braking
 CBF_WEIGHT_V = 3.0            # QP weight on deviation from nominal v
-CBF_WEIGHT_OMEGA = 1.0        # QP weight on deviation from nominal omega
+CBF_WEIGHT_OMEGA = 0.5        # QP weight on deviation from nominal omega
 CBF_SLACK_WEIGHT = 500.0      # QP weight on constraint slack; keeps the QP feasible inside the clearance
 
 # --- Reverse recovery ---
@@ -34,7 +34,7 @@ REVERSE_DISTANCE_M = 0.10        # [m] backed up straight after the in-place tur
 REVERSE_SPEED_M_S = 0.1          # [m/s]
 REVERSE_TIMEOUT_FACTOR = 1.5     # give up after this multiple of the nominal reverse time
 STALL_REVERSE_TICKS = 32         # consecutive stalled ticks (about 2 s) that trigger the reverse
-STALL_SPEED_EPS = 0.05           # [m/s, rad/s] filtered |v| and |omega| below this count as stationary
+STALL_SPEED_EPS = 0.02           # [m/s, rad/s] filtered |v| and |omega| below this count as stationary
 STALL_NOMINAL_V_EPS = 0.02       # [m/s] nominal forward speed above this means the robot is being asked to move
 REVERSE_TURN_OMEGA = 0.3         # [rad/s] in-place turn rate toward the open side, before backing up
 REVERSE_MAX_YAW = 0.5            # [rad] how far to turn in place (~30 deg) before backing up straight
