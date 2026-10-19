@@ -29,11 +29,11 @@ CBF_SLACK_WEIGHT = 500.0      # QP weight on constraint slack; keeps the QP feas
 
 # --- Reverse recovery ---
 SLACK_REVERSE_THRESHOLD = 0.01   # slack above this means no command satisfies the barriers
-SLACK_REVERSE_TICKS = 8          # consecutive ticks above the threshold (about 0.5 s) that trigger the reverse
+SLACK_REVERSE_TICKS = 32         # consecutive ticks above the threshold (about 2 s) that trigger the reverse
 REVERSE_DISTANCE_M = 0.10        # [m] backed up straight after the in-place turn, measured on odometry
 REVERSE_SPEED_M_S = 0.1          # [m/s]
 REVERSE_TIMEOUT_FACTOR = 1.5     # give up after this multiple of the nominal reverse time
-STALL_REVERSE_TICKS = 8          # consecutive stalled ticks (about 0.5 s) that trigger the reverse
+STALL_REVERSE_TICKS = 32         # consecutive stalled ticks (about 2 s) that trigger the reverse
 STALL_SPEED_EPS = 0.05           # [m/s, rad/s] filtered |v| and |omega| below this count as stationary
 STALL_NOMINAL_V_EPS = 0.02       # [m/s] nominal forward speed above this means the robot is being asked to move
 REVERSE_TURN_OMEGA = 0.3         # [rad/s] in-place turn rate toward the open side, before backing up
