@@ -13,6 +13,7 @@ Publishes:  cmd_vel, safety_layer/slack, cbf/h, safety_layer/reversing (True whi
 Parameters: patch_size, patch_resolution (ESDF patch geometry; defaults in safety_layer/constants.py),
             print_solve_time (log the QP solve time every tick as 'solve_time_ms=<value>')
 """
+import math
 import time
 
 import numpy as np
@@ -35,7 +36,7 @@ from .cbf_qp import CbfFilter
 from .constants import (
     ESDF_TOPIC, SLACK_TOPIC, CBF_H_TOPIC, CMD_VEL_NOMINAL_TOPIC, FILTERING_ACTIVE_TOPIC,
     FILTERING_EPS, CONTROL_LOOP_DT, PATCH_SIZE, PATCH_RESOLUTION, REVERSING_TOPIC,
-    REVERSE_GRAD_MIN,
+    REVERSE_GRAD_MIN, ODOM_READY_TICKS, ODOM_YAW_JUMP_RAD,
 )
 from .esdf_map import EsdfMap
 from .reverse_recovery import ReverseRecovery
@@ -47,6 +48,8 @@ class CbfSafetyLayerNode(Node):
 
         self._current_pose = None          # (x, y, theta), latest odometry sample
         self._current_action_chunk = None
+        self._odom_ready = False           # True once yaw has been stable for ODOM_READY_TICKS
+        self._odom_stable_ticks = 0
 
         self.declare_parameter('patch_size', PATCH_SIZE)
         self.declare_parameter('patch_resolution', PATCH_RESOLUTION)
@@ -76,7 +79,18 @@ class CbfSafetyLayerNode(Node):
 
     def odom_callback(self, msg):
         p = msg.pose.pose.position
-        self._current_pose = np.array([p.x, p.y, yaw_from_quaternion(msg.pose.pose.orientation)])
+        yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+        if not self._odom_ready and self._current_pose is not None:
+            delta = abs(math.atan2(math.sin(yaw - self._current_pose[2]),
+                                   math.cos(yaw - self._current_pose[2])))
+            if delta < ODOM_YAW_JUMP_RAD:
+                self._odom_stable_ticks += 1
+            else:
+                self._odom_stable_ticks = 0
+            if self._odom_stable_ticks >= ODOM_READY_TICKS:
+                self._odom_ready = True
+                self.get_logger().info('Odometry yaw converged — CBF filter active')
+        self._current_pose = np.array([p.x, p.y, yaw])
 
     def esdf_callback(self, msg):
         self._esdf_map.store(msg)
@@ -89,6 +103,16 @@ class CbfSafetyLayerNode(Node):
             self.get_logger().warn('No pose/action chunk received yet, skipping tick')
             return
         x0 = self._current_pose
+
+        if not self._odom_ready:
+            v_nom, omega_nom = self._pure_pursuit.nominal(self._current_action_chunk, x0)
+            cmd = Twist()
+            cmd.linear.x = float(v_nom)
+            cmd.angular.z = float(omega_nom)
+            self._cmd_vel_publisher.publish(cmd)
+            self._filtering_active_publisher.publish(Bool(data=False))
+            self._reversing_publisher.publish(Bool(data=False))
+            return
 
         try:
             esdf_result = self._esdf_map.patch_at(self._tf_buffer, x0)
