@@ -41,6 +41,6 @@ class EsdfSpline:
         rotation = ca.vertcat(ca.horzcat(c, -s), ca.horzcat(s, c))
         offset_map = rotation @ offset_odom
         centre = self.half_patch * self.patch_resolution
-        query = ca.vertcat(centre + offset_map[0] + delta[0], centre + offset_map[1] + delta[1])
+        query = ca.vertcat(centre + offset_map[1] + delta[1], centre + offset_map[0] + delta[0])
         knots = self._knots
         return ca.bspline(query, coeffs, [knots, knots], [self.spline_degree] * 2, 1, {}) + NVBLOX_MAX_DISTANCE_M
